@@ -222,6 +222,15 @@ public extension TerminalViewModel {
 
     // MARK: - Creation (identical in both modes; only the landing differs)
 
+    /// The active pane's live working directory (nil if unknown). Seeds the New
+    /// Window / Split directory picker so confirming immediately reuses the
+    /// current folder, or the user can navigate elsewhere.
+    func activePaneWorkingDirectory() async -> String? {
+        guard let id = activePaneID,
+              let vm = paneViewModels.first(where: { $0.paneID == id }) else { return nil }
+        return await vm.currentWorkingDirectory()
+    }
+
     /// List mode: open a new window seeded per `seed`.
     func newListWindow(_ seed: WindowSeed) async {
         guard usingTmux else { return }

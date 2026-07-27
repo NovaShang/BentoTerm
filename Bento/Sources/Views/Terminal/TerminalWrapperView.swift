@@ -1947,21 +1947,32 @@ struct NewWindowSheet: View {
     var onCreate: (String?, String?) -> Void
 
     @State private var path = ""
-    @State private var command = ""
+    @State private var agentPreset: AgentPreset = .none
+    @State private var customCommand = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Working Directory") {
+                    // The path lives on the remote host, so it stays typed —
+                    // a local file picker would point at the wrong machine.
                     TextField("Empty = current directory", text: $path)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }
                 Section("Command") {
-                    TextField("Empty = shell", text: $command)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    Picker("Agent", selection: $agentPreset) {
+                        ForEach(AgentPreset.allCases) { preset in
+                            Text(preset.rawValue).tag(preset)
+                        }
+                    }
+                    if agentPreset == .custom {
+                        TextField("e.g. cursor-agent", text: $customCommand)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .font(.system(.body, design: .monospaced))
+                    }
                 }
             }
             .navigationTitle(title)
@@ -1972,14 +1983,34 @@ struct NewWindowSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
-                        onCreate(path.isEmpty ? nil : path,
-                                 command.isEmpty ? nil : command)
+                        onCreate(path.isEmpty ? nil : path, resolvedCommand)
                         dismiss()
                     }
+                    .disabled(!canCreate)
                 }
             }
         }
         .presentationDetents([.medium])
+    }
+
+    /// nil = plain shell (no agent); otherwise the chosen agent's launch command
+    /// or the user's custom command.
+    private var resolvedCommand: String? {
+        switch agentPreset {
+        case .none:
+            return nil
+        case .custom:
+            let trimmed = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        default:
+            return agentPreset.command
+        }
+    }
+
+    /// Custom needs a non-empty command; every other preset is always valid.
+    private var canCreate: Bool {
+        agentPreset != .custom
+            || !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 

@@ -223,7 +223,22 @@ public struct WindowSidebar: View {
                 Label("Duplicate Current", systemImage: "plus.square.on.square")
             }
             Button {
+                #if canImport(AppKit)
+                // macOS: the pane runs a local shell, so the dialog itself IS a
+                // native directory chooser (with a command popup baked in) —
+                // no intermediate form.
+                Task {
+                    let cwd = await viewModel.activePaneWorkingDirectory()
+                    presentNewPaneDirectoryPanel(
+                        title: "New Window", prompt: "Create", initialDirectory: cwd
+                    ) { path, command in
+                        Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
+                    }
+                }
+                #else
+                // iPad: the path lives on the remote host — keep the typed form.
                 showCustomSheet = true
+                #endif
             } label: {
                 Label("Path & Command…", systemImage: "terminal")
             }
@@ -286,34 +301,81 @@ public struct WindowMoveToSessionMenu: View {
     }
 }
 
-/// The "specify path + command" mini-form. Empty command = plain shell;
-/// empty path = inherit the current pane's directory.
+/// The "specify path + command" mini-form used on iPad, where the working
+/// directory lives on the *remote* host (so a local file picker can't apply)
+/// and the path is typed. The command is chosen from the known agents — or a
+/// custom command — rather than typed blind. Empty path = inherit the current
+/// pane's directory; "No agent" = a plain shell. macOS uses a native directory
+/// panel instead (see `presentNewPaneDirectoryPanel`).
 @MainActor
 struct NewWindowForm: View {
     var onCreate: (String?, String?) -> Void
     @State private var path = ""
-    @State private var command = ""
+    @State private var agentPreset: AgentPreset = .none
+    @State private var customCommand = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("New Window").font(.headline)
-            TextField("Working directory (empty = current)", text: $path)
-                .textFieldStyle(.roundedBorder)
-            TextField("Command (empty = shell)", text: $command)
-                .textFieldStyle(.roundedBorder)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Working directory").font(.caption).foregroundStyle(.secondary)
+                TextField("Current pane's directory", text: $path)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Command").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Picker("Command", selection: $agentPreset) {
+                        ForEach(AgentPreset.allCases) { preset in
+                            Text(preset.rawValue).tag(preset)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    if agentPreset == .custom {
+                        TextField("e.g. cursor-agent", text: $customCommand)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                    }
+                }
+            }
+
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button("Create") {
-                    onCreate(path.isEmpty ? nil : path, command.isEmpty ? nil : command)
+                    onCreate(path.isEmpty ? nil : path, resolvedCommand)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(!canCreate)
             }
         }
         .padding(20)
-        .frame(minWidth: 340)
+        .frame(minWidth: 400)
+    }
+
+    /// nil = plain shell (no agent); otherwise the chosen agent's launch command
+    /// or the user's custom command.
+    private var resolvedCommand: String? {
+        switch agentPreset {
+        case .none:
+            return nil
+        case .custom:
+            let trimmed = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        default:
+            return agentPreset.command
+        }
+    }
+
+    /// Custom needs a non-empty command; every other preset is always valid.
+    private var canCreate: Bool {
+        agentPreset != .custom
+            || !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
