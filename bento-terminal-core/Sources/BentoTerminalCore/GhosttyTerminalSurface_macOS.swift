@@ -1005,19 +1005,11 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         // wheel) honors the ⇧ bypass and the sticky suppression identically.
         guard shouldReportMouse(event) else { return false }
         let (col, row) = cellCoord(event)
-        let mods = mouseModBits(event.modifierFlags)
-        if mouseReporting.sgr {
-            let b = button + mods + (motion ? 32 : 0)
-            onInput?(Data("\u{1b}[<\(b);\(col);\(row)\(press ? "M" : "m")".utf8))
-        } else {
-            // Legacy X10/normal: ESC [ M  (b+32)(col+32)(row+32). Release = btn 3.
-            let base = press ? button : 3
-            let b = base + mods + (motion ? 32 : 0)
-            let cb = UInt8(clamping: b + 32)
-            let cx = UInt8(clamping: min(col, 223) + 32)
-            let cy = UInt8(clamping: min(row, 223) + 32)
-            onInput?(Data([0x1b, 0x5b, 0x4d, cb, cx, cy]))
-        }
+        // Encoding is shared with the iOS surface (`MouseReport`) — same bytes,
+        // one place, so a touch click and a mouse click can't disagree.
+        onInput?(MouseReport.encode(button: button, press: press, col: col, row: row,
+                                    mods: mouseModBits(event.modifierFlags),
+                                    motion: motion, sgr: mouseReporting.sgr))
         return true
     }
 

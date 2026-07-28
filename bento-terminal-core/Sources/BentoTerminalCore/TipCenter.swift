@@ -24,6 +24,9 @@ public enum BentoTip: String, CaseIterable, Sendable {
     case focusAutoSwitch = "tip.focus_auto_switch.v1"
     /// Chinese system → suggest the Qwen engine once, after first voice send.
     case qwenSuggestion = "tip.qwen_suggestion.v1"
+    /// First tap swallowed by a program that turned on mouse tracking — says
+    /// where Bento's own tap went (two fingers). Invisible otherwise.
+    case mouseGrabbed = "tip.mouse_grabbed.v1"
 }
 
 /// TipCenter is the single ledger for in-context teaching moments: each tip

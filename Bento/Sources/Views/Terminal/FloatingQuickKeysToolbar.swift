@@ -369,3 +369,239 @@ final class FloatingQuickKeysToolbar: UIView {
         }
     }
 }
+
+// MARK: - Find bar
+
+/// Find-in-scrollback bar for the active pane (the touch counterpart of the
+/// Mac's ⌘F bar). Same floating-chrome family as the quick-keys toolbar above:
+/// Liquid Glass capsule on iOS 26+, Bento card below.
+///
+/// It docks at the BOTTOM, just above the keyboard, rather than floating over
+/// the top-right the way the Mac one does. Two reasons, both about touch:
+/// typing a needle raises the keyboard, so the field has to live where the
+/// keyboard leaves room; and the bottom strip is where iOS users already look
+/// for find (Safari puts it there). The host positions it — see
+/// `PaneContainerVC.positionFindBar` — reusing the keyboard occlusion the
+/// compose bar and toolbar already track.
+///
+/// The engine owns the search: match highlighting, the hit cursor and the
+/// counts all come from libghostty. This is a field and two chevrons.
+final class PaneFindBar: UIView, UITextFieldDelegate {
+
+    /// Fires (debounced) as the needle changes. Empty string = clear.
+    var onQueryChanged: ((String) -> Void)?
+    var onNext: (() -> Void)?
+    var onPrevious: (() -> Void)?
+    var onClose: (() -> Void)?
+
+    static let barHeight: CGFloat = 44
+    static let edgeGap: CGFloat = 10
+
+    /// Typing must not run a full scrollback walk per keystroke. Same window the
+    /// Mac bar uses, so both feel alike.
+    private static let debounceMs = 120
+
+    private let field = UITextField()
+    private let countLabel = UILabel()
+    private let prevButton = UIButton(type: .system)
+    private let nextButton = UIButton(type: .system)
+    private let closeButton = UIButton(type: .system)
+    private let stack = UIStackView()
+    private let card = UIView()
+    private var glassView: UIVisualEffectView?
+    private var debounce: DispatchWorkItem?
+
+    var query: String {
+        get { field.text ?? "" }
+        set { field.text = newValue }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        let host = installBackground()
+
+        let magnifier = UIImageView(image: UIImage(systemName: "magnifyingglass"))
+        magnifier.tintColor = BentoBrand.inkSecondary
+        magnifier.contentMode = .scaleAspectFit
+        magnifier.setContentHuggingPriority(.required, for: .horizontal)
+
+        // SF Pro, not mono: this is a query, not something headed into the
+        // terminal. (The count below is the one honest place for mono here.)
+        field.borderStyle = .none
+        field.font = .systemFont(ofSize: 15)
+        field.textColor = BentoBrand.inkPrimary
+        field.attributedPlaceholder = NSAttributedString(
+            string: "Find in pane",
+            attributes: [.foregroundColor: BentoBrand.inkMuted])
+        field.autocorrectionType = .no
+        field.autocapitalizationType = .none
+        field.spellCheckingType = .no
+        field.clearButtonMode = .whileEditing
+        // Return jumps to the next match instead of dismissing — the keyboard
+        // stays up because you are usually stepping through hits.
+        field.returnKeyType = .search
+        field.enablesReturnKeyAutomatically = false
+        field.delegate = self
+        field.addTarget(self, action: #selector(textChanged), for: .editingChanged)
+
+        countLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        countLabel.textColor = BentoBrand.inkSecondary
+        countLabel.textAlignment = .right
+        countLabel.setContentHuggingPriority(.required, for: .horizontal)
+        countLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        configure(prevButton, symbol: "chevron.up", label: "Previous match",
+                  action: #selector(previousTapped))
+        configure(nextButton, symbol: "chevron.down", label: "Next match",
+                  action: #selector(nextTapped))
+        configure(closeButton, symbol: "xmark", label: "Close find bar",
+                  action: #selector(closeTapped))
+
+        stack.axis = .horizontal
+        stack.alignment = .center
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        [magnifier, field, countLabel, prevButton, nextButton, closeButton]
+            .forEach { stack.addArrangedSubview($0) }
+        host.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: host.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -10),
+            magnifier.widthAnchor.constraint(equalToConstant: 16),
+            prevButton.widthAnchor.constraint(equalToConstant: 34),
+            nextButton.widthAnchor.constraint(equalToConstant: 34),
+            closeButton.widthAnchor.constraint(equalToConstant: 34),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    private func configure(_ button: UIButton, symbol: String, label: String, action: Selector) {
+        button.setImage(UIImage(systemName: symbol), for: .normal)
+        button.tintColor = BentoBrand.inkSecondary
+        button.accessibilityLabel = label
+        button.addTarget(self, action: action, for: .touchUpInside)
+    }
+
+    private func installBackground() -> UIView {
+        let radius = Self.barHeight / 2
+        if #available(iOS 26.0, *) {
+            let glass = UIGlassEffect()
+            glass.isInteractive = true
+            let effectView = UIVisualEffectView(effect: glass)
+            effectView.translatesAutoresizingMaskIntoConstraints = false
+            effectView.layer.cornerRadius = radius
+            effectView.clipsToBounds = true
+            addSubview(effectView)
+            pinToSelf(effectView)
+            glassView = effectView
+            return effectView.contentView
+        } else {
+            card.translatesAutoresizingMaskIntoConstraints = false
+            card.backgroundColor = BentoBrand.surface
+            card.layer.borderColor = BentoBrand.border.cgColor
+            card.layer.borderWidth = 1
+            card.layer.cornerRadius = radius
+            card.clipsToBounds = true
+            addSubview(card)
+            pinToSelf(card)
+            return card
+        }
+    }
+
+    private func pinToSelf(_ v: UIView) {
+        NSLayoutConstraint.activate([
+            v.topAnchor.constraint(equalTo: topAnchor),
+            v.bottomAnchor.constraint(equalTo: bottomAnchor),
+            v.leadingAnchor.constraint(equalTo: leadingAnchor),
+            v.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ])
+    }
+
+    // MARK: - State
+
+    func focusField() {
+        field.becomeFirstResponder()
+        field.selectAll(nil)
+    }
+
+    func dismissKeyboard() { field.resignFirstResponder() }
+
+    var fieldHasFocus: Bool { field.isFirstResponder }
+
+    /// `total` / `selected` as libghostty reports them (nil = the engine's -1,
+    /// "none"). `selected` is its index into the match list, so it shows +1.
+    func setCounts(total: Int?, selected: Int?) {
+        guard !query.isEmpty else {
+            countLabel.text = ""
+            return
+        }
+        let totalCount = total ?? 0
+        if totalCount == 0 {
+            countLabel.text = "0/0"
+        } else if let selected, selected >= 0 {
+            countLabel.text = "\(selected + 1)/\(totalCount)"
+        } else {
+            countLabel.text = "–/\(totalCount)"
+        }
+    }
+
+    func cancelPendingQuery() {
+        debounce?.cancel()
+        debounce = nil
+    }
+
+    // MARK: - Actions
+
+    @objc private func previousTapped() { flushPendingQuery(); onPrevious?() }
+    @objc private func nextTapped() { flushPendingQuery(); onNext?() }
+    @objc private func closeTapped() { onClose?() }
+
+    @objc private func textChanged() {
+        debounce?.cancel()
+        let text = query
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.debounce = nil
+            self.onQueryChanged?(text)
+            if text.isEmpty { self.setCounts(total: nil, selected: nil) }
+        }
+        debounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.debounceMs),
+                                      execute: work)
+    }
+
+    private func flushPendingQuery() {
+        guard let work = debounce else { return }
+        work.cancel()
+        debounce = nil
+        onQueryChanged?(query)
+    }
+
+    // MARK: - UITextFieldDelegate
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        flushPendingQuery()
+        onNext?()
+        return false   // keep the keyboard up; you're stepping through hits
+    }
+
+    /// Escape closes the bar — but ONLY here. This view is in the responder
+    /// chain just while its field holds the keyboard, so the terminal keeps Esc
+    /// (which it very much needs) the rest of the time.
+    override var keyCommands: [UIKeyCommand]? {
+        [UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [],
+                      action: #selector(closeTapped))]
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if glassView == nil {
+            card.layer.borderColor = BentoBrand.border.cgColor
+        }
+    }
+}

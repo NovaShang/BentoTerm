@@ -356,7 +356,27 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         scrollWheelAccum -= CGFloat(rows) * cellH
         let button = rows > 0 ? 64 : 65
         let (col, row) = cellCoord(point)
-        for _ in 0..<min(abs(rows), 8) { sendWheel(button: button, col: col, row: row) }
+        // A wheel notch is a press with no release — there is no "wheel up" event.
+        for _ in 0..<min(abs(rows), 8) { sendMouse(button: button, press: true, col: col, row: row) }
+    }
+
+    /// Forward a tap to a mouse-reporting program as a left-button press followed
+    /// by a release on the tapped cell — the touch equivalent of a click.
+    /// Returns false when no program owns the mouse, so the host can fall back to
+    /// Bento's own tap handling.
+    ///
+    /// Without this, `scroll` forwarded the wheel and nothing else did anything:
+    /// you could scroll an alt-screen TUI but never press anything in it, which
+    /// is most of what Claude Code's fullscreen mode is made of. Press and
+    /// release go out together because a touch has no hover — there is no state
+    /// in between for the program to observe.
+    @discardableResult
+    public func forwardTap(at point: CGPoint) -> Bool {
+        guard mouseReporting.any else { return false }
+        let (col, row) = cellCoord(point)
+        sendMouse(button: 0, press: true, col: col, row: row)
+        sendMouse(button: 0, press: false, col: col, row: row)
+        return true
     }
 
     /// Accumulate a pan delta into whole rows for copy-mode. Same points-per-row
@@ -384,17 +404,13 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         return (col, row)
     }
 
-    /// Encode a wheel event (button 64=up / 65=down) as SGR or legacy X10 and
-    /// send it to the program via `onInput`. Mirrors the macOS `forwardMouse`.
-    private func sendWheel(button: Int, col: Int, row: Int) {
-        if mouseReporting.sgr {
-            onInput?(Data("\u{1b}[<\(button);\(col);\(row)M".utf8))
-        } else {
-            let cb = UInt8(clamping: button + 32)
-            let cx = UInt8(clamping: min(col, 223) + 32)
-            let cy = UInt8(clamping: min(row, 223) + 32)
-            onInput?(Data([0x1b, 0x5b, 0x4d, cb, cx, cy]))
-        }
+    /// Encode a mouse event and send it to the program via `onInput`. `button`:
+    /// 0 = left, 64 = wheel-up, 65 = wheel-down. No modifier bits — a touch has
+    /// no modifier keys to carry. Encoding is shared with the Mac surface
+    /// (`MouseReport`) so the two can't drift.
+    private func sendMouse(button: Int, press: Bool, col: Int, row: Int) {
+        onInput?(MouseReport.encode(button: button, press: press, col: col, row: row,
+                                    sgr: mouseReporting.sgr))
     }
 
     // MARK: - Selection
@@ -707,10 +723,70 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     // Scrollback search is macOS-only for now — the engine side is shared (see
     // GhosttySel.search), only the find-bar UI is not built for touch yet. These
     // stubs exist because the runtime's action router is one shared switch.
-    func handleStartSearch(needle: String?) {}
-    func handleEndSearch() {}
-    func handleSearchTotal(_ total: Int?) {}
-    func handleSearchSelected(_ selected: Int?) {}
+    // MARK: - Scrollback search
+    //
+    // The engine owns the search itself — it walks the scrollback, highlights
+    // the matches in the renderer, tracks the current hit and reports the counts
+    // back. The surface only relays; the host owns the find bar, because on iOS
+    // it has to be positioned against the keyboard.
+
+    /// The engine asked the host to open its find UI (its own search keybind
+    /// fired — hardware ⌘F on iPad). `needle` is a prefill, usually the selection.
+    public var onSearchStartRequested: ((String?) -> Void)?
+    /// The engine ended the search; the host should close its find UI.
+    public var onSearchEnded: (() -> Void)?
+    /// Match counts, nil = the engine's -1 ("none").
+    public var onSearchCounts: ((_ total: Int?, _ selected: Int?) -> Void)?
+
+    private var searchTotal: Int?
+    private var searchSelected: Int?
+
+    /// Start (or re-run) the search. An empty needle ends it.
+    public func runSearch(_ needle: String) {
+        guard let surface else { return }
+        GhosttySel.search(surface, needle: needle)
+        if needle.isEmpty {
+            searchTotal = nil
+            searchSelected = nil
+            onSearchCounts?(nil, nil)
+        }
+        setNeedsDraw()
+    }
+
+    public func navigateSearch(forward: Bool) {
+        guard let surface else { return }
+        GhosttySel.navigateSearch(surface, forward: forward)
+        setNeedsDraw()
+    }
+
+    public func endSearch() {
+        guard let surface else { return }
+        GhosttySel.endSearch(surface)
+        searchTotal = nil
+        searchSelected = nil
+        setNeedsDraw()
+    }
+
+    /// Current selection, when it makes a usable needle (single-line, non-empty).
+    /// Seeds the find field the way ⌘E does on the Mac.
+    public func selectionAsNeedle() -> String? {
+        guard let surface, let text = GhosttySel.selectedText(surface),
+              !text.isEmpty, !text.contains("\n") else { return nil }
+        return text
+    }
+
+    func handleStartSearch(needle: String?) { onSearchStartRequested?(needle) }
+    func handleEndSearch() { onSearchEnded?() }
+
+    func handleSearchTotal(_ total: Int?) {
+        searchTotal = total
+        onSearchCounts?(searchTotal, searchSelected)
+    }
+
+    func handleSearchSelected(_ selected: Int?) {
+        searchSelected = selected
+        onSearchCounts?(searchTotal, searchSelected)
+    }
 
     func handleRendererHealth(healthy: Bool) {
         onRendererHealthChanged?(healthy)

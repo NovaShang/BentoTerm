@@ -72,6 +72,12 @@ final class TerminalContainerVC: UIViewController {
     /// User asked to leave tmux copy-mode.
     var onExitCopyMode: (() -> Void)?
 
+    /// User asked to search this pane's scrollback. The find bar itself lives on
+    /// the parent (it has to be positioned against the keyboard, which is a
+    /// container-level concern), so this only reports the intent. A non-nil
+    /// argument is a prefill from the engine's own search keybind.
+    var onFindRequested: ((String?) -> Void)?
+
     /// User asked to toggle zoom (maximize / restore) on this pane.
     var onToggleZoom: (() -> Void)?
 
@@ -338,6 +344,11 @@ final class TerminalContainerVC: UIViewController {
         }
         surface.onRendererHealthChanged = { [weak self] healthy in
             self?.setRendererHealthy(healthy)
+        }
+        // The ENGINE asking for a find UI (its own search keybind fired — a
+        // hardware ⌘F on iPad). The needle is a prefill, usually the selection.
+        surface.onSearchStartRequested = { [weak self] needle in
+            self?.onFindRequested?(needle)
         }
 
         surface.inputAccessoryView = accessoryView
@@ -899,6 +910,17 @@ extension TerminalContainerVC {
         doubleTap.delegate = self
         surface.addGestureRecognizer(doubleTap)
 
+        // Two-finger tap keeps Bento's own tap (link, path preview) reachable in
+        // a pane whose program has taken the single-finger one. `voicePress`
+        // fails itself the moment a second finger lands, and the single-tap
+        // recognizer requires exactly one touch, so neither competes for this.
+        let localTap = UITapGestureRecognizer(target: self, action: #selector(handleLocalTap(_:)))
+        localTap.numberOfTapsRequired = 1
+        localTap.numberOfTouchesRequired = 2
+        localTap.cancelsTouchesInView = false
+        localTap.delegate = self
+        surface.addGestureRecognizer(localTap)
+
         // Single-finger immediate drag → scrollback (PRD §3.1/§3.7). The voice
         // press fails on early movement (its 6pt slop), so a drag scrolls while
         // a still hold records — no extra coordination needed beyond ignoring
@@ -918,17 +940,48 @@ extension TerminalContainerVC {
             return
         }
         onSelectPaneTapped?()
+        let p = gesture.location(in: surface)
+        // A program that turned on mouse tracking gets the tap as a click. Until
+        // now only the WHEEL was forwarded, so an alt-screen TUI could be
+        // scrolled but never pressed — and pressing things is most of what
+        // Claude Code's fullscreen mode is. Selecting the pane still happens
+        // first: focus is Bento's, the click is the program's.
+        //
+        // This takes the single-finger tap away from Bento's own handlers, which
+        // is why they move to the two-finger tap below — the same trade the Mac
+        // makes by checking ⌘-click before forwarding.
+        if surface.forwardTap(at: p) {
+            noteMouseGrabbed()
+            return
+        }
         // Tap on a URL opens it in the browser (after pane selection — both are
         // what the user means). Load-bearing for onboarding: a remote agent's
-        // sign-in prints an OAuth URL that must open on THIS device. Skipped
-        // for mouse-reporting TUIs — the probe's transient row-selection uses
-        // synthetic clicks that would otherwise reach the app as mouse input.
+        // sign-in prints an OAuth URL that must open on THIS device.
         // A URL miss falls through to the file-path chip (disjoint detectors).
-        let p = gesture.location(in: surface)
-        if paneVM?.pane.mouseAny != true, surface.openLinkIfPresent(at: p) {
+        if surface.openLinkIfPresent(at: p) {
             return
         }
         maybeShowPathChip(at: p)
+    }
+
+    /// Two-finger tap = Bento's own tap, even when a program owns the mouse:
+    /// open a link, preview a file path. The touch stand-in for ⌘-click, which
+    /// the Mac surface checks before it forwards for exactly this reason.
+    /// Harmless when nothing owns the mouse — it just does what one finger did.
+    @objc private func handleLocalTap(_ gesture: UITapGestureRecognizer) {
+        onSelectPaneTapped?()
+        let p = gesture.location(in: surface)
+        if surface.openLinkIfPresent(at: p) { return }
+        maybeShowPathChip(at: p)
+    }
+
+    /// Say it once, the first time a pane swallows a tap. A program grabbing the
+    /// mouse is invisible — the user just finds that tapping a path stopped
+    /// previewing it — and the Mac has the same problem, which is why it shows
+    /// "hold ⇧ to select" the moment the grab bites.
+    private func noteMouseGrabbed() {
+        guard TipCenter.shared.consume(.mouseGrabbed) else { return }
+        showToast("This app is using taps — two fingers for Bento")
     }
 
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
@@ -1197,9 +1250,14 @@ extension TerminalContainerVC {
         showCopyToast()
     }
 
-    private func showCopyToast() {
+    private func showCopyToast() { showToast("Copied") }
+
+    /// Brief centred-bottom toast. Was inlined in the copy path; the
+    /// mouse-grabbed hint needs the same thing, and one-off teaching moments
+    /// like these are exactly what it's for.
+    fileprivate func showToast(_ text: String) {
         let label = UILabel()
-        label.text = "  Copied  "
+        label.text = "  \(text)  "
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.textColor = .white
         label.backgroundColor = UIColor(white: 0, alpha: 0.78)
@@ -1260,6 +1318,10 @@ extension TerminalContainerVC {
             ])
         }
         return UIMenu(children: [
+            UIAction(title: "Find…",
+                     image: UIImage(systemName: "magnifyingglass")) { [weak self] _ in
+                self?.onFindRequested?(nil)
+            },
             splitSection,
             copyModeSection,
             makeProfileMenu(),
