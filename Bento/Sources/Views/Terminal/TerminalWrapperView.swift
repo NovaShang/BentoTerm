@@ -1041,6 +1041,12 @@ final class PaneContainerVC: UIViewController {
         }
         vc.onCloseRequested = { [weak self] in self?.viewModel?.closePane(paneID) }
         vc.onToggleZoom = { [weak self] in self?.viewModel?.toggleZoom(paneID) }
+        // tmux copy-mode entered from outside Bento — we don't implement the
+        // mode, we just keep the pane from looking frozen while it's on.
+        vc.onCopyModeScroll = { [weak self] rows in
+            self?.viewModel?.scrollCopyMode(paneID, rows: rows)
+        }
+        vc.onExitCopyMode = { [weak self] in self?.viewModel?.exitCopyMode(paneID) }
         // Split entries only exist in Tiled mode — in List a split would build
         // a third shape, so the pane menu hides them (checked at menu-open).
         vc.showsSplitActions = { [weak self] in self?.viewModel?.sessionMode == .tiled }

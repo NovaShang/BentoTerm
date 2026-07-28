@@ -63,6 +63,15 @@ final class TerminalContainerVC: UIViewController {
     /// User asked to close this pane.
     var onCloseRequested: (() -> Void)?
 
+    /// The pane is in tmux copy-mode and the user scrolled it. Rows, positive =
+    /// toward older output; parent forwards to `viewModel.scrollCopyMode`.
+    /// Bento does not implement copy-mode — this is only so a pane that entered
+    /// it from outside still answers the finger.
+    var onCopyModeScroll: ((Int) -> Void)?
+
+    /// User asked to leave tmux copy-mode.
+    var onExitCopyMode: (() -> Void)?
+
     /// User asked to toggle zoom (maximize / restore) on this pane.
     var onToggleZoom: (() -> Void)?
 
@@ -206,7 +215,41 @@ final class TerminalContainerVC: UIViewController {
                                    height: max(0, view.bounds.height - tbh))
         }
         stateTint.frame = surface.frame
+        layoutRendererHealthBanner()
         layoutMarkPager()
+    }
+
+    // MARK: - Renderer health
+
+    /// Shown when libghostty reports its Metal renderer stopped. Without it the
+    /// pane simply goes black and stays black — indistinguishable from a program
+    /// that printed nothing.
+    private var rendererHealthBanner: UILabel?
+
+    private func setRendererHealthy(_ healthy: Bool) {
+        if healthy {
+            rendererHealthBanner?.removeFromSuperview()
+            rendererHealthBanner = nil
+            return
+        }
+        guard rendererHealthBanner == nil else { return }
+        let label = UILabel()
+        label.text = "Renderer stopped — this pane won't update"
+        label.font = .systemFont(ofSize: 11)
+        label.textAlignment = .center
+        label.textColor = .white
+        // Brand salmon (docs/bento-icon.svg): a warning that is deliberately NOT
+        // one of the pane state colors, because this is not a pane state.
+        label.backgroundColor = UIColor(red: 0xE8 / 255.0, green: 0x9B / 255.0,
+                                        blue: 0x7C / 255.0, alpha: 1)
+        view.addSubview(label)
+        rendererHealthBanner = label
+        layoutRendererHealthBanner()
+    }
+
+    private func layoutRendererHealthBanner() {
+        guard let banner = rendererHealthBanner else { return }
+        banner.frame = CGRect(x: 0, y: titleBarHeight, width: view.bounds.width, height: 20)
     }
 
     /// Right-edge, vertically centered over the surface content. Inset from the
@@ -289,6 +332,12 @@ final class TerminalContainerVC: UIViewController {
         // read lazily — it's bound separately, possibly before/after this).
         surface.onScrollbar = { [weak self] total, offset, len in
             self?.paneVM?.noteScrollbar(total: total, offset: offset, len: len)
+        }
+        surface.onCopyModeScroll = { [weak self] rows in
+            self?.onCopyModeScroll?(rows)
+        }
+        surface.onRendererHealthChanged = { [weak self] healthy in
+            self?.setRendererHealthy(healthy)
         }
 
         surface.inputAccessoryView = accessoryView
@@ -609,6 +658,19 @@ final class TerminalContainerVC: UIViewController {
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] mr in self?.surface?.mouseReporting = mr }
+            .store(in: &cancellables)
+
+        // tmux copy-mode (`pane_in_mode`). Control mode gives no other signal:
+        // tmux draws the mode's UI as ordinary pane content, so without this the
+        // pane just stops responding to scroll with no explanation.
+        vm.$pane
+            .map(\.inMode)
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] inMode in
+                self?.surface?.tmuxInMode = inMode
+                self?.titleBar.inCopyMode = inMode
+            }
             .store(in: &cancellables)
 
         updateTitle(vm.pane.currentCommand ?? "shell")
@@ -1182,8 +1244,24 @@ extension TerminalContainerVC {
                 },
             ])
         }
+        // Only offered while tmux actually has the pane in a mode. Resolved at
+        // menu-open (deferred) like the split entries, since the mode can be
+        // entered and left by another client at any moment.
+        let copyModeSection = UIDeferredMenuElement.uncached { [weak self] completion in
+            guard let self, self.titleBar.inCopyMode else {
+                completion([])
+                return
+            }
+            completion([
+                UIAction(title: "Exit tmux copy-mode",
+                         image: UIImage(systemName: "arrow.uturn.backward")) { [weak self] _ in
+                    self?.onExitCopyMode?()
+                },
+            ])
+        }
         return UIMenu(children: [
             splitSection,
+            copyModeSection,
             makeProfileMenu(),
             makeMoveToSessionMenu(),
             UIAction(title: "Close Pane",
@@ -1316,6 +1394,20 @@ extension TerminalContainerVC: @preconcurrency UIEditMenuInteractionDelegate {
 final class PaneTitleBar: UIView {
     let titleLabel = UILabel()
     private let stateDot = UIView()
+    /// Trailing mode glyph. Separate from the state dot on purpose: state is what
+    /// the PROGRAM is doing, a mode is something about the pane that changes how
+    /// it answers you. Hidden unless a mode is on — "nothing unusual" gets no
+    /// marker, the same rule the idle state follows.
+    private let modeIcon = UIImageView()
+
+    /// tmux has this pane in copy-mode (entered from outside Bento).
+    var inCopyMode: Bool = false {
+        didSet {
+            guard oldValue != inCopyMode else { return }
+            modeIcon.isHidden = !inCopyMode
+            updateChrome()
+        }
+    }
 
     /// Drives dot color, the title-bar band color, and (when active) text emphasis.
     var paneState: PaneState = .idle {
@@ -1357,6 +1449,12 @@ final class PaneTitleBar: UIView {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
 
+        modeIcon.image = UIImage(systemName: "doc.on.doc")
+        modeIcon.contentMode = .scaleAspectFit
+        modeIcon.isHidden = true
+        modeIcon.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(modeIcon)
+
         NSLayoutConstraint.activate([
             stateDot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             stateDot.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -1365,7 +1463,12 @@ final class PaneTitleBar: UIView {
 
             titleLabel.leadingAnchor.constraint(equalTo: stateDot.trailingAnchor, constant: 10),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: modeIcon.leadingAnchor, constant: -6),
+
+            modeIcon.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            modeIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            modeIcon.widthAnchor.constraint(equalToConstant: 12),
+            modeIcon.heightAnchor.constraint(equalToConstant: 12),
         ])
 
         updateChrome()
@@ -1384,6 +1487,9 @@ final class PaneTitleBar: UIView {
             backgroundColor = surfaceColor
             titleLabel.textColor = isActivePane ? .label : .secondaryLabel
         }
+        // Same ink as the title: a mode is information, not an alarm, and it must
+        // never be mistaken for one of the state colors.
+        modeIcon.tintColor = titleLabel.textColor
     }
 
     /// Re-derive the band/ink for the current appearance (the band colors are

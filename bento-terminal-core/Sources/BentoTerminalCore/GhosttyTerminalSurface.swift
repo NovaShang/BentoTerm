@@ -36,6 +36,26 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// Sub-cell scroll remainder, so slow drags still accumulate to whole rows.
     private var scrollWheelAccum: CGFloat = 0
 
+    /// tmux has this pane in a mode (copy-mode), entered from outside Bento —
+    /// another client, a script, or the user's own binding. Bento does not
+    /// implement copy-mode; this flag exists so the pane isn't a rectangle that
+    /// silently refuses to scroll. See the macOS surface for the same pair.
+    public var tmuxInMode = false
+
+    /// Scroll travel while tmux owns the viewport, in rows (positive = toward
+    /// older output). The host turns this into `send-keys -X scroll-up`.
+    public var onCopyModeScroll: ((Int) -> Void)?
+    private var copyModeScrollAccum: CGFloat = 0
+
+    /// The Metal renderer's health, reported by the engine.
+    ///
+    /// Forwarded to the HOST rather than drawn here: on iOS ghostty renders into
+    /// a sublayer of this view's layer, and `synchronizeGhosttyLayerGeometry`
+    /// stretches every sublayer to the full bounds — so any chrome added as a
+    /// subview would be resized over the whole terminal. The pane's VC owns its
+    /// chrome anyway.
+    public var onRendererHealthChanged: ((Bool) -> Void)?
+
     private var surface: ghostty_surface_t?
     private var theme: TerminalTheme
     private var renderLink: CADisplayLink?
@@ -289,6 +309,15 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// delta as high-resolution (touch), matching trackpad behavior.
     public func scroll(deltaX: CGFloat, deltaY: CGFloat, at point: CGPoint) {
         guard let surface else { return }
+        // tmux has the pane in copy-mode: IT owns the viewport and repaints from
+        // its own scroll position, so moving our scrollback as well means two
+        // scroll positions for one screen — the finger drags and nothing appears
+        // to happen. Hand the gesture to tmux's copy-mode instead.
+        if tmuxInMode {
+            let rows = copyModeScrollRows(deltaY)
+            if rows != 0 { onCopyModeScroll?(rows) }
+            return
+        }
         // Mouse-reporting pane (an alt-screen TUI that enabled mouse tracking) →
         // forward the scroll to the program as wheel events instead of moving the
         // surface's local scrollback. Without this, scrolling in Claude Code's
@@ -328,6 +357,21 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         let button = rows > 0 ? 64 : 65
         let (col, row) = cellCoord(point)
         for _ in 0..<min(abs(rows), 8) { sendWheel(button: button, col: col, row: row) }
+    }
+
+    /// Accumulate a pan delta into whole rows for copy-mode. Same points-per-row
+    /// as the local scrollback path, so a pane in copy-mode scrolls at the speed
+    /// every other pane does.
+    private func copyModeScrollRows(_ deltaY: CGFloat) -> Int {
+        guard let size = currentSize, size.cellHeightPx > 0 else { return 0 }
+        let cellH = CGFloat(size.cellHeightPx) / renderScale
+        copyModeScrollAccum += deltaY
+        let rows = Int(copyModeScrollAccum / cellH)
+        guard rows != 0 else { return 0 }
+        copyModeScrollAccum -= CGFloat(rows) * cellH
+        // Cap the burst: a flick would otherwise hand tmux a very large repeat
+        // count in one command, and over relay that lands as a visible lurch.
+        return max(-12, min(12, rows))
     }
 
     /// 1-based cell (col,row) under a view point, from the engine's cell pixel
@@ -667,7 +711,10 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     func handleEndSearch() {}
     func handleSearchTotal(_ total: Int?) {}
     func handleSearchSelected(_ selected: Int?) {}
-    func handleRendererHealth(healthy: Bool) {}
+
+    func handleRendererHealth(healthy: Bool) {
+        onRendererHealthChanged?(healthy)
+    }
 
     // MARK: - Tap-to-open links
 
