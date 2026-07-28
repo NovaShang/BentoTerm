@@ -507,9 +507,10 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// costs the row its ability to be read on its own, which is why every
     /// macOS File menu spells out New Window / New Tab / New Folder.
     ///
-    /// The ICON says the level and nothing else — both rows of a level share
-    /// one, so the icon column reads as three groups reinforcing the
-    /// separators, and the words carry what differs. Eight unrelated glyphs
+    /// The ICON says the level and nothing else, and only the FIRST row of a
+    /// level carries it — it marks where a group starts, so the column reads as
+    /// three groups reinforcing the separators while the words carry what
+    /// differs. Eight unrelated glyphs
     /// (sparkles, a history clock, two different rectangle-plus variants…) made
     /// the column noise: nothing to group by, and each symbol asking to be
     /// decoded on its own. `rectangle.stack` = a session holding windows,
@@ -535,7 +536,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             tip: "A fresh tmux session running Claude, Codex or another agent, optionally split into panes.",
             action: #selector(newAgentAction)))
         menu.addItem(plainItem(
-            symbol: "rectangle.stack", title: "New Empty Session",
+            symbol: nil, title: "New Empty Session",
             tip: "A blank tmux session on the host. It keeps running after you disconnect.",
             action: #selector(newTerminalAction)))
 
@@ -545,7 +546,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             tip: "A tmux window in this session, with the current pane's folder and command.",
             action: #selector(newWindowDuplicateAction)))
         menu.addItem(plainItem(
-            symbol: "macwindow", title: "New tmux Window at a Path…",
+            symbol: nil, title: "New tmux Window at a Path…",
             tip: "A tmux window, choosing the folder and what to run in it.",
             action: #selector(newWindowPathCommandAction)))
 
@@ -555,7 +556,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             tip: "Split the current pane, inheriting its folder and command.",
             action: #selector(newPaneDuplicateAction)))
         menu.addItem(plainItem(
-            symbol: "square.split.2x1", title: "New Pane at a Path…",
+            symbol: nil, title: "New Pane at a Path…",
             tip: "Split off a pane, choosing the folder and what to run in it.",
             action: #selector(newPanePathCommandAction)))
 
@@ -576,10 +577,17 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     }
 
     /// A one-line row: symbol, title, and the explanation on hover.
-    private func plainItem(symbol: String, title: String, tip: String, action: Selector?) -> NSMenuItem {
+    private func plainItem(symbol: String?, title: String, tip: String, action: Selector?) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        // `nil` on a level's SECOND row: the icon marks where a group starts,
+        // and repeating it on the row below says nothing the eye didn't already
+        // get. AppKit reserves the image column for the whole menu as soon as
+        // any item has one, so the title stays aligned and the blank reads as
+        // "same as above".
+        if let symbol {
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        }
         if !tip.isEmpty { item.toolTip = tip }
         return item
     }
