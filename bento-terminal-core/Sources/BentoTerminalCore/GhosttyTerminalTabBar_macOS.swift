@@ -37,11 +37,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     var onSelectMode: ((TmuxSessionMode) -> Void)?
     var onTogglePreview: (() -> Void)?
 
-    /// Every session Bento knows about, with its status dot — the left button's
-    /// menu is the session switcher (the centre strip belongs to windows).
-    var sessions: [(key: String, dot: NSImage?)] = []
-    var activeSessionKey: String?
-    var onSelectSession: ((String) -> Void)?
     /// The active tab is a plain (no-tmux) terminal — its menu is just "Close".
     var activeTabIsPlain = false
 
@@ -390,10 +385,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// the New menu, so neither is duplicated here.
     func sessionActionsMenu() -> NSMenu {
         let menu = NSMenu()
-        // Every session, the current one checkmarked. This is the switcher
-        // until sessions become native window tabs; then it goes away and only
-        // the actions below remain.
-        sessionSwitchSection(menu)
+        // No session switcher here: sessions are native window tabs, and the
+        // tab bar IS the switcher. This button carries the ACTIONS.
         // A plain (no-tmux) terminal has no session/windows — just close it.
         if activeTabIsPlain {
             add(menu, "Close Terminal", #selector(closeTabAction))
@@ -415,31 +408,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         return menu
     }
 
-    /// Sessions live behind the named button on the left: switching between
-    /// them is a project-level move (rarer than switching windows) and the
-    /// centre strip now belongs to the current session's windows.
-    private func sessionSwitchSection(_ menu: NSMenu) {
-        guard !sessions.isEmpty else { return }
-        let header = NSMenuItem(title: "Sessions", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
-        for session in sessions {
-            let item = NSMenuItem(title: session.key,
-                                  action: #selector(selectSessionAction(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.representedObject = session.key
-            item.image = session.dot
-            item.state = (session.key == activeSessionKey) ? .on : .off
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-    }
-
-    @objc private func selectSessionAction(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String else { return }
-        onSelectSession?(key)
-    }
 
     /// Who governs the window size — a checked pair, not a "do it now" button.
     /// The old single "Fit Session to This Window" was a one-shot that tmux
