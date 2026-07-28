@@ -422,12 +422,20 @@ public extension TerminalViewModel {
         await saveStructureSnapshot()
 
         for (_, winPanes) in multiPane {
-            // Break all but the first; each new window is named for what it
-            // runs (compat only — display names derive live from pane titles).
+            // Break all but the first, deliberately WITHOUT `-n`.
+            //
+            // This used to name each new window after the pane's title at that
+            // instant, which looked harmless — the comment even said "compat
+            // only". It isn't: naming a window explicitly makes tmux turn
+            // `automatic-rename` OFF for it forever. The name froze at whatever
+            // the agent's OSC title happened to say mid-spread, stopped tracking
+            // what was running, and survived the merge back onto the window that
+            // became the base — so the toolbar ended up showing a title that
+            // matched no pane in it. Left alone, tmux keeps renaming from the
+            // running command, and a name the USER types (sidebar → Rename
+            // Window…) still sticks, which is tmux's own rule.
             for pane in winPanes.dropFirst() {
-                let name = [pane.title, pane.currentCommand]
-                    .compactMap { $0 }.first { !$0.isEmpty } ?? "pane"
-                let resp = await tmuxService.send(.breakPane(source: pane.id, name: name))
+                let resp = await tmuxService.send(.breakPane(source: pane.id))
                 if resp.isError { dlog("spreadToList: break-pane \(pane.id) failed: \(resp.output)") }
             }
         }
@@ -645,17 +653,15 @@ public extension TerminalViewModel {
     @discardableResult
     func movePane(_ paneID: TmuxPaneID, toSession target: String,
                   landing: MoveLanding = .auto) async -> MoveResult {
-        // Window named like spreadToList's break-outs (compat only — display
-        // names derive live from pane titles).
-        let pane = sessionPanes.first { $0.id == paneID }
-        let windowName = [pane?.title, pane?.currentCommand]
-            .compactMap { $0 }.first { !$0.isEmpty } ?? "pane"
+        // No `-n`, same reason as spreadToList: an explicit name is what turns
+        // tmux's automatic-rename off, and a frozen title is worse than a
+        // generic live one.
         return await moveToSession(
             target, isLast: sessionPanes.count <= 1, landing: landing,
             kind: "movePane \(paneID)",
             join: { await self.tmuxService.send(.joinPaneToSession(source: paneID, session: $0)) },
             asWindow: { await self.tmuxService.send(
-                .breakPane(source: paneID, name: windowName, targetSession: $0)) })
+                .breakPane(source: paneID, targetSession: $0)) })
     }
 
     /// Move a whole window into another session: the Focus/List window row's

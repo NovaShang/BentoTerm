@@ -137,6 +137,47 @@ struct LiveTmuxRoundTripTests {
         #expect(try tmux.panes().count == 2)
     }
 
+    /// Breaking a pane out must NOT name the new window.
+    ///
+    /// Naming a window explicitly is what makes tmux turn `automatic-rename`
+    /// off for it — permanently. The spread used to pass the pane's title as
+    /// `-n`, so every broken-out window froze at whatever the agent's OSC title
+    /// said at that instant, and the frozen name survived the merge back onto
+    /// whichever window became the base. The toolbar then showed a title that
+    /// matched no pane in that window.
+    @Test func breakingPanesOutLeavesAutomaticRenameAlone() throws {
+        let tmux = try LiveTmux()
+        defer { tmux.shutdown() }
+
+        // Deliberately NOT `-n`: naming at creation freezes automatic-rename
+        // just like renaming later does, so a named fixture would poison the
+        // very thing under test. (That rule is easy to miss — this test caught
+        // it on its first run.)
+        try tmux.run(["new-session", "-d", "-s", "work"])
+        try tmux.run(["split-window", "-t", "work:"])
+        try tmux.run(["split-window", "-t", "work:"])
+        #expect(try tmux.capture(["show-options", "-gv", "automatic-rename"])
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "on")
+
+        let snapshot = try tmux.snapshot()
+        var spread: [String] = []
+        for window in snapshot.windows {
+            for pane in window.panes.dropFirst() {
+                let cmd = TmuxCommand.breakPane(source: pane).commandString
+                #expect(!cmd.contains(" -n "), "break-pane must not name the window: \(cmd)")
+                spread.append(cmd)
+            }
+        }
+        try tmux.runScript(spread)
+
+        let flags = try tmux.capture(
+            ["list-windows", "-t", "work", "-F", "#{window_index}:#{?automatic-rename,on,OFF}"])
+            .split(separator: "\n").map(String.init)
+        #expect(flags.count == 3)
+        #expect(flags.allSatisfy { $0.hasSuffix(":on") },
+                "every window must still auto-rename; got \(flags)")
+    }
+
     /// The snapshot is stored in a tmux session option and read back through
     /// tmux's parser. This is where the brace hazard bit before.
     @Test func snapshotSurvivesStorageInATmuxOption() throws {
