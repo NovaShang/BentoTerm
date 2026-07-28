@@ -424,12 +424,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// current session's actions (the power-user path alongside the named button).
     private var rightClickMonitor: Any?
 
-    /// The window's content area shrinks when the native tab bar appears and
-    /// grows back when it goes — WITHOUT the window frame changing, so no
-    /// resize/layout pass fires on its own. Without this the terminal sat under
-    /// the new tab bar, and closing the last other tab left a dead strip.
-    private var contentRectObs: NSKeyValueObservation?
-
     /// Toolbar bindings to the *active* tab's VM (re-subscribed on switch).
     private var activeCancellables = Set<AnyCancellable>()
     /// Per-tab subscriptions (agent dots + tab titles), keyed by tab identity.
@@ -470,7 +464,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // brings the native material, full-height layout, animated collapse,
         // divider drag, and width autosave — no hand-rolled chrome.
         contentRoot.autoresizesSubviews = false
-        contentRoot.onLayout = { [weak self] in self?.layoutContent() }
         topFill.wantsLayer = true
         contentRoot.addSubview(topFill)
         contentRoot.addSubview(container)
@@ -581,10 +574,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             if !win.setFrameUsingName("BentoMainTerminalWindow") { win.center() }
         }
         self.window = win
-        layoutContent()
-        contentRectObs = win.observe(\.contentLayoutRect, options: [.new]) { [weak self] _, _ in
-            MainActor.assumeIsolated { self?.layoutContent() }
-        }
+        installContentConstraints(in: win)
 
         // Right-click on the tab strip → current session's actions. Scoped to the
         // toolbar band, in the centered region where the tabs live (so the side
@@ -721,35 +711,39 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         if sidebarItem.isCollapsed == showing {
             sidebarItem.animator().isCollapsed = !showing
         }
-        layoutContent()
     }
 
     /// The container fills the content column BELOW the toolbar (full-size
     /// content puts the column under it; the safe area says by how much).
     /// Divider drag / sidebar collapse resize flows into the pane host, which
     /// re-fits the tmux client grid — the same path as a window resize.
-    /// Height of the chrome above the content: the title bar, PLUS the native
-    /// tab bar when the window is in a tab group.
+    /// Pin the terminal below the window's chrome using AppKit's own
+    /// `contentLayoutGuide`, and fill the band above it with the theme colour.
     ///
-    /// `contentRoot.safeAreaInsets.top` only covers the title bar — this view
-    /// is nested inside the split view controller, and the tab bar never
-    /// reached it — so the terminal drew under the tab bar. The window's own
-    /// `contentLayoutRect` is the honest measure: content-view height minus
-    /// layout-rect height is exactly the chrome, whatever it currently
-    /// contains.
-    private var topChromeInset: CGFloat {
-        guard let win = window, let content = win.contentView else {
-            return contentRoot.safeAreaInsets.top
-        }
-        return max(content.bounds.height - win.contentLayoutRect.height,
-                   contentRoot.safeAreaInsets.top)
-    }
+    /// Constraints rather than arithmetic on purpose. The chrome's height
+    /// changes when the native tab bar appears or goes — and with
+    /// `.fullSizeContentView` that happens WITHOUT the window or the content
+    /// view resizing, so nothing fires a layout pass and nothing is there to
+    /// recompute. Earlier attempts (safe-area insets, then KVO on
+    /// `contentLayoutRect`) each got the value or the timing wrong and left the
+    /// terminal under the tab bar, or a dead band where it used to be. The
+    /// layout guide is maintained by AppKit itself, so there is no moment to
+    /// miss.
+    private func installContentConstraints(in win: NSWindow) {
+        guard let guide = win.contentLayoutGuide as? NSLayoutGuide else { return }
+        container.translatesAutoresizingMaskIntoConstraints = false
+        topFill.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            container.topAnchor.constraint(equalTo: guide.topAnchor),
+            container.leadingAnchor.constraint(equalTo: contentRoot.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: contentRoot.trailingAnchor),
+            container.bottomAnchor.constraint(equalTo: contentRoot.bottomAnchor),
 
-    private func layoutContent() {
-        let b = contentRoot.bounds
-        let top = topChromeInset
-        container.frame = NSRect(x: 0, y: 0, width: b.width, height: max(b.height - top, 0))
-        topFill.frame = NSRect(x: 0, y: max(b.height - top, 0), width: b.width, height: top)
+            topFill.topAnchor.constraint(equalTo: contentRoot.topAnchor),
+            topFill.bottomAnchor.constraint(equalTo: container.topAnchor),
+            topFill.leadingAnchor.constraint(equalTo: contentRoot.leadingAnchor),
+            topFill.trailingAnchor.constraint(equalTo: contentRoot.trailingAnchor),
+        ])
     }
 
     // MARK: Mode switch (Tiled ⇄ List)
@@ -1258,8 +1252,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         // Free every session's surfaces BEFORE AppKit tears the window down.
         if let m = rightClickMonitor { NSEvent.removeMonitor(m); rightClickMonitor = nil }
-        contentRectObs?.invalidate()
-        contentRectObs = nil
         activeCancellables.removeAll()
         tabCancellables.removeAll()
         // Drop the sidebar's SwiftUI observation before the VMs are torn down.
