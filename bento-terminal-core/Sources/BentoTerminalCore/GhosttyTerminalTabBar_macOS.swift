@@ -492,56 +492,59 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// ("multi pane" is a layout, not a kind; EVERY tmux session is
     /// persistent), and neither said anything about windows or panes, which
     /// you could only create from elsewhere entirely.
+    /// Everything you can create, FLAT — creation is frequent, and a submenu
+    /// in front of a fixed pair of choices charges a hover for every use.
+    ///
+    /// This follows what terminals with the same problem do: iTerm2's Shell
+    /// menu and Terminal.app both keep New Window / New Tab / the splits at the
+    /// top level and put only the open-ended list (profiles) behind a submenu;
+    /// VS Code's terminal `+` acts immediately and hides the profile list
+    /// behind a chevron. Fixed choices stay flat; unbounded lists nest — which
+    /// is why SSH hosts are the one submenu here.
+    ///
+    /// Rows are named so each is unique on its own. An earlier version listed
+    /// "Duplicate Current" and "Path & Command…" twice, under Window and under
+    /// Pane, distinguished only by a disabled header — the weakest thing on
+    /// screen — so the eye had to read four rows to find the one word that
+    /// differed. Separators group; nothing depends on grey text.
     @objc private func newTapped() {
         let menu = NSMenu()
 
-        // One row per tmux level, each opening the two ways to seed it.
-        //
-        // Flat, this menu listed "Duplicate Current" and "Path & Command…"
-        // TWICE — once under Window, once under Pane — separated only by a
-        // disabled header, which is about the weakest thing on screen. The eye
-        // had to read all four rows to find the single word that differed.
-        // Nested, the repeated pair is never visible twice at once, and what
-        // distinguishes it is the row you just pointed at rather than grey text
-        // above it. Explanations are tooltips: eight two-line notes turned a
-        // pick-one menu into a paragraph.
-        menu.addItem(submenu(
-            symbol: "sparkles", title: "Session",
-            items: [
-                (symbol: "sparkles", title: "With Agent…",
-                 tip: "A fresh tmux session running Claude, Codex or another agent, optionally split into panes.",
-                 action: #selector(newAgentAction)),
-                (symbol: "clock.arrow.circlepath", title: "Empty",
-                 tip: "A blank tmux session on the host. It keeps running after you disconnect.",
-                 action: #selector(newTerminalAction)),
-            ]))
-        menu.addItem(submenu(
-            symbol: "plus.rectangle.on.folder", title: "Window",
-            items: [
-                (symbol: "plus.square.on.square", title: "Duplicate Current",
-                 tip: "A tmux window with the current pane's folder and command.",
-                 action: #selector(newWindowDuplicateAction)),
-                (symbol: "rectangle.badge.plus", title: "Path & Command…",
-                 tip: "A tmux window, choosing the folder and what to run in it.",
-                 action: #selector(newWindowPathCommandAction)),
-            ]))
-        menu.addItem(submenu(
-            symbol: "square.split.2x1", title: "Pane",
-            items: [
-                (symbol: "plus.square.on.square", title: "Duplicate Current",
-                 tip: "Split off a pane with the current one's folder and command.",
-                 action: #selector(newPaneDuplicateAction)),
-                (symbol: "terminal", title: "Path & Command…",
-                 tip: "Split off a pane, choosing the folder and what to run in it.",
-                 action: #selector(newPanePathCommandAction)),
-            ]))
+        menu.addItem(plainItem(
+            symbol: "sparkles", title: "Session with Agent…",
+            tip: "A fresh tmux session running Claude, Codex or another agent, optionally split into panes.",
+            action: #selector(newAgentAction)))
+        menu.addItem(plainItem(
+            symbol: "clock.arrow.circlepath", title: "Empty Session",
+            tip: "A blank tmux session on the host. It keeps running after you disconnect.",
+            action: #selector(newTerminalAction)))
 
-        // Not tmux objects, and each is a single action — no submenu to open.
+        menu.addItem(.separator())
+        menu.addItem(plainItem(
+            symbol: "plus.rectangle.on.folder", title: "Window",
+            tip: "A tmux window in this session, with the current pane's folder and command.",
+            action: #selector(newWindowDuplicateAction)))
+        menu.addItem(plainItem(
+            symbol: "rectangle.badge.plus", title: "Window from Path…",
+            tip: "A tmux window, choosing the folder and what to run in it.",
+            action: #selector(newWindowPathCommandAction)))
+
+        menu.addItem(.separator())
+        menu.addItem(plainItem(
+            symbol: "square.split.2x1", title: "Pane",
+            tip: "Split the current pane, inheriting its folder and command.",
+            action: #selector(newPaneDuplicateAction)))
+        menu.addItem(plainItem(
+            symbol: "terminal", title: "Pane from Path…",
+            tip: "Split off a pane, choosing the folder and what to run in it.",
+            action: #selector(newPanePathCommandAction)))
+
         menu.addItem(.separator())
         menu.addItem(plainItem(
             symbol: "macwindow", title: "Terminal without tmux",
             tip: "A quick local shell. Closing it discards it for good.",
             action: #selector(newPlainShellAction)))
+        // The one unbounded list — however many hosts ~/.ssh/config has.
         let ssh = plainItem(
             symbol: "network", title: "SSH Connection",
             tip: "A terminal connected to a host from your ~/.ssh/config.",
@@ -550,18 +553,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         menu.addItem(ssh)
 
         pop(menu, from: newButton)
-    }
-
-    private typealias NewItem = (symbol: String, title: String, tip: String, action: Selector)
-
-    private func submenu(symbol: String, title: String, items: [NewItem]) -> NSMenuItem {
-        let root = plainItem(symbol: symbol, title: title, tip: "", action: nil)
-        let sub = NSMenu()
-        for i in items {
-            sub.addItem(plainItem(symbol: i.symbol, title: i.title, tip: i.tip, action: i.action))
-        }
-        root.submenu = sub
-        return root
     }
 
     /// A one-line row: symbol, title, and the explanation on hover.

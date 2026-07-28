@@ -58,6 +58,19 @@ struct TerminalCommands: Commands {
             Button("Toggle Preview Panel") { BentoTerminalWindow.togglePreviewDock() }
                 .keyboardShortcut("p", modifiers: [.command, .option])
             Divider()
+            // Scoped to the ACTIVE PANE's scrollback — the omnibox above is the
+            // app-wide one. Standard macOS find keys so nobody has to learn them.
+            Button("Find…") { BentoPaneAction.dispatch(BentoPaneAction.findInPane) }
+                .keyboardShortcut("f", modifiers: .command)
+            Button("Find Next") { BentoPaneAction.dispatch(BentoPaneAction.findNext) }
+                .keyboardShortcut("g", modifiers: .command)
+            Button("Find Previous") { BentoPaneAction.dispatch(BentoPaneAction.findPrevious) }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+            Button("Use Selection for Find") {
+                BentoPaneAction.dispatch(BentoPaneAction.useSelectionForFind)
+            }
+            .keyboardShortcut("e", modifiers: .command)
+            Divider()
             // ⌘T is the reflex key in every terminal, and in tmux the reflex
             // action is `prefix-c` — a new WINDOW in the session you're in. It
             // used to create a whole new session here (a heavier, rarer thing

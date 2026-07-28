@@ -167,6 +167,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         synchronizeGhosttyLayerGeometry()
         updateSurfaceSize()
         ghostty_surface_set_focus(created, true)
+        syncColorScheme()
         ghostty_surface_refresh(created)
         ghostty_surface_draw(created)
         startRenderLink()
@@ -480,12 +481,25 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     public func applyTheme(_ theme: TerminalTheme) {
         self.theme = theme
         backgroundColor = UIColor(rgb: theme.background)
+        // Light/dark can flip with the font size untouched, so this sits outside
+        // the recreate branch.
+        syncColorScheme()
         // Font size / family are applied at surface creation via config. A live
         // change recreates the surface so the new metrics take effect.
         if surface != nil, abs(theme.fontSize - Double(lastAppliedFontSize)) > 0.01 {
             recreateSurface()
         }
         lastAppliedFontSize = Float(theme.fontSize)
+    }
+
+    /// Report the terminal's light/dark to the engine so programs running inside
+    /// it can query it (OSC 2031 / DSR ?996). Sourced from the ACTIVE PALETTE,
+    /// not the app chrome's appearance — what matters to vim/delta/bat is the
+    /// background they are drawing onto.
+    private func syncColorScheme() {
+        guard let surface else { return }
+        ghostty_surface_set_color_scheme(
+            surface, theme.isDark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
     }
 
     private var lastAppliedFontSize: Float = 0
@@ -632,6 +646,15 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     // Per-surface engine actions — mostly no-ops on iOS (no pointer cursor).
     func handleMouseShape(_ shape: ghostty_action_mouse_shape_e) {}
     func handleMouseVisibility(_ visible: Bool) {}
+
+    // Scrollback search is macOS-only for now — the engine side is shared (see
+    // GhosttySel.search), only the find-bar UI is not built for touch yet. These
+    // stubs exist because the runtime's action router is one shared switch.
+    func handleStartSearch(needle: String?) {}
+    func handleEndSearch() {}
+    func handleSearchTotal(_ total: Int?) {}
+    func handleSearchSelected(_ selected: Int?) {}
+    func handleRendererHealth(healthy: Bool) {}
 
     // MARK: - Tap-to-open links
 

@@ -67,6 +67,9 @@ final class GhosttyRuntime {
         let config = ghostty_config_new()
         ghostty_config_load_default_files(config)
         ghostty_config_finalize(config)
+        GhosttyRuntime.logConfigDiagnostics(config)
+        // Held for the process lifetime (effectiveBackgroundRGB reads it), so
+        // unlike reapplyColors' temporary this one is deliberately never freed.
         self.baseConfig = config
 
         var runtime = ghostty_runtime_config_s(
@@ -94,6 +97,33 @@ final class GhosttyRuntime {
         for name in [Notification.Name.terminalThemeChanged, .terminalFontChanged] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
                 Task { @MainActor in GhosttyRuntime.shared.reapplyColors() }
+            }
+        }
+        #endif
+
+        // ghostty builds its keycode→character translation table from the ACTIVE
+        // keyboard layout and caches it. Switching input source (US → Dvorak,
+        // ABC → Pinyin, …) invalidates that table, and nothing tells the engine —
+        // so keys keep translating through the layout that was live at launch.
+        // This is the only way to invalidate it.
+        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        NotificationCenter.default.addObserver(
+            forName: NSTextInputContext.keyboardSelectionDidChangeNotification,
+            object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in
+                guard let app = GhosttyRuntime.shared.app else { return }
+                ghostty_app_keyboard_changed(app)
+            }
+        }
+        #elseif canImport(UIKit)
+        NotificationCenter.default.addObserver(
+            forName: UITextInputMode.currentInputModeDidChangeNotification,
+            object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in
+                guard let app = GhosttyRuntime.shared.app else { return }
+                ghostty_app_keyboard_changed(app)
             }
         }
         #endif
@@ -161,9 +191,37 @@ final class GhosttyRuntime {
         let size = ThemeStore.shared.fontSize
         if size > 0 { ghostty_config_set_font_size(cfg, Float(size)) }
         ghostty_config_finalize(cfg)
+        GhosttyRuntime.logConfigDiagnostics(cfg)
+        // App-level light/dark, so config values that resolve per-scheme pick the
+        // right side. Per-surface reporting (what programs inside the terminal
+        // actually query) is `syncColorScheme` on each surface.
+        ghostty_app_set_color_scheme(
+            app,
+            ThemeStore.shared.current.isDark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
         ghostty_app_update_config(app, cfg)
+        // `ghostty_app_update_config` takes `*const Config` — it clones what it
+        // needs and never takes ownership, so this one is ours to release. It
+        // used to leak a whole config on every theme/font change (and follow-
+        // system mode fires that on every app-switch appearance flip).
+        ghostty_config_free(cfg)
     }
+
     #endif
+
+    /// Surface parse errors in the config we GENERATE ourselves (writeColorConfig).
+    /// ghostty silently ignores bad lines, so a malformed palette entry would just
+    /// quietly not apply.
+    private static func logConfigDiagnostics(_ cfg: ghostty_config_t?) {
+        guard let cfg else { return }
+        let count = ghostty_config_diagnostics_count(cfg)
+        guard count > 0 else { return }
+        for i in 0..<count {
+            let d = ghostty_config_get_diagnostic(cfg, i)
+            let msg = d.message.map { String(cString: $0) } ?? "(no message)"
+            Logger(subsystem: "com.novashang.bento", category: "ghostty")
+                .error("config diagnostic: \(msg, privacy: .public)")
+        }
+    }
 
     func tick() {
         guard let app else { return }
@@ -335,8 +393,20 @@ final class GhosttyRuntime {
             return true
         case GHOSTTY_ACTION_SCROLLBAR, GHOSTTY_ACTION_MOUSE_SHAPE,
              GHOSTTY_ACTION_MOUSE_OVER_LINK, GHOSTTY_ACTION_MOUSE_VISIBILITY,
-             GHOSTTY_ACTION_COLOR_CHANGE, GHOSTTY_ACTION_PWD:
+             GHOSTTY_ACTION_COLOR_CHANGE, GHOSTTY_ACTION_PWD,
+             GHOSTTY_ACTION_START_SEARCH, GHOSTTY_ACTION_END_SEARCH,
+             GHOSTTY_ACTION_SEARCH_TOTAL, GHOSTTY_ACTION_SEARCH_SELECTED,
+             GHOSTTY_ACTION_RENDERER_HEALTH:
             routeToSurface(target, action)
+            return true
+        case GHOSTTY_ACTION_SET_TITLE:
+            // DELIBERATELY IGNORED. A tmux pane's title has exactly one owner —
+            // tmux's own `pane_title`, which is what the pane chrome renders and
+            // what the state pipeline classifies on. Honoring the engine's OSC
+            // 0/2 title here would give the same label two sources that disagree
+            // (tmux rewrites titles on its own schedule), and the pane header
+            // would flicker between them. Non-tmux surfaces are the only place
+            // this would be the honest source, and they don't show a title today.
             return true
         default:
             return true
@@ -376,6 +446,23 @@ final class GhosttyRuntime {
                 // the surface so path-preview can resolve relative paths in
                 // non-tmux panes.
                 view.handlePwd(action.action.pwd.pwd.map { String(cString: $0) })
+            case GHOSTTY_ACTION_START_SEARCH:
+                // The ENGINE asking us to open the find bar (its own search
+                // keybind fired). `needle` is a prefill, typically the selection.
+                let needle = action.action.start_search.needle.map { String(cString: $0) }
+                view.handleStartSearch(needle: needle)
+            case GHOSTTY_ACTION_END_SEARCH:
+                view.handleEndSearch()
+            case GHOSTTY_ACTION_SEARCH_TOTAL:
+                // -1 = "none" on the wire for both counts (see apprt.action).
+                let t = action.action.search_total.total
+                view.handleSearchTotal(t < 0 ? nil : Int(t))
+            case GHOSTTY_ACTION_SEARCH_SELECTED:
+                let s = action.action.search_selected.selected
+                view.handleSearchSelected(s < 0 ? nil : Int(s))
+            case GHOSTTY_ACTION_RENDERER_HEALTH:
+                view.handleRendererHealth(
+                    healthy: action.action.renderer_health == GHOSTTY_RENDERER_HEALTH_OK)
             default:
                 break
             }

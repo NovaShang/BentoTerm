@@ -938,9 +938,31 @@ public final class TerminalViewModel: ObservableObject {
     /// Seed freshly-created panes' surfaces with their current screen content
     /// (capture-pane snapshot), then refresh the state pipeline. Extracted from
     /// `updatePaneViewModels`.
+    /// How far back a fresh surface is seeded from tmux's history, in lines.
+    ///
+    /// This used to be one screenful, which meant a pane's scrollback effectively
+    /// began at the moment its surface was created — and surfaces are recreated
+    /// whenever the pane set changes (`GhosttyTiledPaneHost.syncPanes` tears them
+    /// down), so **every window switch threw the scrollback away**. Nothing that
+    /// reads backwards worked past that line: scrolling up, turn navigation,
+    /// scroll-review-compose, and now ⌘F.
+    ///
+    /// tmux clamps `-S` to whatever history actually exists, so this is a ceiling,
+    /// not a cost floor — an idle shell pane still seeds a few dozen lines, and an
+    /// alt-screen TUI has no history at all. The ceiling matters for a pane that
+    /// really has scrolled a lot: the capture is one control-mode response, so a
+    /// deep one adds latency to the window switch that reveals it. 2000 = tmux's
+    /// own default `history-limit`. Override without a rebuild via the
+    /// `terminal_seed_history_lines` default.
+    static var seedHistoryLines: Int {
+        let v = UserDefaults.standard.integer(forKey: "terminal_seed_history_lines")
+        return v > 0 ? v : 2000
+    }
+
     private func seedNewPanes(_ ids: [TmuxPaneID]) async {
         for paneVM in paneViewModels where ids.contains(paneVM.paneID) {
-            let lines = paneVM.pane.height > 0 ? paneVM.pane.height : 50
+            let screen = paneVM.pane.height > 0 ? paneVM.pane.height : 50
+            let lines = max(screen, Self.seedHistoryLines)
             // Seed the fresh surface with the pane's current screen.
             // `escapes: true` keeps SGR color/style codes so a freshly
             // shown pane (e.g. after a window switch) seeds in full color
@@ -1454,6 +1476,12 @@ public final class TerminalViewModel: ObservableObject {
     /// stale screen instead of appending below it).
     private func reseedAllPanes() async {
         for paneVM in paneViewModels {
+            // Deliberately ONE SCREEN, unlike the fresh-pane seed
+            // (`seedHistoryLines`): these surfaces are REUSED and already hold
+            // the history from before the suspend. A deep capture here would feed
+            // all of it a second time and leave the scrollback duplicated — the
+            // clear+home below only clears the visible screen, not the scrollback
+            // above it.
             let lines = paneVM.pane.height > 0 ? paneVM.pane.height : 50
             let resp = await tmuxService.send(.capturePane(id: paneVM.paneID, lines: lines, escapes: true))
             guard !resp.isError else { continue }

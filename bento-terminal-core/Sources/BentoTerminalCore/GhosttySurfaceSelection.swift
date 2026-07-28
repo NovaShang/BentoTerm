@@ -119,6 +119,40 @@ enum GhosttySel {
         }
     }
 
+    // MARK: - Scrollback search
+    //
+    // Driven entirely through named keybind actions, which is the only route the
+    // prebuilt libghostty exposes (there is no `ghostty_surface_search`). The
+    // engine owns everything that matters: it walks the scrollback, highlights
+    // the matches in the renderer, tracks which one is current, and reports the
+    // counts back as SEARCH_TOTAL / SEARCH_SELECTED apprt actions.
+
+    /// Start (or re-run) a search for `needle`. `search` takes the rest of the
+    /// action string verbatim, so a needle containing ':' needs no escaping.
+    @discardableResult
+    static func search(_ surface: ghostty_surface_t, needle: String) -> Bool {
+        guard !needle.isEmpty else { return endSearch(surface) }
+        let ok = bindingAction("search:\(needle)", on: surface)
+        ghostty_surface_refresh(surface)
+        return ok
+    }
+
+    /// Move to the next / previous match. No-op in the engine if no search is active.
+    @discardableResult
+    static func navigateSearch(_ surface: ghostty_surface_t, forward: Bool) -> Bool {
+        let ok = bindingAction("navigate_search:\(forward ? "next" : "previous")", on: surface)
+        ghostty_surface_refresh(surface)
+        return ok
+    }
+
+    /// End the search and drop the highlights.
+    @discardableResult
+    static func endSearch(_ surface: ghostty_surface_t) -> Bool {
+        let ok = bindingAction("end_search", on: surface)
+        ghostty_surface_refresh(surface)
+        return ok
+    }
+
     /// Set the engine's preedit overlay (IME composition / predicted echo) to
     /// `text`; nil or empty clears it. Shared by the iOS and macOS surfaces'
     /// setMarkedText / setPredictedText / commit-clear paths.

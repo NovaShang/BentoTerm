@@ -272,7 +272,8 @@ public final class ThemeStore: ObservableObject {
     /// Build the engine-agnostic TerminalTheme (colors + font) for a surface.
     public func makeTerminalTheme() -> TerminalTheme {
         TerminalTheme(background: current.bg, foreground: current.fg,
-                      ansi: current.ansi, fontSize: fontSize, fontFamily: ghosttyFontFamily)
+                      ansi: current.ansi, fontSize: fontSize, fontFamily: ghosttyFontFamily,
+                      isDark: current.isDark)
     }
 
     private init() {

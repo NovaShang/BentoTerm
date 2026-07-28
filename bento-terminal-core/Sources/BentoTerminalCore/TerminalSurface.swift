@@ -26,19 +26,27 @@ public struct TerminalTheme: Equatable, Sendable {
     public var ansi: [UInt32]      // 16 entries: 0-7 normal, 8-15 bright
     public var fontSize: Double
     public var fontFamily: String?
+    /// Whether this palette reads as dark. Not decoration: the surface reports it
+    /// to the engine (`ghostty_surface_set_color_scheme`) so programs INSIDE the
+    /// terminal can query light/dark (OSC 2031 subscriptions, DSR ?996). Without
+    /// it the app's appearance switch stops at the chrome and vim/delta/bat keep
+    /// picking a theme for the wrong background.
+    public var isDark: Bool
 
     public init(
         background: UInt32,
         foreground: UInt32,
         ansi: [UInt32],
         fontSize: Double,
-        fontFamily: String? = nil
+        fontFamily: String? = nil,
+        isDark: Bool = true
     ) {
         self.background = background
         self.foreground = foreground
         self.ansi = ansi
         self.fontSize = fontSize
         self.fontFamily = fontFamily
+        self.isDark = isDark
     }
 }
 

@@ -163,6 +163,9 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         pendingReviewEntry = nil
         rightHoldTimer?.invalidate()
         rightHoldTimer = nil
+        searchBar?.cancelPendingQuery()
+        searchBar?.removeFromSuperview()
+        searchBar = nil
         clearPathHover()
         pathHitEngine.invalidate()
         if mouseHidden { NSCursor.unhide(); mouseHidden = false }
@@ -235,7 +238,37 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
                 self?.updateRenderActive()
             })
         }
+        // The renderer picks its vsync cadence from the display it believes it is
+        // on; dragging a window to another monitor doesn't tell it. Without this
+        // an external 60Hz panel keeps being driven on the built-in ProMotion
+        // timing (and vice versa) — visible as uneven scrolling on the second
+        // display. `viewDidChangeBackingProperties` only fires when the SCALE
+        // differs, so it can't stand in for this.
+        renderObservers.append(nc.addObserver(forName: NSWindow.didChangeScreenNotification,
+                                              object: window, queue: .main) { [weak self] _ in
+            self?.syncDisplayID()
+        })
+        syncDisplayID()
         updateRenderActive()
+    }
+
+    /// Tell ghostty which CoreGraphics display this surface is rendering on.
+    private func syncDisplayID() {
+        guard let surface, let screen = window?.screen else { return }
+        guard let number = screen.deviceDescription[
+            NSDeviceDescriptionKey("NSScreenNumber")
+        ] as? NSNumber else { return }
+        ghostty_surface_set_display_id(surface, number.uint32Value)
+    }
+
+    /// Report the terminal's light/dark to the engine so programs running inside
+    /// it can query it (OSC 2031 / DSR ?996). Sourced from the ACTIVE PALETTE,
+    /// not the app chrome's appearance — what matters to vim/delta/bat is the
+    /// background they are drawing onto.
+    private func syncColorScheme() {
+        guard let surface else { return }
+        ghostty_surface_set_color_scheme(
+            surface, theme.isDark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
     }
 
     // Fires when the window moves to a display with a different backing scale
@@ -253,6 +286,8 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         createSurfaceIfNeeded()
         updateSurfaceSize()
         layoutComposeBar()
+        layoutSearchBar()
+        layoutHealthBanner()
     }
 
     private var currentScale: CGFloat {
@@ -289,6 +324,8 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
 
         updateSurfaceSize()
         ghostty_surface_set_focus(created, true)
+        syncColorScheme()
+        syncDisplayID()
         ghostty_surface_refresh(created)
         ghostty_surface_draw(created)
         updateRenderActive()
@@ -533,6 +570,9 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
 
     public func applyTheme(_ theme: TerminalTheme) {
         self.theme = theme
+        // Light/dark can flip without the font size changing (theme switch,
+        // follow-system flip), so this must not live inside the recreate branch.
+        syncColorScheme()
         if surface != nil, abs(theme.fontSize - Double(lastAppliedFontSize)) > 0.01 {
             // Free the old surface only after any in-flight parse/draw finish
             // (see enqueueSurfaceFree) — never out from under either queue.
@@ -646,7 +686,9 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         guard let surface else { return }
 
         // Mouse-reporting pane → forward wheel as button 64 (up) / 65 (down).
-        if mouseReporting.any {
+        // ⇧-scroll falls through to our own scrollback, matching xterm (and the
+        // ⇧-drag bypass right below it).
+        if shouldReportMouse(event) {
             forwardScrollAsWheel(event)
             return
         }
@@ -773,6 +815,55 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     }
     public var mouseReporting = MouseReporting()
 
+    /// User override: mouse reporting suppressed for this pane until toggled back
+    /// (the sticky escape hatch behind ⇧-drag). Mirrors ghostty's
+    /// `toggle_mouse_reporting`; the pane's title bar shows a glyph while it's on
+    /// so a pane that stopped talking to its program explains itself.
+    public var mouseReportingSuppressed = false {
+        didSet {
+            guard oldValue != mouseReportingSuppressed else { return }
+            onMouseReportingSuppressedChanged?(mouseReportingSuppressed)
+        }
+    }
+    public var onMouseReportingSuppressedChanged: ((Bool) -> Void)?
+
+    /// Holding SHIFT takes the mouse back from a program that grabbed it, so you
+    /// can always drag out a selection. This is xterm's convention and ghostty's
+    /// default (`mouse-shift-capture = false`) — worth matching exactly, because
+    /// it's the reflex a terminal user already has.
+    ///
+    /// Note this is NOT free today: `forwardMouse` encodes shift as a modifier
+    /// bit, so before this the shift-drag just reached the program as a modified
+    /// drag and the user got no selection and no explanation.
+    private func mouseReportingBypassed(_ event: NSEvent) -> Bool {
+        event.modifierFlags.contains(.shift)
+    }
+
+    /// Whether this event should be handed to the program rather than used for
+    /// local selection.
+    private func shouldReportMouse(_ event: NSEvent) -> Bool {
+        mouseReporting.any && !mouseReportingSuppressed && !mouseReportingBypassed(event)
+    }
+
+    /// Where a mouse-reported drag started, for the "hold ⇧ to select" hint.
+    private var reportedDragOrigin: NSPoint?
+    private var lastMouseGrabHintAt: Date?
+
+    /// Explain the grabbed mouse the moment it bites: the user pressed and
+    /// dragged a meaningful distance in a pane whose program owns the mouse, and
+    /// got no selection for it. Rate-limited so it teaches once and then stays
+    /// out of the way.
+    private func noteReportedDrag(_ event: NSEvent) {
+        guard let origin = reportedDragOrigin else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        let cell = cellSizePoints() ?? CGSize(width: 8, height: 16)
+        guard abs(p.x - origin.x) > cell.width * 3 || abs(p.y - origin.y) > cell.height * 2 else { return }
+        reportedDragOrigin = nil   // one evaluation per drag
+        if let last = lastMouseGrabHintAt, Date().timeIntervalSince(last) < 60 { return }
+        lastMouseGrabHintAt = Date()
+        PaneHintChip.show("This app is using the mouse — hold ⇧ to select", in: self)
+    }
+
     /// Cell (col,row), 1-based, for a mouse event — from the cell pixel size.
     private func cellCoord(_ event: NSEvent) -> (col: Int, row: Int) {
         let p = pxPoint(event)
@@ -793,7 +884,9 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// 1=middle, 2=right, 64=wheel-up, 65=wheel-down. Returns true if sent.
     @discardableResult
     private func forwardMouse(_ event: NSEvent, button: Int, press: Bool, motion: Bool = false) -> Bool {
-        guard mouseReporting.any else { return false }
+        // The gate lives here so every entry point (click, drag, middle, right,
+        // wheel) honors the ⇧ bypass and the sticky suppression identically.
+        guard shouldReportMouse(event) else { return false }
         let (col, row) = cellCoord(event)
         let mods = mouseModBits(event.modifierFlags)
         if mouseReporting.sgr {
@@ -832,8 +925,13 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
                 return
             }
         }
-        // Mouse-reporting pane → forward the click to the program (not selection).
-        if forwardMouse(event, button: 0, press: true) { return }
+        // Mouse-reporting pane → forward the click to the program (not selection),
+        // unless the user is holding ⇧ to take the mouse back.
+        if forwardMouse(event, button: 0, press: true) {
+            reportedDragOrigin = convert(event.locationInWindow, from: nil)
+            return
+        }
+        reportedDragOrigin = nil
         if event.clickCount >= 2 {
             _ = GhosttySel.selectWord(surface, px: pxPoint(event))
         } else {
@@ -845,7 +943,10 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     public override func mouseDragged(with event: NSEvent) {
         guard let surface else { return }
         pendingLinkClick = nil   // a drag is never a link click
-        if forwardMouse(event, button: 0, press: true, motion: true) { return }
+        if forwardMouse(event, button: 0, press: true, motion: true) {
+            noteReportedDrag(event)
+            return
+        }
         GhosttySel.extend(surface, px: pxPoint(event), mods: modsFromFlags(event.modifierFlags))
         setNeedsDraw()
     }
@@ -925,7 +1026,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         }
         // Released before the hold threshold → a normal right-click. Forward to a
         // mouse-reporting program (press+release together), else pop our menu.
-        if mouseReporting.any {
+        if shouldReportMouse(event) {
             _ = forwardMouse(event, button: 2, press: true)
             _ = forwardMouse(event, button: 2, press: false)
         } else if let menu = menu(for: event), let down = rightDownEvent {
@@ -1009,7 +1110,32 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         let all = NSMenuItem(title: "Select All", action: #selector(contextSelectAll), keyEquivalent: "a")
         all.target = self
         menu.addItem(all)
+        let find = NSMenuItem(title: "Find…", action: #selector(contextFind), keyEquivalent: "f")
+        find.target = self
+        menu.addItem(find)
+        // Only offered where it can matter — a pane whose program has taken the
+        // mouse. ⇧-drag is the per-gesture answer; this is the sticky one.
+        if mouseReporting.any {
+            menu.addItem(.separator())
+            let mouse = NSMenuItem(title: "Mouse Reporting",
+                                   action: #selector(contextToggleMouseReporting),
+                                   keyEquivalent: "")
+            mouse.state = mouseReportingSuppressed ? .off : .on
+            mouse.target = self
+            menu.addItem(mouse)
+        }
         return menu
+    }
+
+    @objc private func contextFind() { beginSearch() }
+
+    @objc private func contextToggleMouseReporting() {
+        mouseReportingSuppressed.toggle()
+        PaneHintChip.show(
+            mouseReportingSuppressed
+                ? "Mouse reporting off — this app no longer sees the mouse"
+                : "Mouse reporting on",
+            in: self)
     }
 
     @objc private func contextCopy() { copySelection() }
@@ -1525,6 +1651,150 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         }
         pendingReviewEntry = work
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
+    }
+
+    // MARK: - Scrollback search (⌘F)
+
+    private var searchBar: PaneSearchBar?
+
+    /// True while the find bar holds the keyboard. The host checks this before
+    /// re-asserting first responder on the surface — otherwise its periodic
+    /// `updateActiveBorders` would yank the caret out of the field mid-typing.
+    var searchFieldHasFocus: Bool { searchBar?.fieldHasFocus ?? false }
+
+    var isSearchOpen: Bool { searchBar != nil }
+
+    /// Open the find bar. `prefill` (⌘F with a selection, or the engine's own
+    /// START_SEARCH) seeds the field and searches immediately.
+    func beginSearch(prefill: String? = nil) {
+        let bar = searchBar ?? makeSearchBar()
+        // A multi-line selection is a region, not a needle — don't seed from it.
+        let seed = prefill ?? surface.flatMap { GhosttySel.selectedText($0) }
+        if let seed, !seed.isEmpty, !seed.contains("\n") {
+            bar.query = seed
+            runSearch(seed)
+        }
+        layoutSearchBar()
+        bar.focusField()
+    }
+
+    /// Close the find bar and hand the keyboard back to the terminal.
+    func endSearchUI() {
+        guard let bar = searchBar else { return }
+        bar.cancelPendingQuery()
+        if let surface { GhosttySel.endSearch(surface) }
+        bar.removeFromSuperview()
+        searchBar = nil
+        // Only reclaim first responder if the bar actually had it; a click that
+        // moved focus to another pane must not be dragged back here.
+        if window?.firstResponder == nil || bar.fieldHasFocus {
+            window?.makeFirstResponder(self)
+        }
+        setNeedsDraw()
+    }
+
+    func findNext() { navigateSearch(forward: true) }
+    func findPrevious() { navigateSearch(forward: false) }
+
+    /// ⌘E — Use Selection for Find (the standard macOS pair with ⌘F/⌘G).
+    func useSelectionForFind() {
+        guard let surface, let text = GhosttySel.selectedText(surface),
+              !text.isEmpty, !text.contains("\n") else { return }
+        let bar = searchBar ?? makeSearchBar()
+        bar.query = text
+        runSearch(text)
+        layoutSearchBar()
+    }
+
+    private func navigateSearch(forward: Bool) {
+        guard let surface else { return }
+        // ⌘G with no bar open is still meaningful once a search has run, but the
+        // engine drops the search on end_search — so open the bar first.
+        guard searchBar != nil else { beginSearch(); return }
+        GhosttySel.navigateSearch(surface, forward: forward)
+        setNeedsDraw()
+    }
+
+    private func makeSearchBar() -> PaneSearchBar {
+        let bar = PaneSearchBar(frame: PaneSearchBar.frame(in: bounds.size))
+        bar.onQueryChanged = { [weak self] text in self?.runSearch(text) }
+        bar.onNext = { [weak self] in self?.findNext() }
+        bar.onPrevious = { [weak self] in self?.findPrevious() }
+        bar.onClose = { [weak self] in self?.endSearchUI() }
+        addSubview(bar)
+        searchBar = bar
+        return bar
+    }
+
+    private func runSearch(_ needle: String) {
+        guard let surface else { return }
+        GhosttySel.search(surface, needle: needle)
+        if needle.isEmpty { searchBar?.setCounts(total: nil, selected: nil) }
+        setNeedsDraw()
+    }
+
+    private func layoutSearchBar() {
+        guard let bar = searchBar else { return }
+        bar.frame = PaneSearchBar.frame(in: bounds.size)
+    }
+
+    // Engine → app. All four arrive on the main thread inside `ghostty_app_tick`.
+
+    func handleStartSearch(needle: String?) {
+        beginSearch(prefill: needle)
+    }
+
+    func handleEndSearch() {
+        guard searchBar != nil else { return }
+        endSearchUI()
+    }
+
+    func handleSearchTotal(_ total: Int?) {
+        searchTotal = total
+        searchBar?.setCounts(total: searchTotal, selected: searchSelected)
+    }
+
+    func handleSearchSelected(_ selected: Int?) {
+        searchSelected = selected
+        searchBar?.setCounts(total: searchTotal, selected: searchSelected)
+    }
+
+    private var searchTotal: Int?
+    private var searchSelected: Int?
+
+    // MARK: - Renderer health
+
+    private var healthBanner: NSTextField?
+
+    /// The Metal renderer reported it stopped working. Without this the pane just
+    /// goes black and stays black with no explanation.
+    func handleRendererHealth(healthy: Bool) {
+        if healthy {
+            healthBanner?.removeFromSuperview()
+            healthBanner = nil
+            return
+        }
+        guard healthBanner == nil else { return }
+        let label = NSTextField(labelWithString:
+            "Renderer stopped — this pane won't update. Close it or restart Bento.")
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .white
+        label.alignment = .center
+        label.wantsLayer = true
+        // Brand salmon (docs/bento-icon.svg) — a warning that is deliberately NOT
+        // one of the pane state colors, because this is not a pane state.
+        label.layer?.backgroundColor = NSColor(srgbRed: 0xE8 / 255.0, green: 0x9B / 255.0,
+                                               blue: 0x7C / 255.0, alpha: 1).cgColor
+        label.drawsBackground = false
+        addSubview(label)
+        healthBanner = label
+        layoutHealthBanner()
+    }
+
+    private func layoutHealthBanner() {
+        guard let banner = healthBanner else { return }
+        let h: CGFloat = 22
+        banner.frame = NSRect(x: 0, y: 0, width: bounds.width, height: h)
     }
 
     /// The whole scrollback as text (one line per row, top-aligned with the

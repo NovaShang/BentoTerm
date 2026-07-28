@@ -888,13 +888,24 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         for (id, cell) in cells {
             cell.container.focusSuppressed = suppress
             cell.container.isActivePane = (id == active)
+            // A find bar belongs to its pane: moving to another pane ends it,
+            // rather than leaving a stale search highlighted where you can't see
+            // the field.
+            if id != active, cell.surface.isSearchOpen {
+                cell.surface.endSearchUI()
+            }
             // Only steal first responder when it actually needs to change. An
             // unconditional makeFirstResponder re-activates the surface's
             // NSTextInputContext every call, which churns the macOS text-input
             // stack (utTryToSetupInputMethodMenu + per-activation IMK/TSM XPC
             // connections). Profiling showed that churn stalling keystrokes and
             // the XPC connections accumulating over a session ("slower over time").
-            if id == active, window?.firstResponder !== cell.surface {
+            //
+            // `searchFieldHasFocus` is the other exception: while the find bar
+            // holds the keyboard, this method still runs (layout, pane polls) and
+            // would otherwise yank the caret out of the field mid-word.
+            if id == active, window?.firstResponder !== cell.surface,
+               !cell.surface.searchFieldHasFocus {
                 window?.makeFirstResponder(cell.surface)
             }
         }
@@ -1243,6 +1254,33 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         viewModel.swapPane(active, up: false)
     }
 
+    // MARK: - Find in pane (⌘F)
+    //
+    // Pane-scoped on purpose: the toolbar's omnibox is app-scoped (commands /
+    // files / sessions / windows / panes), this searches one pane's scrollback.
+    // Different scope, different home.
+
+    /// The surface of the pane the user is actually working in.
+    private var activeSurface: GhosttyTerminalSurface? {
+        activePaneID.flatMap { cells[$0]?.surface }
+    }
+
+    @objc public func findInPane(_ sender: Any?) {
+        activeSurface?.beginSearch()
+    }
+
+    @objc public func findNextMatch(_ sender: Any?) {
+        activeSurface?.findNext()
+    }
+
+    @objc public func findPreviousMatch(_ sender: Any?) {
+        activeSurface?.findPrevious()
+    }
+
+    @objc public func useSelectionForFind(_ sender: Any?) {
+        activeSurface?.useSelectionForFind()
+    }
+
     @objc public func selectNextPane(_ sender: Any?) {
         cyclePane(by: 1)
     }
@@ -1337,6 +1375,10 @@ public enum BentoPaneAction {
     public static let splitPathCommand = #selector(GhosttyTiledPaneHost.splitWithPathCommand(_:))
     public static let newWindowDuplicate = #selector(GhosttyTiledPaneHost.newWindowDuplicate(_:))
     public static let newWindowPathCommand = #selector(GhosttyTiledPaneHost.newWindowPathCommand(_:))
+    public static let findInPane = #selector(GhosttyTiledPaneHost.findInPane(_:))
+    public static let findNext = #selector(GhosttyTiledPaneHost.findNextMatch(_:))
+    public static let findPrevious = #selector(GhosttyTiledPaneHost.findPreviousMatch(_:))
+    public static let useSelectionForFind = #selector(GhosttyTiledPaneHost.useSelectionForFind(_:))
 
     /// ⌘0..⌘9 → switch to the window whose tmux index is that digit, so the
     /// key matches the `index:name` the toolbar shows. Array slot N = ⌘N.
