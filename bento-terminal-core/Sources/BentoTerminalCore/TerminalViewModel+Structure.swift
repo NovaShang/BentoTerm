@@ -328,17 +328,76 @@ public extension TerminalViewModel {
 
     // MARK: - Structure transforms (internals of setMode)
 
-    /// Server-side memory: the pre-spread layout + pane order (for exact
-    /// merge-back) and the user's explicit mode choice.
+    /// Server-side memory: the pre-spread structure (for merge-back) and the
+    /// user's explicit mode choice.
+    ///
+    /// `@bento_structure` supersedes the older `@bento_orig_layout` +
+    /// `@bento_pane_order` pair, which between them could only describe ONE
+    /// window. Any other shape — the ordinary `N windows × M panes` a tmux user
+    /// builds — took a "no save" branch, so leaving Focus collapsed the whole
+    /// session into a single window with tmux's even layout. The two old
+    /// options are still READ so a session spread by an earlier build can still
+    /// be put back.
+    private static let structureOption = "@bento_structure"
     private static let savedLayoutOption = "@bento_orig_layout"
     private static let savedOrderOption = "@bento_pane_order"
     private static let modeOption = "@bento_mode"
 
+    /// Record the current window/pane shape so it can be rebuilt after a
+    /// spread. Captures every window, including ones already holding a single
+    /// pane — their names are part of the shape too.
+    private func saveStructureSnapshot() async {
+        let byWindow = panesByWindow
+        let snapshot = TmuxStructureSnapshot(windows: windows.compactMap { window in
+            let panes = byWindow[window.id] ?? []
+            guard !panes.isEmpty else { return nil }
+            return .init(index: window.index,
+                         name: window.name,
+                         layout: window.layout,
+                         panes: panes.map(\.id))
+        })
+        guard !snapshot.windows.isEmpty, let encoded = snapshot.encoded() else {
+            DIAG("[MODE] snapshot SKIPPED (no windows or encode failed)")
+            return
+        }
+        DIAG("[MODE] snapshot SAVE \(snapshot.debugJSON)")
+        dlog("[MODE] snapshot save windows=\(snapshot.windows.count) panes=\(snapshot.allPanes.count)")
+        _ = await tmuxService.send(.setSessionOption(name: Self.structureOption, value: encoded))
+    }
+
+    /// The snapshot to restore from, preferring the structure record and
+    /// falling back to the single-window pair written by older builds.
+    private func loadStructureSnapshot() async -> TmuxStructureSnapshot? {
+        if let snapshot = TmuxStructureSnapshot.decode(await readSessionOption(Self.structureOption)) {
+            return snapshot
+        }
+        // Legacy: one layout string + a flat pane order, i.e. exactly one window.
+        guard let layout = await readSessionOption(Self.savedLayoutOption), !layout.isEmpty else {
+            return nil
+        }
+        let order = (await readSessionOption(Self.savedOrderOption))?
+            .split(separator: " ")
+            .compactMap { TmuxPaneID(string: String($0)) } ?? []
+        guard !order.isEmpty else { return nil }
+        DIAG("[MODE] snapshot LEGACY layout=[\(layout)] order=\(order.map { "\($0)" }.joined(separator: ","))")
+        return TmuxStructureSnapshot(windows: [
+            .init(index: nil, name: "", layout: layout, panes: order)
+        ])
+    }
+
+    private func clearStructureSnapshot() async {
+        _ = await tmuxService.send(.setSessionOption(name: Self.structureOption, value: ""))
+        _ = await tmuxService.send(.setSessionOption(name: Self.savedLayoutOption, value: ""))
+        _ = await tmuxService.send(.setSessionOption(name: Self.savedOrderOption, value: ""))
+    }
+
     /// tiled → list: break every pane out into its own window (processes
-    /// untouched). For the pure single-window case the layout + pane order
-    /// are saved first so merging back restores the exact arrangement; a
-    /// mixed structure flattens every multi-pane window with no exact-restore
-    /// promise (the UI warned).
+    /// untouched), after recording the shape so merging back can rebuild it.
+    ///
+    /// The snapshot covers every window unconditionally. Previously it was
+    /// written only when the session happened to be a single multi-pane window;
+    /// every other shape took a "no save" branch and could not be restored, so
+    /// a user who had arranged three windows got one window back.
     @discardableResult
     internal func spreadToList() async -> Bool {
         guard usingTmux else { return false }
@@ -348,18 +407,7 @@ public extension TerminalViewModel {
         let multiPane = byWindow.filter { $0.value.count > 1 }
         guard !multiPane.isEmpty else { return false }
 
-        // Exact-restore memory only for the pure tiled shape.
-        if byWindow.count == 1, let winID = multiPane.keys.first,
-           let layout = windows.first(where: { $0.id == winID })?.layout, !layout.isEmpty {
-            let order = byWindow[winID]!.map { "\($0.id)" }.joined(separator: " ")
-            DIAG("[MODE] spreadToList SAVE layout=[\(layout)] order=[\(order)]")
-            dlog("[MODE] spread SAVE layout=[\(layout.prefix(90))] order=[\(order)]")   // BUG-005 device diag
-            _ = await tmuxService.send(.setSessionOption(name: Self.savedLayoutOption, value: layout))
-            _ = await tmuxService.send(.setSessionOption(name: Self.savedOrderOption, value: order))
-        } else {
-            DIAG("[MODE] spreadToList NO-SAVE byWindowCount=\(byWindow.count) layoutEmpty=\(windows.first(where: { $0.id == multiPane.keys.first })?.layout?.isEmpty ?? true) — merge-back will fall back to even 'tiled'")
-            dlog("[MODE] spread NO-SAVE byWindows=\(byWindow.count) layoutEmpty=\(windows.first(where: { $0.id == multiPane.keys.first })?.layout?.isEmpty ?? true)")   // BUG-005 device diag
-        }
+        await saveStructureSnapshot()
 
         for (_, winPanes) in multiPane {
             // Break all but the first; each new window is named for what it
@@ -377,14 +425,13 @@ public extension TerminalViewModel {
         return true
     }
 
-    /// list → tiled: gather every pane into one window and restore the saved
-    /// layout — EDITED to match reality: panes closed while in List have
-    /// their cells collapsed into a sibling; windows opened in List split the
-    /// largest cell along its longer edge. Survivors return to exactly their
-    /// old spots. Join order must match the edited tree's leaf order, because
-    /// `select-layout` assigns panes to cells by window order, ignoring the
-    /// ids in the layout string (verified). No saved layout, or tree math
-    /// failing sanity checks → tmux's even `tiled`.
+    /// Leaving Focus: put the remembered shape back.
+    ///
+    /// "Back" means whatever was captured, which may be several windows — a
+    /// mixed structure is a shape a tmux user builds on purpose, not a foreign
+    /// object to be flattened. With nothing remembered (or nothing of it left
+    /// alive) this falls back to the historical behavior of gathering every
+    /// pane into one window.
     @discardableResult
     internal func mergeToTiled() async -> Bool {
         guard usingTmux else { return false }
@@ -392,11 +439,30 @@ public extension TerminalViewModel {
         await refreshPanes()
         guard panesByWindow.count > 1 else { return false }
 
-        let savedLayout = await readSessionOption(Self.savedLayoutOption)
-        let savedOrder = (await readSessionOption(Self.savedOrderOption))?
-            .split(separator: " ")
-            .compactMap { TmuxPaneID(string: String($0)) } ?? []
         let live = sessionPanes.compactMap { $0.windowID != nil ? $0.id : nil }
+        let snapshot = await loadStructureSnapshot()
+
+        // Exactly one remembered window is the classic Parallel shape. Keep the
+        // long-debugged path for it: the layout TREE is edited to match reality
+        // so survivors land back in their exact cells and panes created while in
+        // Focus are folded in. With several windows there is no single obvious
+        // home for a newcomer, so unknown panes are left in their own window
+        // rather than being pushed somewhere arbitrary.
+        if let windows = snapshot?.windows, windows.count > 1 {
+            let plan = snapshot!.restorePlan(livePanes: Set(live))
+            if !plan.isEmpty {
+                DIAG("[MODE] restoreStructure windows=\(plan.count) live=[\(live.map { "\($0)" }.joined(separator: ","))]")
+                for step in plan { await rebuildWindow(step) }
+                await clearStructureSnapshot()
+                await refreshWindows()
+                await refreshPanes()
+                return true
+            }
+        }
+
+        let remembered = snapshot?.windows.count == 1 ? snapshot?.windows.first : nil
+        let savedLayout = remembered?.layout
+        let savedOrder = remembered?.panes ?? []
 
         // Edit the remembered layout tree to the live pane set.
         var tree = savedLayout.flatMap { TmuxLayoutTree.parse($0) }
@@ -475,12 +541,60 @@ public extension TerminalViewModel {
         } else {
             DIAG("[MODE] mergeToTiled NO baseWin for base=\(base) — layout not applied")
         }
-        _ = await tmuxService.send(.setSessionOption(name: Self.savedLayoutOption, value: ""))
-        _ = await tmuxService.send(.setSessionOption(name: Self.savedOrderOption, value: ""))
+        await clearStructureSnapshot()
 
         await refreshWindows()
         await refreshPanes()
         return true
+    }
+
+    /// Join one remembered window's panes back together and re-apply its saved
+    /// geometry. A step with nothing to join is already in shape (it was a
+    /// single-pane window before the spread too), so it is left untouched —
+    /// notably it is NOT renamed: `rename-window` turns tmux's
+    /// `automatic-rename` off for that window, which would quietly freeze names
+    /// that used to track what's running.
+    ///
+    /// `join-pane -t prev` splits its target IN HALF; a naive chain advances
+    /// `prev` to each freshly-joined pane, so successive targets shrink
+    /// geometrically (½, ¼, ⅛…) and past ~5-6 panes the target is below tmux's
+    /// minimum pane size → join-pane is refused ("create pane failed: pane too
+    /// small") and the pane is stranded. That geometric shrink — not any
+    /// device-size cap — was the ~5 "Parallel pane limit". Evening the window out
+    /// after each join reclaims the space; a retry covers the boundary case. A
+    /// pane that genuinely doesn't fit stays in its own window, and `prev` stays
+    /// on a pane that IS in the base window so the next join still targets it.
+    private func rebuildWindow(_ step: TmuxStructureSnapshot.RestoreStep) async {
+        guard !step.join.isEmpty else { return }
+        await refreshPanes()
+        let baseWin = sessionPanes.first(where: { $0.id == step.base })?.windowID
+        var prev = step.base
+        for pane in step.join {
+            var resp = await tmuxService.send(.joinPane(source: pane, target: prev))
+            if resp.isError, let win = baseWin {
+                _ = await tmuxService.send(.selectLayout(window: win, layout: "tiled"))
+                resp = await tmuxService.send(.joinPane(source: pane, target: prev))
+            }
+            if resp.isError {
+                dlog("restoreStructure: join-pane \(pane): \(resp.output)")
+                DIAG("[MODE] restore join-pane \(pane) → \(prev) FAILED: \(resp.output.trimmingCharacters(in: .whitespacesAndNewlines)) — left in its own window")
+            } else {
+                if let win = baseWin {
+                    _ = await tmuxService.send(.selectLayout(window: win, layout: "tiled"))
+                }
+                prev = pane
+            }
+        }
+        await refreshPanes()
+        guard let win = sessionPanes.first(where: { $0.id == step.base })?.windowID else {
+            DIAG("[MODE] restore NO window for base=\(step.base) — layout not applied")
+            return
+        }
+        // nil layout means a pane died, so the saved geometry no longer fits its
+        // pane count and tmux would reject it — even out instead.
+        let layout = step.layout ?? "tiled"
+        let resp = await tmuxService.send(.selectLayout(window: win, layout: layout))
+        DIAG("[MODE] restore select-layout win=\(win) name=[\(step.name)] layout=[\(layout)] err=\(resp.isError) out=[\(resp.output.trimmingCharacters(in: .whitespacesAndNewlines))]")
     }
 
     /// Move a pane out of this session into `target`. The pane's process and
