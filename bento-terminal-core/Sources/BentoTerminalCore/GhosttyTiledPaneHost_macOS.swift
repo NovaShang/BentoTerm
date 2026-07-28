@@ -240,12 +240,13 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                                       paneVM: PaneViewModel,
                                       paneID: TmuxPaneID) {
         paneVM.onDataReceived = { [weak surface] data in
-            // `PaneViewModel.feedData` is @MainActor and invokes this synchronously,
-            // so we're already on main — feed inline instead of bouncing through
-            // another runloop turn. That extra `DispatchQueue.main.async` added a
-            // whole frame of latency to every echoed chunk (incl. IME "上屏"); feed
-            // itself just hands off to the surface's ioQueue, so it's cheap here.
-            MainActor.assumeIsolated { surface?.feed(data) }
+            // Called synchronously by `feedData`, which now runs on the tmux
+            // parse queue for the common case — so this must NOT assume the main
+            // actor (`assumeIsolated` would trap). `feed` is nonisolated and
+            // hands straight off to the surface's ioQueue, so calling it inline
+            // from whatever thread produced the bytes is both safe and the whole
+            // point: output never waits on the main thread.
+            surface?.feed(data)
         }
         surface.onInput = { [weak paneVM] data in paneVM?.sendInput(data) }
         surface.onSelect = { [weak self] in self?.viewModel.selectPane(paneID) }

@@ -456,7 +456,20 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         GhosttySel.bindingAction("paste_from_clipboard", on: surface)
     }
 
-    public func feed(_ data: Data) {
+    /// `nonisolated` to satisfy the protocol (macOS needs output off the main
+    /// thread — see TerminalSurface.feed). This surface still parses ON the main
+    /// actor, unlike the macOS one, so callers arriving from another thread are
+    /// hopped rather than let in: `surface`/`pendingBytes` here are plain
+    /// main-actor state with no lock behind them.
+    public nonisolated func feed(_ data: Data) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { feedOnMainActor(data) }
+        } else {
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.feedOnMainActor(data) } }
+        }
+    }
+
+    private func feedOnMainActor(_ data: Data) {
         guard let surface else { pendingBytes.append(data); return }
         guard !data.isEmpty else { return }
         data.withUnsafeBytes { raw in

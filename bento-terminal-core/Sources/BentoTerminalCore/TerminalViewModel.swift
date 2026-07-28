@@ -257,7 +257,38 @@ public final class TerminalViewModel: ObservableObject {
     }
     private nonisolated let pendingTmuxNotifications = OSAllocatedUnfairLock(initialState: PendingTmuxNotifications())
 
+    /// Panes that can take output directly on the parse queue, keyed by id.
+    /// Maintained on the main actor as panes come and go; read off-main here.
+    private nonisolated let outputSinks =
+        OSAllocatedUnfairLock(initialState: [TmuxPaneID: @Sendable (Data) -> Void]())
+
+    nonisolated func setOutputSink(_ pane: TmuxPaneID, _ sink: (@Sendable (Data) -> Void)?) {
+        outputSinks.withLock { $0[pane] = sink }
+    }
+
     nonisolated private func enqueueTmuxNotification(_ notification: TmuxNotification) {
+        // Fast path: `%output` for a bound pane, with the queue empty and no
+        // drain pending, cannot overtake anything — there is nothing ahead of
+        // it to overtake. Deliver it on this queue and skip the main thread
+        // entirely.
+        //
+        // The emptiness test is what preserves ordering. tmux's `%layout-change`
+        // must still be applied before the `%output` that follows it (resize
+        // correctness depends on it); the moment anything is queued or a drain
+        // is scheduled, output goes back through the queue and stays behind it.
+        // Both the test and the append happen under the same lock, so output
+        // cannot slip past a notification enqueued concurrently.
+        if case .output(let pane, let data) = notification {
+            let sink: (@Sendable (Data) -> Void)? = pendingTmuxNotifications.withLockUnchecked { state in
+                guard state.queue.isEmpty, !state.drainScheduled else { return nil }
+                return outputSinks.withLock { $0[pane] }
+            }
+            if let sink {
+                sink(data)
+                return
+            }
+        }
+
         let scheduleDrain = pendingTmuxNotifications.withLockUnchecked { state -> Bool in
             state.queue.append(notification)
             if state.drainScheduled { return false }
@@ -962,8 +993,19 @@ public final class TerminalViewModel: ObservableObject {
                 vm.isActive = pane.isActive
                 newViewModels.append(vm)
                 newPaneIDs.append(pane.id)
+                // Lets `%output` for this pane bypass the main thread entirely
+                // (see enqueueTmuxNotification). `feedData` is nonisolated and
+                // internally locked, so the parse queue can call it directly.
+                setOutputSink(pane.id) { [weak vm] data in vm?.feedData(data) }
                 DIAG("newVM \(pane.id) \(pane.width)x\(pane.height)")
             }
+        }
+
+        // Drop sinks for panes that went away, so a dead pane's bytes don't keep
+        // a view model alive or land on a surface that's being torn down.
+        let liveIDs = Set(newViewModels.map(\.paneID))
+        for old in oldVMs where !liveIDs.contains(old.paneID) {
+            setOutputSink(old.paneID, nil)
         }
 
         // Equality-gate the array publish: the 2s poll usually returns the same

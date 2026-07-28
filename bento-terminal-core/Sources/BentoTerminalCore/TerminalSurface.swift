@@ -58,7 +58,12 @@ public struct TerminalTheme: Equatable, Sendable {
 @MainActor
 public protocol TerminalSurface: AnyObject {
     /// Feed terminal output bytes (from SSH/relay/pty) into the surface.
-    func feed(_ data: Data)
+    ///
+    /// `nonisolated` because output must not have to wait for the main thread:
+    /// every keystroke blocks main for ~19ms inside the input method's
+    /// synchronous IPC, and an echo queued behind that is an echo the user
+    /// watches arrive late. Implementations hand off to their own queue.
+    nonisolated func feed(_ data: Data)
 
     /// Called when the surface has bytes to send back to the host (keystrokes,
     /// query responses). Host forwards these to the transport.

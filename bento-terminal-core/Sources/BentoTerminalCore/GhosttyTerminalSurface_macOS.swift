@@ -522,7 +522,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// `renderQueue`) lets draws interleave with parsing instead of queuing
     /// behind it; `enqueueSurfaceFree` chains the free through both queues so it
     /// can never race an in-flight parse or draw (no use-after-free).
-    public func feed(_ data: Data) {
+    public nonisolated func feed(_ data: Data) {
         let hop = Prof.hopBegin()
         ioQueue.async { [weak self] in
             Prof.hopEnd(.surfaceFeedHop, hop)
