@@ -225,7 +225,7 @@ final class GhosttyRuntime {
 
     func tick() {
         guard let app else { return }
-        ghostty_app_tick(app)
+        Prof.span(.runtimeTick) { ghostty_app_tick(app) }
     }
 
     /// ghostty's EFFECTIVE background color (r,g,b, 0–255) from the finalized base

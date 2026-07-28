@@ -53,10 +53,12 @@ public final class PaneViewModel: ObservableObject, Identifiable {
 
     /// Feed data to this pane — appended to history and forwarded if bound.
     public func feedData(_ data: Data) {
-        let clean = titleStripper.strip(data)
-        guard !clean.isEmpty else { return }
-        appendHistory(clean)
-        onDataReceived?(clean)
+        Prof.span(.paneFeed) {
+            let clean = titleStripper.strip(data)
+            guard !clean.isEmpty else { return }
+            appendHistory(clean)
+            onDataReceived?(clean)
+        }
     }
 
     private func appendHistory(_ data: Data) {
@@ -64,7 +66,11 @@ public final class PaneViewModel: ObservableObject, Identifiable {
         // Trim only after overshooting the cap by a slab, then trim back to the
         // cap in one shot (see historySlackBytes) — never per chunk.
         if _history.count > Self.maxHistoryBytes + Self.historySlackBytes {
-            _history.removeSubrange(0..<(_history.count - Self.maxHistoryBytes))
+            // Known main-thread O(n) memmove; measured so we can see whether it
+            // actually shows up in a stall or is amortized away.
+            Prof.span(.historyTrim) {
+                _history.removeSubrange(0..<(_history.count - Self.maxHistoryBytes))
+            }
         }
     }
 
@@ -81,6 +87,7 @@ public final class PaneViewModel: ObservableObject, Identifiable {
 
     /// Send raw terminal input to this pane
     public func sendInput(_ data: Data) {
+        Prof.noteInputEnqueued()
         tmuxService.sendData(to: paneID, data: data)
     }
 

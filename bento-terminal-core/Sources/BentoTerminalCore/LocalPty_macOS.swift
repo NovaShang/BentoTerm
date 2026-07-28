@@ -79,7 +79,14 @@ public final class LocalPty {
             let n = read(self.masterFD, &buf, buf.count)
             if n > 0 {
                 let data = Data(buf[0..<n])
-                DispatchQueue.main.async { self.onData?(data) }
+                // Every chunk read off the PTY hops to main before it can be
+                // routed. Measure how long that hop actually takes — under load
+                // this is output queued behind the main thread.
+                let hop = Prof.hopBegin()
+                DispatchQueue.main.async {
+                    Prof.hopEnd(.ptyReadHop, hop)
+                    self.onData?(data)
+                }
             } else {
                 DispatchQueue.main.async { self.handleExit() }
             }

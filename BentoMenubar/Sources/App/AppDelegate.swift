@@ -27,6 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var appearanceObservation: NSKeyValueObservation?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Keystroke-latency profiler. No-op unless BENTO_PROFILE=1 (or the
+        // BentoProfileInput default) is set — see InputProfiler.swift.
+        Prof.start()
+
         // Apply the saved light/dark preference before any window appears, and
         // keep it in sync when the user changes it or (in follow-system mode) the
         // OS appearance flips.
@@ -116,6 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        Prof.flush()
         TelemetryService.shared.flush()
         sendSIGTERMToDaemon()
     }

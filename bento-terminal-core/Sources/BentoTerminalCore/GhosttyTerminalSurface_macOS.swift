@@ -496,7 +496,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         if !diagLoggedDraw { diagLoggedDraw = true; DIAG("surf FIRST-DRAW \(debugLabel) settled=\(settled)") }
         // `s` stays valid for this draw: the free is chained onto renderQueue
         // (via enqueueSurfaceFree), serialized behind this running block.
-        ghostty_surface_draw(s)
+        Prof.span(.draw) { ghostty_surface_draw(s) }
         // ghostty computes its cell grid a few frames after creation; poll it from
         // the draw loop ONLY until it first settles (then `gridSettled` gates this
         // off). After that, size changes come through set_size, which calls
@@ -522,7 +522,11 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// behind it; `enqueueSurfaceFree` chains the free through both queues so it
     /// can never race an in-flight parse or draw (no use-after-free).
     public func feed(_ data: Data) {
-        ioQueue.async { [weak self] in self?.processFeed(data) }
+        let hop = Prof.hopBegin()
+        ioQueue.async { [weak self] in
+            Prof.hopEnd(.surfaceFeedHop, hop)
+            self?.processFeed(data)
+        }
     }
 
     private func processFeed(_ data: Data) {
@@ -543,11 +547,16 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         surfaceLock.unlock()
 
         guard !data.isEmpty else { return }
-        data.withUnsafeBytes { raw in
-            guard let ptr = raw.bindMemory(to: CChar.self).baseAddress else { return }
-            ghostty_surface_process_output(s, ptr, UInt(data.count))
+        Prof.span(.processOutput) {
+            data.withUnsafeBytes { raw in
+                guard let ptr = raw.bindMemory(to: CChar.self).baseAddress else { return }
+                ghostty_surface_process_output(s, ptr, UInt(data.count))
+            }
+            ghostty_surface_refresh(s)
         }
-        ghostty_surface_refresh(s)
+        // The engine has now consumed the bytes an echoed keystroke rode in on —
+        // close out the end-to-end measurement here.
+        Prof.noteEcho()
         setNeedsDraw()
         // Draw-on-arrival: paint this output now (rate-capped) instead of waiting
         // for the next CVDisplayLink tick to discover the dirty flag. Both run on
@@ -596,7 +605,9 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
 
     /// Called by GhosttyRuntime when the engine has bytes for the host.
     func handleHostWrite(_ data: Data) {
-        onInput?(data)
+        // Bytes exist, so whatever key is armed was real input.
+        Prof.commitKeystroke()
+        Prof.span(.hostWrite) { onInput?(data) }
     }
 
     // MARK: - Input
@@ -608,6 +619,21 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     // approach) echoed special keys as private-use glyphs and never sent CR.
 
     public override func keyDown(with event: NSEvent) {
+        // How long this key sat in the window-server / AppKit queue before we got
+        // to it. NSEvent.timestamp shares the mach-uptime base with DispatchTime,
+        // so this is the pure "main thread was busy, your keystroke waited" figure.
+        if Prof.enabled {
+            let pressedNs = UInt64(max(0, event.timestamp) * 1e9)
+            let age = Prof.now() &- pressedNs
+            if age < 1_000_000_000 { Prof.mark(.keyEventLag, ns: age) }
+            // End-to-end is measured from when the user PRESSED the key, not from
+            // when we got around to it — the lag above is part of what they feel.
+            Prof.armKeystroke(atNs: pressedNs)
+        }
+        Prof.span(.keyDown) { keyDownInner(with: event) }
+    }
+
+    private func keyDownInner(with event: NSEvent) {
         // Scroll-review-compose: while reviewing history, the bar owns navigation
         // and editing keys (returns true = consumed). Printable text still flows
         // through the IME path below and branches into the draft in insertText.
@@ -1235,13 +1261,18 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
             composing: false
         )
 
-        if let text = textOverride ?? translatedText(from: event) {
-            text.withCString { ptr in
-                keyEvent.text = ptr
+        // ghostty_surface_key synchronously runs the engine's key encoding AND
+        // its write-to-host callback, so this span covers everything from key to
+        // "bytes handed to the tmux batcher".
+        Prof.span(.keyEncode) {
+            if let text = textOverride ?? translatedText(from: event) {
+                text.withCString { ptr in
+                    keyEvent.text = ptr
+                    ghostty_surface_key(surface, keyEvent)
+                }
+            } else {
                 ghostty_surface_key(surface, keyEvent)
             }
-        } else {
-            ghostty_surface_key(surface, keyEvent)
         }
     }
 

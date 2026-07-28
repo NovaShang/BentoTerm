@@ -257,12 +257,19 @@ public final class TerminalViewModel: ObservableObject {
             return true
         }
         guard scheduleDrain else { return }
+        // Parsed output waiting for the main thread to come pick it up.
+        let hop = Prof.hopBegin()
         DispatchQueue.main.async { [weak self] in
+            Prof.hopEnd(.drainHop, hop)
             self?.drainTmuxNotifications()
         }
     }
 
     private func drainTmuxNotifications() {
+        Prof.span(.drain) { drainTmuxNotificationsInner() }
+    }
+
+    private func drainTmuxNotificationsInner() {
         let batch = pendingTmuxNotifications.withLockUnchecked { state -> [TmuxNotification] in
             state.drainScheduled = false
             let queue = state.queue
@@ -306,7 +313,12 @@ public final class TerminalViewModel: ObservableObject {
 
         transport.onDataReceived = { [weak self] data in
             guard let self else { return }
+            // Second enqueue for the same bytes (the transport callback already
+            // ran on main): the main ACTOR's executor queue is not the runloop's,
+            // so measure it separately from `ptyReadHop`.
+            let hop = Prof.hopBegin()
             Task { @MainActor in
+                Prof.hopEnd(.mainActorHop, hop)
                 self.routeIncomingData(data)
             }
         }
@@ -317,12 +329,17 @@ public final class TerminalViewModel: ObservableObject {
 
         tmuxService.sendToSSH = { [weak self] string in
             guard let data = string.data(using: .utf8) else { return }
-            self?.transport.write(data)
+            Prof.noteInputFlushed()
+            Prof.span(.transportWrite) { self?.transport.write(data) }
         }
     }
 
     /// Route a chunk of bytes from SSH to the right consumer based on phase.
     private func routeIncomingData(_ data: Data) {
+        Prof.span(.routeIn) { routeIncomingDataInner(data) }
+    }
+
+    private func routeIncomingDataInner(_ data: Data) {
         // Capture mode (running a one-shot shell command silently).
         if var capture = shellCapture {
             capture.buffer.append(data)
@@ -341,7 +358,11 @@ public final class TerminalViewModel: ObservableObject {
             // Parse off the main actor — under heavy TUI output the protocol
             // parse is the main thread's biggest contender with keyDown.
             let service = tmuxService
-            tmuxParseQueue.async { service.feedData(data) }
+            let hop = Prof.hopBegin()
+            tmuxParseQueue.async {
+                Prof.hopEnd(.parseHop, hop)
+                Prof.span(.tmuxParse) { service.feedData(data) }
+            }
             return
         }
 
