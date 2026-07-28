@@ -123,6 +123,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         TelemetryService.shared.flush()
     }
 
+    /// No confirmation here (see the note further down) — this exists only to
+    /// mark the quit BEFORE any window closes, so the reopen list records the
+    /// set that was open instead of watching it drain one tab at a time.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        BentoTerminalWindow.isTerminating = true
+        return .terminateNow
+    }
+
     /// Clicking the app icon while the menubar app is already running (Dock,
     /// Launchpad, or re-launching the .app) → open/focus the terminal window with
     /// the last session, creating the default session if there was none.

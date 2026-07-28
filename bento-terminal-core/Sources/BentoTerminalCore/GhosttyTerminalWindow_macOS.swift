@@ -54,8 +54,13 @@ public enum BentoTerminalWindow {
     /// Pushed from the app's `tmux ls` poll so the tab strip lists every session
     /// on the machine (loaded or not).
     public static func setServerSessions(_ names: [String]) {
+        knownServerSessions = names
         for m in managers { m.updateServerSessions(names) }
     }
+
+    /// The last `tmux ls` the app pushed in. Kept here (not only fanned out to
+    /// the managers) because the reopen path runs when there are none.
+    private static var knownServerSessions: [String] = []
 
     nonisolated static let lastSessionsKey = "mac_last_terminal_sessions"
     /// The strip's stable left-to-right tab order, persisted so it survives
@@ -99,14 +104,28 @@ public enum BentoTerminalWindow {
             m.bringToFront()
             return
         }
-        let last = (UserDefaults.standard.stringArray(forKey: lastSessionsKey) ?? [])
+        var last = (UserDefaults.standard.stringArray(forKey: lastSessionsKey) ?? [])
             .filter { !$0.isEmpty }
+        // Reopening means RECONNECTING. Every window here goes up via
+        // `new-session -A`, which creates the session when the name is absent —
+        // so a name that outlived its session (killed elsewhere, or a scratch
+        // session from a previous run) came back as a brand-new empty session
+        // every single time the icon was clicked. Drop anything the server no
+        // longer has; only the "nothing to reconnect" fallback below is allowed
+        // to create. An empty poll means we haven't heard from tmux yet — trust
+        // the list rather than throw it away.
+        if !knownServerSessions.isEmpty {
+            let live = Set(knownServerSessions)
+            last = last.filter { live.contains($0) }
+        }
         if last.isEmpty {
             newWindow(session: defaultSessionName)
         } else {
             for name in last { newWindow(session: name) }
         }
-        frontmostManager()?.bringToFront()
+        // Front the FIRST one reopened, not the last: the list is in creation
+        // order, so the first is the session this window group started as.
+        (managers.first ?? frontmostManager())?.bringToFront()
     }
 
     static func persistOpenSessions() {
@@ -115,6 +134,10 @@ public enum BentoTerminalWindow {
         let names = managers.map(\.tab).filter { !$0.isPlain }.map(\.sessionKey)
         UserDefaults.standard.set(names, forKey: lastSessionsKey)
     }
+
+    /// Set before any window closes on the way out of ⌘Q, so quitting is
+    /// recorded as "these were open" rather than as N separate tab closures.
+    public static var isTerminating = false
 
     /// Open a plain shell as a TAB with NO tmux (raw local pty, single surface).
     /// Closing the tab destroys it — there's no session to reconnect.
@@ -206,11 +229,16 @@ public enum BentoTerminalWindow {
         let m = TerminalWindowManager(tab: tab)
         m.onEmpty = { [weak m] in
             managers.removeAll { $0 === m }
-            // Deliberately NOT persisting here. This fires as each window goes
-            // away, so the LAST one would write an empty list — and "reopen what
-            // I had" would reopen nothing, silently replacing the user's
-            // sessions with a fresh default on the next launch. Every open and
-            // every close-while-others-remain has already recorded the set.
+            // Closing a TAB says "I'm done with that session" and has to drop it
+            // from the reopen list — otherwise names only ever accumulate and
+            // every later click on the icon drags them all back.
+            //
+            // Closing the LAST window says "I'm done for now" and must NOT: that
+            // list is the only record of what to reconnect, and writing it empty
+            // would replace the user's session with a fresh default. Same for
+            // ⌘Q, which closes every window in turn — the set at that moment is
+            // exactly what should come back.
+            if !managers.isEmpty && !isTerminating { persistOpenSessions() }
             updateActivationPolicy()
         }
         // Join the frontmost window's group only when tabs are what the user
