@@ -42,6 +42,10 @@ public enum BentoTerminalWindow {
     /// Session names currently open as tabs (drives the ✓ in the Sessions menu).
     public static var openSessionKeys: Set<String> { Set(managers.map(\.tab.sessionKey)) }
 
+    /// Whether any session window is up. A window being built isn't in
+    /// `managers` yet, so this answers "am I opening into an empty screen?".
+    static var hasOpenWindows: Bool { !managers.isEmpty }
+
     /// Select a session (loading it if needed), or open the window if none yet.
     public static func focusOrOpen(session name: String) {
         if let m = manager(for: name) {
@@ -596,14 +600,13 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onRenameSession = { [weak self] in self?.presentRenameSheet() }
         win.toolbar = toolbar.makeToolbar()
         win.toolbarStyle = .unified
-        // Remember the window's size + position across launches (AppKit persists
-        // the frame to UserDefaults on every move/resize under this name). Only
-        // center on the very first launch, when there's no saved frame — otherwise
-        // the window reopened small and centered every time.
-        if !Self.didRestoreFrame {
-            Self.didRestoreFrame = true
-            win.setFrameAutosaveName("BentoMainTerminalWindow")
-            if !win.setFrameUsingName("BentoMainTerminalWindow") { win.center() }
+        // Restore size + position, but only for the window that opens into an
+        // empty screen — the rest join its tab group (which shares one frame) or
+        // cascade beside it, and AppKit refuses a duplicate autosave name anyway.
+        if !BentoTerminalWindow.hasOpenWindows {
+            Self.frameOwner = win
+            win.setFrameAutosaveName(Self.frameName)
+            if !win.setFrameUsingName(Self.frameName) { win.center() }
         }
         self.window = win
         installContentConstraints(in: win)
@@ -619,9 +622,16 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     }
 
     /// Frame autosave is per WINDOW NAME, and every session window shares one
-    /// name — so they'd all fight over one saved frame. AppKit cascades tabbed
-    /// windows anyway; only the first one needs a remembered frame.
-    private static var didRestoreFrame = false
+    /// name — so they'd all fight over one saved frame. Whichever window opens
+    /// while none are up holds the name; the others ride its tab group's frame.
+    ///
+    /// This used to be a one-shot `didRestoreFrame` flag that was set on the
+    /// first window of the process and never cleared, so once you closed every
+    /// window the next one got no name at all — it neither restored the size you
+    /// left nor recorded the one you set. Ownership is released on close now, so
+    /// the next window into an empty screen picks it up again.
+    private nonisolated static let frameName = "BentoMainTerminalWindow"
+    private static weak var frameOwner: NSWindow?
 
     var activeTab: SessionTab? { tab }
 
@@ -1260,6 +1270,18 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Record the arrangement the user is actually leaving. Autosave only
+        // fires on move/resize and only for the name's owner, so without this a
+        // window closed straight after a resize — or any window that isn't the
+        // owner — left nothing behind. Tabs in a group share one frame, so
+        // whichever closes last writes the same answer.
+        window.saveFrame(usingName: Self.frameName)
+        if Self.frameOwner === window {
+            // Hand the name back before this window goes away: AppKit rejects a
+            // second window claiming an autosave name that's still held.
+            window.setFrameAutosaveName("")
+            Self.frameOwner = nil
+        }
         // Free every session's surfaces BEFORE AppKit tears the window down.
         activeCancellables.removeAll()
         tabCancellables.removeAll()
