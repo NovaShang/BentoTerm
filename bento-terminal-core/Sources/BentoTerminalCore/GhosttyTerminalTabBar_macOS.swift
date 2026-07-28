@@ -502,11 +502,17 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// behind a chevron. Fixed choices stay flat; unbounded lists nest — which
     /// is why SSH hosts are the one submenu here.
     ///
-    /// Rows are named so each is unique on its own. An earlier version listed
-    /// "Duplicate Current" and "Path & Command…" twice, under Window and under
-    /// Pane, distinguished only by a disabled header — the weakest thing on
-    /// screen — so the eye had to read four rows to find the one word that
-    /// differed. Separators group; nothing depends on grey text.
+    /// Every row names the LEVEL it creates at, because nothing else does. A
+    /// row reading just "Window" is read as a Mac window — that is what the
+    /// word means everywhere else in the OS — when it means a tmux window; the
+    /// menu bar already says "New tmux Window", and this now matches. "Pane"
+    /// alone had the same problem, so it says the verb people already use for
+    /// it: Split Pane.
+    ///
+    /// Naming each row uniquely is also what killed the earlier repetition: a
+    /// previous version listed "Duplicate Current" and "Path & Command…" twice,
+    /// under Window and under Pane, told apart only by a disabled header — the
+    /// weakest thing on screen. Separators group; nothing depends on grey text.
     @objc private func newTapped() {
         let menu = NSMenu()
 
@@ -521,21 +527,21 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
         menu.addItem(.separator())
         menu.addItem(plainItem(
-            symbol: "plus.rectangle.on.folder", title: "Window",
+            symbol: "plus.rectangle.on.folder", title: "tmux Window",
             tip: "A tmux window in this session, with the current pane's folder and command.",
             action: #selector(newWindowDuplicateAction)))
         menu.addItem(plainItem(
-            symbol: "rectangle.badge.plus", title: "Window from Path…",
+            symbol: "rectangle.badge.plus", title: "tmux Window at a Path…",
             tip: "A tmux window, choosing the folder and what to run in it.",
             action: #selector(newWindowPathCommandAction)))
 
         menu.addItem(.separator())
         menu.addItem(plainItem(
-            symbol: "square.split.2x1", title: "Pane",
+            symbol: "square.split.2x1", title: "Split Pane",
             tip: "Split the current pane, inheriting its folder and command.",
             action: #selector(newPaneDuplicateAction)))
         menu.addItem(plainItem(
-            symbol: "terminal", title: "Pane from Path…",
+            symbol: "terminal", title: "Split Pane at a Path…",
             tip: "Split off a pane, choosing the folder and what to run in it.",
             action: #selector(newPanePathCommandAction)))
 
