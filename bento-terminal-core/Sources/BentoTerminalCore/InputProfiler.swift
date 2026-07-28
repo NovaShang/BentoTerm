@@ -204,8 +204,21 @@ public enum Prof {
         var buckets = [UInt32](repeating: 0, count: Prof.bucketCount)
     }
 
+    /// A sample counts as "while typing" if it lands within this long after the
+    /// last keystroke. Latency that only occurs when the user is idle is not
+    /// latency the user can feel, and mixing the two hides which is which.
+    private static let typingWindowNs: UInt64 = 500_000_000
+
     private struct State {
         var stages = [StageStats](repeating: StageStats(), count: Stage.allCases.count)
+        /// Same stages, restricted to samples taken while the user was typing.
+        var typingStages = [StageStats](repeating: StageStats(), count: Stage.allCases.count)
+        /// Timestamp of the most recent keystroke, for the typing window.
+        var lastKeyNs: UInt64 = 0
+        /// Hitches that happened while typing, i.e. ones the user felt.
+        var typingHitches16: UInt64 = 0
+        var typingHitches33: UInt64 = 0
+        var typingHitches100: UInt64 = 0
         /// Per-stage nanoseconds accumulated inside the CURRENT main-runloop turn.
         var turnAccum = [UInt64](repeating: 0, count: Stage.allCases.count)
         /// Breakdown of the single worst main-runloop turn seen so far.
@@ -278,6 +291,7 @@ public enum Prof {
     public static func mark(_ stage: Stage, ns: UInt64, topLevel: Bool = true) {
         guard enabled else { return }
         let onMainNow = stage.onMain && pthread_main_np() != 0
+        let nowNs = now()
         state.withLockUnchecked { s in
             var st = s.stages[stage.rawValue]
             st.count &+= 1
@@ -285,6 +299,17 @@ public enum Prof {
             if ns > st.maxNs { st.maxNs = ns }
             st.buckets[bucketIndex(ns)] &+= 1
             s.stages[stage.rawValue] = st
+
+            // Second copy restricted to the typing window — the same numbers, but
+            // only for moments the user could actually perceive.
+            if s.lastKeyNs != 0 && nowNs &- s.lastKeyNs < typingWindowNs {
+                var t = s.typingStages[stage.rawValue]
+                t.count &+= 1
+                t.sumNs &+= ns
+                if ns > t.maxNs { t.maxNs = ns }
+                t.buckets[bucketIndex(ns)] &+= 1
+                s.typingStages[stage.rawValue] = t
+            }
             // Attribute main-thread work to the runloop turn it happened in, so a
             // hitch can be broken down by what actually ran during it.
             if onMainNow && topLevel { s.turnAccum[stage.rawValue] &+= ns }
@@ -357,7 +382,13 @@ public enum Prof {
     /// must not be paired with someone else's output.
     public static func armKeystroke(atNs t: UInt64) {
         guard enabled else { return }
-        state.withLockUnchecked { $0.armedKeyNs = t }
+        let nowNs = now()
+        state.withLockUnchecked { s in
+            s.armedKeyNs = t
+            // Opens the typing window regardless of whether this key produces
+            // bytes — the user is at the keyboard either way.
+            s.lastKeyNs = nowNs
+        }
     }
 
     /// The engine produced bytes for the host — the armed key is real input, so
@@ -504,6 +535,13 @@ public enum Prof {
             if busyNs > 16_000_000 { s.hitches16 &+= 1 }
             if busyNs > 33_000_000 { s.hitches33 &+= 1 }
             if busyNs > 100_000_000 { s.hitches100 &+= 1 }
+            // A hitch while typing is one the user felt; one while idle is not.
+            let typing = s.lastKeyNs != 0 && now() &- s.lastKeyNs < typingWindowNs
+            if typing {
+                if busyNs > 16_000_000 { s.typingHitches16 &+= 1 }
+                if busyNs > 33_000_000 { s.typingHitches33 &+= 1 }
+                if busyNs > 100_000_000 { s.typingHitches100 &+= 1 }
+            }
             if busyNs > s.worstTurnNs {
                 s.worstTurnNs = busyNs
                 s.worstTurnAccum = s.turnAccum
@@ -574,24 +612,32 @@ public enum Prof {
 
     private static func writeSummary(header: String?, to path: String? = nil) {
         guard enabled else { return }
-        let (snaps, worstNs, worstAccum, h16, h33, h100, busyNs, elapsed, outBytes) =
-            state.withLockUnchecked { s -> ([Snapshot], UInt64, [UInt64], UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) in
-                let snaps = Stage.allCases.compactMap { stage -> Snapshot? in
-                    let st = s.stages[stage.rawValue]
-                    guard st.count > 0 else { return nil }
-                    return Snapshot(label: stage.label,
-                                    count: st.count,
-                                    p50: quantile(st, 0.50),
-                                    p95: quantile(st, 0.95),
-                                    p99: quantile(st, 0.99),
-                                    max: st.maxNs,
-                                    sum: st.sumNs,
-                                    queueDelay: stage.isQueueDelay)
-                }
+        func snapshot(_ stages: [StageStats]) -> [Snapshot] {
+            Stage.allCases.compactMap { stage -> Snapshot? in
+                let st = stages[stage.rawValue]
+                guard st.count > 0 else { return nil }
+                return Snapshot(label: stage.label,
+                                count: st.count,
+                                p50: quantile(st, 0.50),
+                                p95: quantile(st, 0.95),
+                                p99: quantile(st, 0.99),
+                                max: st.maxNs,
+                                sum: st.sumNs,
+                                queueDelay: stage.isQueueDelay)
+            }
+        }
+
+        let (snaps, typingSnaps, worstNs, worstAccum,
+             h16, h33, h100, th16, th33, th100, busyNs, elapsed, outBytes) =
+            state.withLockUnchecked { s -> ([Snapshot], [Snapshot], UInt64, [UInt64],
+                                            UInt64, UInt64, UInt64, UInt64, UInt64, UInt64,
+                                            UInt64, UInt64, UInt64) in
                 let elapsed = s.startNs == 0 ? 0 : now() &- s.startNs
-                return (snaps, s.worstTurnNs, s.worstTurnAccum,
-                        s.hitches16, s.hitches33, s.hitches100, s.mainBusyNs, elapsed,
-                        s.outputBytes)
+                return (snapshot(s.stages), snapshot(s.typingStages),
+                        s.worstTurnNs, s.worstTurnAccum,
+                        s.hitches16, s.hitches33, s.hitches100,
+                        s.typingHitches16, s.typingHitches33, s.typingHitches100,
+                        s.mainBusyNs, elapsed, s.outputBytes)
             }
 
         var out = ""
@@ -606,19 +652,35 @@ public enum Prof {
         out += String(format: "output load: %.1f KB/s  (%.2f MB total)\n",
                       secs > 0 ? Double(outBytes) / 1024 / secs : 0,
                       Double(outBytes) / 1024 / 1024)
-        out += String(format: "hitches: >16ms %llu   >33ms %llu   >100ms %llu   worst turn %.1fms\n\n",
+        out += String(format: "hitches: >16ms %llu   >33ms %llu   >100ms %llu   worst turn %.1fms\n",
                       h16, h33, h100, Double(worstNs) / 1e6)
+        out += String(format: "  of those, WHILE TYPING: >16ms %llu   >33ms %llu   >100ms %llu\n\n",
+                      th16, th33, th100)
 
-        out += "stage             q  count      p50      p95      p99      max    total\n"
-        out += "--------------------------------------------------------------------------\n"
-        for s in snaps {
-            out += String(format: "%-16s  %@  %5llu  %@  %@  %@  %@  %7.1fms\n",
-                          (s.label as NSString).utf8String!,
-                          s.queueDelay ? "Q" : " ",
-                          s.count,
-                          fmt(s.p50), fmt(s.p95), fmt(s.p99), fmt(s.max),
-                          Double(s.sum) / 1e6)
+        let header = "stage             q  count      p50      p95      p99      max    total\n"
+            + "--------------------------------------------------------------------------\n"
+
+        func table(_ rows: [Snapshot]) -> String {
+            var s = header
+            for r in rows {
+                s += String(format: "%-16s  %@  %5llu  %@  %@  %@  %@  %7.1fms\n",
+                            (r.label as NSString).utf8String!,
+                            r.queueDelay ? "Q" : " ",
+                            r.count,
+                            fmt(r.p50), fmt(r.p95), fmt(r.p99), fmt(r.max),
+                            Double(r.sum) / 1e6)
+            }
+            return s
         }
+
+        // Typing table first: latency outside the typing window is latency
+        // nobody experiences, and burying the perceivable numbers under it was
+        // how a 92ms tail looked alarming for two rounds without evidence that
+        // it ever coincided with a keystroke.
+        out += "--- WHILE TYPING (within 500ms of a keystroke) ---\n"
+        out += typingSnaps.isEmpty ? "(no keystrokes in this window)\n" : table(typingSnaps)
+        out += "\n--- OVERALL (typing + idle) ---\n"
+        out += table(snaps)
         out += "\n(Q = queueing delay: time spent waiting to run, not working.)\n"
 
         // What was the main thread actually doing during its worst stall?
