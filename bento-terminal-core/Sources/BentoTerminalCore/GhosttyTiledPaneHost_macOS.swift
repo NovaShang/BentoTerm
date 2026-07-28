@@ -1065,6 +1065,50 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             specs.append(PaletteSectionSpec(id: "launches", title: "New Pane", items: launches, limit: 6))
         }
 
+        // Navigation across all three tmux levels. The palette is the one place
+        // you can reach any of them without knowing which chrome owns it —
+        // sessions live behind a menu, windows in the strip, panes only on
+        // screen — so "where is that thing" has a single answer.
+        let windows = viewModel.windows.map { window in
+            let body = viewModel.windowBodyName(window.id)
+            let label = window.index.map { "\($0): \(body)" } ?? body
+            return PaletteItem(id: "window:\(window.id)",
+                               title: label,
+                               systemImage: "rectangle.on.rectangle",
+                               matchText: "window \(label)",
+                               action: .run { [weak self] in self?.viewModel.selectWindow(window.id) })
+        }
+        if windows.count > 1 {
+            specs.append(PaletteSectionSpec(id: "windows", title: "Windows", items: windows, limit: 8))
+        }
+
+        let panes = viewModel.sessionPanes.map { pane -> PaletteItem in
+            let name = [pane.title, pane.currentCommand]
+                .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty } ?? "shell"
+            return PaletteItem(id: "pane:\(pane.id)",
+                               title: name,
+                               subtitle: "\(pane.id)",
+                               systemImage: "rectangle.split.2x1",
+                               matchText: "pane \(name)",
+                               action: .run { [weak self] in self?.viewModel.selectPane(pane.id) })
+        }
+        if panes.count > 1 {
+            specs.append(PaletteSectionSpec(id: "panes", title: "Panes", items: panes, limit: 8))
+        }
+
+        let current = viewModel.activeTmuxSessionName
+        let sessions = viewModel.availableTmuxSessions.filter { $0 != current }.map { name in
+            PaletteItem(id: "session:" + name,
+                        title: name,
+                        systemImage: "macwindow",
+                        matchText: "session \(name)",
+                        action: .run { BentoTerminalWindow.focusOrOpen(session: name) })
+        }
+        if !sessions.isEmpty {
+            specs.append(PaletteSectionSpec(id: "sessions", title: "Sessions", items: sessions, limit: 8))
+        }
+
         specs.append(PaletteSectionSpec(id: "commands", title: "Commands",
                                         items: paletteCommands(), limit: 10))
         return specs

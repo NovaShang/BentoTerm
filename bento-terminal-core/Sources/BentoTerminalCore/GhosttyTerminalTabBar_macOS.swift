@@ -77,6 +77,20 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     fileprivate static let moreID = NSToolbarItem.Identifier("bento.more")
     fileprivate static let centerID = NSToolbarItem.Identifier("bento.center")
     fileprivate static let previewID = NSToolbarItem.Identifier("bento.preview")
+    fileprivate static let searchID = NSToolbarItem.Identifier("bento.search")
+    fileprivate static let searchCompactID = NSToolbarItem.Identifier("bento.searchCompact")
+
+    /// Opens the palette — the toolbar's search field is an ENTRY POINT, not a
+    /// results view: the palette already knows how to search files, commands,
+    /// sessions, windows and panes, so clicking here drops it open the way
+    /// ⌘P does.
+    var onOpenSearch: (() -> Void)?
+    /// Wide, field-styled button shown in the centre when the window strip
+    /// isn't needed; `searchCompact` is the magnifier that replaces it when the
+    /// strip takes the centre.
+    private let searchField = NSButton()
+    private let searchCompact = NSButton()
+    private var centerShowsTabs = true
 
     override init() {
         super.init()
@@ -106,6 +120,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         configure(previewButton, symbol: "sidebar.trailing", title: "",
                   action: #selector(previewTapped))
         previewButton.toolTip = "Show/hide the file panel (⌥⌘P)"
+        configureSearchField()
+        configure(searchCompact, symbol: "magnifyingglass", title: "", action: #selector(searchTapped))
+        searchCompact.toolTip = "Search commands, files, sessions, windows, panes (⌘P)"
         configureGroup(tabsGroup)   // placeholder until the first updateTabs
         // The menu chevrons are rasterized (non-template) images — unlike the
         // dynamic `.labelColor` text they sit beside, they can't re-resolve on
@@ -146,6 +163,58 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     @objc private func modeSwitched() {
         onSelectMode?(modeSwitch.selectedSegment == 1 ? .list : .tiled)
+    }
+
+    /// A button dressed as a search field: magnifier + placeholder, left
+    /// aligned, wide enough to read as somewhere you type. It isn't an
+    /// NSSearchField because there is nothing to type INTO — the palette owns
+    /// both the query and the results, and two text fields for one query would
+    /// be a state to keep in sync for no gain.
+    private func configureSearchField() {
+        searchField.bezelStyle = .roundRect
+        searchField.controlSize = .large
+        searchField.imagePosition = .imageLeading
+        searchField.image = NSImage(systemSymbolName: "magnifyingglass",
+                                    accessibilityDescription: "Search")
+        searchField.title = "Search commands, files, sessions…"
+        searchField.alignment = .left
+        searchField.target = self
+        searchField.action = #selector(searchTapped)
+        searchField.toolTip = "⌘P"
+        searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
+        ])
+    }
+
+    @objc private func searchTapped() { onOpenSearch?() }
+
+    /// The centre of the toolbar is shared: the window strip when the session
+    /// has more than one window, the search field when it doesn't.
+    ///
+    /// A single-window session is the common case, and a one-item switcher is
+    /// chrome that says nothing — so that space goes to the thing that always
+    /// has something to offer. When the strip does take over, search shrinks to
+    /// the magnifier beside New rather than disappearing.
+    func setCenterShowsTabs(_ showTabs: Bool) {
+        guard let tb = toolbarRef, showTabs != centerShowsTabs || tb.items.isEmpty else { return }
+        centerShowsTabs = showTabs
+        let want = showTabs ? Self.centerID : Self.searchID
+        if let idx = tb.items.firstIndex(where: {
+            $0.itemIdentifier == Self.centerID || $0.itemIdentifier == Self.searchID
+        }), tb.items[idx].itemIdentifier != want {
+            tb.removeItem(at: idx)
+            tb.insertItem(withItemIdentifier: want, at: idx)
+            tb.centeredItemIdentifiers = [want]
+        }
+        let compactIdx = tb.items.firstIndex { $0.itemIdentifier == Self.searchCompactID }
+        if showTabs, compactIdx == nil,
+           let newIdx = tb.items.firstIndex(where: { $0.itemIdentifier == Self.newID }) {
+            tb.insertItem(withItemIdentifier: Self.searchCompactID, at: newIdx)
+        } else if !showTabs, let compactIdx {
+            tb.removeItem(at: compactIdx)
+        }
     }
 
     private func configureGroup(_ g: NSToolbarItemGroup) {
@@ -191,7 +260,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         g.controlRepresentation = .expanded
         g.label = "Windows"
         tabsGroup = g
-        guard let tb = toolbarRef,
+        guard centerShowsTabs, let tb = toolbarRef,
               let idx = tb.items.firstIndex(where: { $0.itemIdentifier == Self.centerID })
         else { return }
         tb.removeItem(at: idx)
@@ -282,7 +351,10 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
          .flexibleSpace, Self.newID, Self.moreID, Self.previewID]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar)
+        // The centre swaps between the window strip and the search field, and
+        // the compact magnifier comes and goes with it, so both must be
+        // ALLOWED even though only one of each pair is in the default set.
+        toolbarDefaultItemIdentifiers(toolbar) + [Self.searchID, Self.searchCompactID]
     }
 
     @objc private func previewTapped() { onTogglePreview?() }
@@ -300,6 +372,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         case Self.newID:      item.view = newButton;      item.label = "New"
         case Self.moreID:     item.view = moreButton;     item.label = "Settings"
         case Self.previewID:  item.view = previewButton;  item.label = "Preview"
+        case Self.searchID:   item.view = searchField;    item.label = "Search"
+        case Self.searchCompactID: item.view = searchCompact; item.label = "Search"
         default: return nil
         }
         return item

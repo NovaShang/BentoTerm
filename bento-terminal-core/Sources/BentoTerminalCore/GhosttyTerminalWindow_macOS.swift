@@ -474,6 +474,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // window / pane) instead of leaving the middle one homeless.
         toolbar.onSelectSegment = { [weak self] idx in self?.segmentPicked(idx) }
         toolbar.onSelectSession = { [weak self] key in self?.selectSession(key) }
+        toolbar.onOpenSearch = { [weak self] in self?.activeTab?.paneHost?.presentCommandPalette() }
         toolbar.onNewAgent = { BentoTerminalWindow.onNewAgentSession?() }
         toolbar.onNewTerminal = { BentoTerminalWindow.newSessionTab() }
         toolbar.onNewPlainShell = { BentoTerminalWindow.newWindowNoTmux() }
@@ -1035,6 +1036,12 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         if hasOverflow {
             items.append(("", "more", NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More windows")))
         }
+        // The centre is shared with the search field: a switcher for ONE window
+        // says nothing, so that space goes to search instead. Focus always keeps
+        // the centre, because there it names the window you're looking at.
+        let isFocus = activeTab?.viewModel.sessionMode == .list
+        toolbar.setCenterShowsTabs(isFocus || tmuxWindows.count > 1)
+
         let activeIdx = activeWindowID.flatMap { id in visible.firstIndex { $0.id == id } } ?? -1
         toolbar.updateTabs(items, selected: activeIdx)
 
