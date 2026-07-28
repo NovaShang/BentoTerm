@@ -564,6 +564,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             menu.addItem(item("Split — Path & Command…", #selector(splitWithPathCommand(_:)),
                               symbol: "terminal"))
             menu.addItem(.separator())
+            menu.addItem(layoutMenuItem())
+            menu.addItem(.separator())
         }
         menu.addItem(item(zoomed ? "Unzoom" : "Zoom", BentoPaneAction.toggleZoom,
                           symbol: zoomed ? "arrow.down.right.and.arrow.up.left"
@@ -934,6 +936,43 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// ⌘D/⌘⇧D (and the pane-menu split items, hidden there) are no-ops.
     private var splitsAllowed: Bool { viewModel.sessionMode != .list }
 
+    /// tmux's five named layouts, under their real names, running the real
+    /// `select-layout`. They already existed on the server side and Bento simply
+    /// never offered them — hiding a capability doesn't simplify anything, it
+    /// just leaves the user unable to find it. Using tmux's names means the
+    /// menu and `select-layout even-horizontal` are interchangeable.
+    private static let tmuxLayouts = [
+        ("even-horizontal", "Panes in a row"),
+        ("even-vertical", "Panes in a column"),
+        ("main-horizontal", "One large pane on top"),
+        ("main-vertical", "One large pane on the left"),
+        ("tiled", "Even grid"),
+    ]
+
+    private func layoutMenuItem() -> NSMenuItem {
+        let root = NSMenuItem(title: "Layout", action: nil, keyEquivalent: "")
+        root.image = NSImage(systemSymbolName: "square.grid.2x2",
+                             accessibilityDescription: "Layout")
+        let sub = NSMenu()
+        for (name, note) in Self.tmuxLayouts {
+            let it = NSMenuItem(title: name, action: #selector(applyLayout(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = name
+            it.toolTip = note
+            sub.addItem(it)
+        }
+        root.submenu = sub
+        return root
+    }
+
+    @objc private func applyLayout(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String,
+              let window = viewModel.activeWindowID else { return }
+        Task { [viewModel] in
+            _ = await viewModel.applyWindowLayout(window, layout: name)
+        }
+    }
+
     @objc public func splitPaneVertically(_ sender: Any?) {
         guard splitsAllowed else { return }
         // iTerm2 "Split Vertically" = side-by-side panes (a vertical divider).
@@ -1031,7 +1070,22 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             PaletteItem(id: "cmd:" + id, title: title, systemImage: image,
                         matchText: title, action: .run(run))
         }
-        return [
+        // tmux's named layouts, searchable by the name you'd type at a tmux
+        // command line ("Layout: main-vertical" matches both "layout" and
+        // "main-vertical").
+        let layouts = Self.tmuxLayouts.map { name, note in
+            PaletteItem(id: "cmd:layout-" + name,
+                        title: "Layout: \(name)",
+                        systemImage: "square.grid.2x2",
+                        matchText: "layout \(name) \(note)",
+                        action: .run { [weak self] in
+                            guard let self, let window = self.viewModel.activeWindowID else { return }
+                            Task { [viewModel = self.viewModel] in
+                                _ = await viewModel.applyWindowLayout(window, layout: name)
+                            }
+                        })
+        }
+        return layouts + [
             cmd("splitRight", "Split Right (-h)", "rectangle.split.2x1") { [weak self] in self?.splitPaneVertically(nil) },
             cmd("splitDown", "Split Down (-v)", "rectangle.split.1x2") { [weak self] in self?.splitPaneHorizontally(nil) },
             cmd("duplicate", "Duplicate Pane (dir + command)", "plus.square.on.square") { [weak self] in

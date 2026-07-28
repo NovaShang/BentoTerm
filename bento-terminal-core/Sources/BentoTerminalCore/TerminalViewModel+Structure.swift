@@ -609,6 +609,23 @@ public extension TerminalViewModel {
         DIAG("[MODE] restore select-layout win=\(win) name=[\(step.name)] layout=[\(layout)] err=\(resp.isError) out=[\(resp.output.trimmingCharacters(in: .whitespacesAndNewlines))]")
     }
 
+    /// Apply one of tmux's named layouts (`even-horizontal`, `main-vertical`,
+    /// `tiled`, …) to a window. Bento's own tiling reads the result back from
+    /// `%layout-change`, so this is tmux rearranging its own window rather than
+    /// Bento imposing geometry — a layout the user sets from a tmux command
+    /// line lands exactly the same way.
+    @discardableResult
+    public func applyWindowLayout(_ windowID: TmuxWindowID, layout: String) async -> Bool {
+        guard usingTmux else { return false }
+        let resp = await tmuxService.send(.selectLayout(window: windowID, layout: layout))
+        if resp.isError {
+            dlog("applyWindowLayout \(layout) failed: \(resp.output)")
+            return false
+        }
+        await refreshPanes()
+        return true
+    }
+
     /// Move a pane out of this session into `target`. The pane's process and
     /// scrollback travel untouched — pane IDs are server-global. The LANDING
     /// respects the target's mode (see `moveToSession`): a Parallel target
