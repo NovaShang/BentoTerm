@@ -420,9 +420,14 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// True when more sessions exist than fit — the last segment becomes a `⋯`
     /// that pops the full list.
     private var hasOverflow = false
-    /// Local right-click monitor so a right-click on the tab strip pops the
-    /// current session's actions (the power-user path alongside the named button).
-    private var rightClickMonitor: Any?
+    // A local right-click monitor used to pop the session menu anywhere in the
+    // titlebar band. It was written when the centre strip held SESSIONS, so
+    // right-clicking a session showed that session's actions. The strip holds
+    // WINDOWS now and sessions are native tabs with their own system menu, so
+    // it had become: right-click anywhere up there, get the ACTIVE session's
+    // actions — including Kill Session — while the user was pointing at a
+    // different tab. Destructive action, wrong target, no way to tell. Removed;
+    // the session's actions live in the named button on the left.
 
     /// Toolbar bindings to the *active* tab's VM (re-subscribed on switch).
     private var activeCancellables = Set<AnyCancellable>()
@@ -576,14 +581,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         self.window = win
         installContentConstraints(in: win)
 
-        // Right-click on the tab strip → current session's actions. Scoped to the
-        // toolbar band, in the centered region where the tabs live (so the side
-        // buttons keep their own click behavior).
-        rightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
-            guard let self, self.handleToolbarRightClick(event) else { return event }
-            return nil
-        }
-
         // Bring the session up. This used to live in `loadTab`, which ran when a
         // tab was added to the old multi-tab window; with one session per window
         // it belongs to construction — a window without these is a titled box
@@ -598,20 +595,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// name — so they'd all fight over one saved frame. AppKit cascades tabbed
     /// windows anyway; only the first one needs a remembered frame.
     private static var didRestoreFrame = false
-
-    /// Returns true (consuming the event) when a right-click lands on the tab
-    /// strip and the session menu was shown.
-    private func handleToolbarRightClick(_ event: NSEvent) -> Bool {
-        guard event.window === window else { return false }
-        let loc = event.locationInWindow
-        // In the titlebar/toolbar band (above the content area)?
-        guard loc.y > window.contentLayoutRect.maxY else { return false }
-        // Roughly the centered tab-strip region — avoid the side buttons.
-        let w = window.frame.width
-        guard loc.x > w * 0.26, loc.x < w * 0.74 else { return false }
-        toolbar.sessionActionsMenu().popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-        return true
-    }
 
     var activeTab: SessionTab? { tab }
 
@@ -1251,7 +1234,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         // Free every session's surfaces BEFORE AppKit tears the window down.
-        if let m = rightClickMonitor { NSEvent.removeMonitor(m); rightClickMonitor = nil }
         activeCancellables.removeAll()
         tabCancellables.removeAll()
         // Drop the sidebar's SwiftUI observation before the VMs are torn down.
