@@ -1,5 +1,6 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
+import Carbon   // TIS* — identifies whether the input source is a plain layout
 import GhosttyKit
 
 /// libghostty-backed terminal surface for macOS. Same external-backend contract
@@ -679,6 +680,19 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         // `setMarkedText` for the in-flight composition, `doCommandBySelector`
         // for special keys. If the context doesn't consume the event we encode
         // it ourselves via the engine.
+        // Ordinary typing on a plain keyboard layout doesn't need the input
+        // method at all, and `handleEvent` is a synchronous IPC that blocks the
+        // main thread for a measured median of 15.73ms (max 73ms). Encode those
+        // keys directly. Anything that could involve composition — an IME input
+        // source, an in-flight preedit, or a modifier that can start a dead key
+        // — still goes the full route.
+        if canBypassInputMethod(event) {
+            Prof.span(.keyBypass) {
+                sendKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
+            }
+            return
+        }
+
         keyEventForIME = event
         defer { keyEventForIME = nil }
         // IMK's handleEvent is a synchronous IPC that spins the runloop, so the
@@ -691,6 +705,53 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         if !consumed {
             sendKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
         }
+    }
+
+    /// Whether this key event can skip the input method entirely.
+    ///
+    /// Deliberately conservative — a wrong `true` here breaks CJK input, which
+    /// is far worse than the latency it saves:
+    ///   - the active input source must be a plain keyboard LAYOUT, not an IME
+    ///     (a Pinyin/Kana source reports `kTISTypeKeyboardInputMode` and is
+    ///     excluded)
+    ///   - no composition may be in flight (`markedText` empty)
+    ///   - no modifier that can begin a dead-key sequence (⌥e → ´ works even on
+    ///     ABC), so only shift/caps/fn/numpad are allowed through
+    ///   - empty `characters` means the key produced no text, which is exactly
+    ///     what a dead key does on press (US International's `'` and `` ` ``
+    ///     take no modifier at all). Its continuation is then covered by the
+    ///     `markedText` check above, since IMK marks the pending composition.
+    ///   - the scroll-review draft owns its own keys, so not while reviewing
+    private func canBypassInputMethod(_ event: NSEvent) -> Bool {
+        guard markedText.length == 0, !compose.isReviewing else { return false }
+        guard let chars = event.characters, !chars.isEmpty else { return false }
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard mods.isSubset(of: [.shift, .capsLock, .function, .numericPad]) else { return false }
+        return Self.activeInputSourceIsPlainLayout
+    }
+
+    /// Cached because TIS lookups aren't free and this is consulted per key.
+    /// Invalidated on the same notification that tells ghostty to rebuild its
+    /// keyboard table (see GhosttyRuntime).
+    nonisolated(unsafe) private static var cachedPlainLayout: Bool?
+
+    static func invalidateInputSourceCache() { cachedPlainLayout = nil }
+
+    private static var activeInputSourceIsPlainLayout: Bool {
+        if let cachedPlainLayout { return cachedPlainLayout }
+        let value = computePlainLayout()
+        cachedPlainLayout = value
+        return value
+    }
+
+    private static func computePlainLayout() -> Bool {
+        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+              let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceType)
+        else { return false }
+        let type = Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
+        // kTISTypeKeyboardLayout = a layout with no input method behind it.
+        // Everything else (input modes, input methods) must keep the IME path.
+        return type == (kTISTypeKeyboardLayout as String)
     }
 
     public override func keyUp(with event: NSEvent) {

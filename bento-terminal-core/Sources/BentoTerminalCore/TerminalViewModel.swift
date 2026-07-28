@@ -191,7 +191,15 @@ public final class TerminalViewModel: ObservableObject {
         var marker: String
         var continuation: CheckedContinuation<String, Never>
     }
-    private var shellCapture: ShellCapture?
+    private var shellCapture: ShellCapture? {
+        // Mirrored into a lock so the off-main router can consult it without
+        // hopping to the main actor just to read one optional.
+        didSet {
+            let active = shellCapture != nil
+            captureActive.withLock { $0 = active }
+        }
+    }
+    private nonisolated let captureActive = OSAllocatedUnfairLock(initialState: false)
 
     /// True while we're waiting on a scheduled auto-reconnect attempt. The
     /// onStateChanged hook checks this so an in-flight retry's transient
@@ -312,15 +320,7 @@ public final class TerminalViewModel: ObservableObject {
         }
 
         transport.onDataReceived = { [weak self] data in
-            guard let self else { return }
-            // Second enqueue for the same bytes (the transport callback already
-            // ran on main): the main ACTOR's executor queue is not the runloop's,
-            // so measure it separately from `ptyReadHop`.
-            let hop = Prof.hopBegin()
-            Task { @MainActor in
-                Prof.hopEnd(.mainActorHop, hop)
-                self.routeIncomingData(data)
-            }
+            self?.routeIncomingBytes(data)
         }
 
         tmuxService.onNotification = { [weak self] notification in
@@ -334,7 +334,40 @@ public final class TerminalViewModel: ObservableObject {
         }
     }
 
-    /// Route a chunk of bytes from SSH to the right consumer based on phase.
+    /// Entry point for every byte arriving from the transport, on whatever
+    /// thread the transport delivers on.
+    ///
+    /// Everything funnels through the serial parse queue first, so byte order
+    /// survives regardless of which branch a chunk takes. In the steady state
+    /// (tmux control mode, no capture in flight) the bytes are parsed right
+    /// there and never touch the main thread — that is the path a keystroke's
+    /// echo takes, and keeping it off main is what stops echoes from queueing
+    /// behind the keystroke that produced them.
+    ///
+    /// Capture mode and raw-shell mode still hop to main. Neither can overlap
+    /// with tmux mode (`captureShellOutput` runs before `launchTmux` sets
+    /// `usingTmux`), so no chunk can take the fast path while another is still
+    /// in flight on the slow one.
+    nonisolated private func routeIncomingBytes(_ data: Data) {
+        let hop = Prof.hopBegin()
+        tmuxParseQueue.async { [weak self] in
+            Prof.hopEnd(.parseHop, hop)
+            guard let self else { return }
+            if self.usingTmux, !self.captureActive.withLock({ $0 }) {
+                Prof.span(.tmuxParse) { self.tmuxService.feedData(data) }
+                return
+            }
+            let mainHop = Prof.hopBegin()
+            DispatchQueue.main.async {
+                Prof.hopEnd(.mainActorHop, mainHop)
+                MainActor.assumeIsolated { self.routeIncomingData(data) }
+            }
+        }
+    }
+
+    /// Route a chunk of bytes to the right consumer based on phase. Main-actor
+    /// only; the tmux steady state no longer reaches this (see
+    /// `routeIncomingBytes`).
     private func routeIncomingData(_ data: Data) {
         Prof.span(.routeIn) { routeIncomingDataInner(data) }
     }
@@ -357,12 +390,10 @@ public final class TerminalViewModel: ObservableObject {
         if usingTmux {
             // Parse off the main actor — under heavy TUI output the protocol
             // parse is the main thread's biggest contender with keyDown.
+            // Only reachable if the mode flipped while a chunk was already on
+            // the slow path; the steady state parses in `routeIncomingBytes`.
             let service = tmuxService
-            let hop = Prof.hopBegin()
-            tmuxParseQueue.async {
-                Prof.hopEnd(.parseHop, hop)
-                Prof.span(.tmuxParse) { service.feedData(data) }
-            }
+            tmuxParseQueue.async { Prof.span(.tmuxParse) { service.feedData(data) } }
             return
         }
 

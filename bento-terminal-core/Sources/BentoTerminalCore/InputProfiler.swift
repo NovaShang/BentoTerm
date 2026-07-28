@@ -50,6 +50,10 @@ public enum Prof {
         /// callbacks because it calls `convertToScreen`, which can reach the
         /// window server, unlike the constant-returning ones. [main]
         case imeFirstRect
+        /// A keystroke that skipped the input method entirely and went straight
+        /// to the engine. Compare its count against `imeHandleEvent` to see how
+        /// much of your typing takes the fast path. [main]
+        case keyBypass
         /// `sendKeyEvent` → `ghostty_surface_key` returns. [main]
         case keyEncode
         /// ghostty's write-to-host → `PaneViewModel.sendInput` → tmux enqueue. [main]
@@ -107,6 +111,7 @@ public enum Prof {
             case .imeReentrant: return "imeReentrant"
             case .imeCallback: return "imeCallback"
             case .imeFirstRect: return "imeFirstRect"
+            case .keyBypass: return "keyBypass"
             case .keyEncode: return "keyEncode"
             case .hostWrite: return "hostWrite"
             case .inputBatchWait: return "inputBatchWait"
@@ -146,7 +151,7 @@ public enum Prof {
         var onMain: Bool {
             switch self {
             case .keyDown, .imeHandleEvent, .imeCallback, .imeFirstRect,
-                 .keyEncode, .hostWrite, .routeIn,
+                 .keyBypass, .keyEncode, .hostWrite, .routeIn,
                  .drain, .paneFeed, .historyTrim, .runtimeTick:
                 return true
             default:

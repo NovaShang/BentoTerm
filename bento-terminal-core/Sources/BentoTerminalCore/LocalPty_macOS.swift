@@ -79,14 +79,14 @@ public final class LocalPty {
             let n = read(self.masterFD, &buf, buf.count)
             if n > 0 {
                 let data = Data(buf[0..<n])
-                // Every chunk read off the PTY hops to main before it can be
-                // routed. Measure how long that hop actually takes — under load
-                // this is output queued behind the main thread.
-                let hop = Prof.hopBegin()
-                DispatchQueue.main.async {
-                    Prof.hopEnd(.ptyReadHop, hop)
-                    self.onData?(data)
-                }
+                // Deliver on the read queue, NOT via the main thread. Terminal
+                // output has no business waiting on the UI thread: every
+                // keystroke blocks main for milliseconds inside the input
+                // method's synchronous IPC, and routing echoes through main
+                // meant they queued behind exactly the keystroke they were
+                // echoing — measured at 32x worse queueing while typing than
+                // while idle. The consumer re-serializes on its own parse queue.
+                self.onData?(data)
             } else {
                 DispatchQueue.main.async { self.handleExit() }
             }

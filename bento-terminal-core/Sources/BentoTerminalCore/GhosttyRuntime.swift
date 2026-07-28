@@ -112,6 +112,10 @@ final class GhosttyRuntime {
             object: nil, queue: .main
         ) { _ in
             Task { @MainActor in
+                // The surface caches whether the active source is a plain layout
+                // (it decides whether a keystroke may skip the IME); that answer
+                // just changed.
+                GhosttyTerminalSurface.invalidateInputSourceCache()
                 guard let app = GhosttyRuntime.shared.app else { return }
                 ghostty_app_keyboard_changed(app)
             }
