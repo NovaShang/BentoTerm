@@ -68,21 +68,17 @@ public final class PaneViewModel: ObservableObject, Identifiable {
     /// method IPC), and routing echoes through it made them queue behind the
     /// very keystroke they were echoing.
     public nonisolated func feedData(_ data: Data) {
-        Prof.noteOutputBytes(data.count)
-        Prof.span(.paneFeed) {
-            // The strip + history append must be atomic as a pair: the stripper
-            // consumes a prefix of the stream and history must record exactly
-            // what it emitted, in the same order.
-            feedLock.lock()
-            let clean = titleStripper.strip(data)
-            if !clean.isEmpty { appendHistory(clean) }
-            feedLock.unlock()
-            guard !clean.isEmpty else { return }
-            // Outside the lock: the surface hands off to its own queue, and
-            // holding a lock across a callback into unknown code invites
-            // deadlock.
-            onDataReceived?(clean)
-        }
+        // The strip + history append must be atomic as a pair: the stripper
+        // consumes a prefix of the stream and history must record exactly what
+        // it emitted, in the same order.
+        feedLock.lock()
+        let clean = titleStripper.strip(data)
+        if !clean.isEmpty { appendHistory(clean) }
+        feedLock.unlock()
+        guard !clean.isEmpty else { return }
+        // Outside the lock: the surface hands off to its own queue, and holding
+        // a lock across a callback into unknown code invites deadlock.
+        onDataReceived?(clean)
     }
 
     /// Caller must hold `feedLock`.
@@ -93,9 +89,7 @@ public final class PaneViewModel: ObservableObject, Identifiable {
         if _history.count > Self.maxHistoryBytes + Self.historySlackBytes {
             // Known main-thread O(n) memmove; measured so we can see whether it
             // actually shows up in a stall or is amortized away.
-            Prof.span(.historyTrim) {
-                _history.removeSubrange(0..<(_history.count - Self.maxHistoryBytes))
-            }
+            _history.removeSubrange(0..<(_history.count - Self.maxHistoryBytes))
         }
     }
 
@@ -112,7 +106,6 @@ public final class PaneViewModel: ObservableObject, Identifiable {
 
     /// Send raw terminal input to this pane
     public func sendInput(_ data: Data) {
-        Prof.noteInputEnqueued()
         tmuxService.sendData(to: paneID, data: data)
     }
 

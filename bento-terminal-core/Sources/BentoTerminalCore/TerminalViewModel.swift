@@ -296,19 +296,12 @@ public final class TerminalViewModel: ObservableObject {
             return true
         }
         guard scheduleDrain else { return }
-        // Parsed output waiting for the main thread to come pick it up.
-        let hop = Prof.hopBegin()
         DispatchQueue.main.async { [weak self] in
-            Prof.hopEnd(.drainHop, hop)
             self?.drainTmuxNotifications()
         }
     }
 
     private func drainTmuxNotifications() {
-        Prof.span(.drain) { drainTmuxNotificationsInner() }
-    }
-
-    private func drainTmuxNotificationsInner() {
         let batch = pendingTmuxNotifications.withLockUnchecked { state -> [TmuxNotification] in
             state.drainScheduled = false
             let queue = state.queue
@@ -360,8 +353,7 @@ public final class TerminalViewModel: ObservableObject {
 
         tmuxService.sendToSSH = { [weak self] string in
             guard let data = string.data(using: .utf8) else { return }
-            Prof.noteInputFlushed()
-            Prof.span(.transportWrite) { self?.transport.write(data) }
+            self?.transport.write(data)
         }
     }
 
@@ -380,17 +372,13 @@ public final class TerminalViewModel: ObservableObject {
     /// `usingTmux`), so no chunk can take the fast path while another is still
     /// in flight on the slow one.
     nonisolated private func routeIncomingBytes(_ data: Data) {
-        let hop = Prof.hopBegin()
         tmuxParseQueue.async { [weak self] in
-            Prof.hopEnd(.parseHop, hop)
             guard let self else { return }
             if self.usingTmux, !self.captureActive.withLock({ $0 }) {
-                Prof.span(.tmuxParse) { self.tmuxService.feedData(data) }
+                self.tmuxService.feedData(data)
                 return
             }
-            let mainHop = Prof.hopBegin()
             DispatchQueue.main.async {
-                Prof.hopEnd(.mainActorHop, mainHop)
                 MainActor.assumeIsolated { self.routeIncomingData(data) }
             }
         }
@@ -400,10 +388,6 @@ public final class TerminalViewModel: ObservableObject {
     /// only; the tmux steady state no longer reaches this (see
     /// `routeIncomingBytes`).
     private func routeIncomingData(_ data: Data) {
-        Prof.span(.routeIn) { routeIncomingDataInner(data) }
-    }
-
-    private func routeIncomingDataInner(_ data: Data) {
         // Capture mode (running a one-shot shell command silently).
         if var capture = shellCapture {
             capture.buffer.append(data)
@@ -424,7 +408,7 @@ public final class TerminalViewModel: ObservableObject {
             // Only reachable if the mode flipped while a chunk was already on
             // the slow path; the steady state parses in `routeIncomingBytes`.
             let service = tmuxService
-            tmuxParseQueue.async { Prof.span(.tmuxParse) { service.feedData(data) } }
+            tmuxParseQueue.async { service.feedData(data) }
             return
         }
 

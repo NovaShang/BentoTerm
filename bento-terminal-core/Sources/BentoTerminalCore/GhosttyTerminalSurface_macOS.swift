@@ -497,7 +497,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         if !diagLoggedDraw { diagLoggedDraw = true; DIAG("surf FIRST-DRAW \(debugLabel) settled=\(settled)") }
         // `s` stays valid for this draw: the free is chained onto renderQueue
         // (via enqueueSurfaceFree), serialized behind this running block.
-        Prof.span(.draw) { ghostty_surface_draw(s) }
+        ghostty_surface_draw(s)
         // ghostty computes its cell grid a few frames after creation; poll it from
         // the draw loop ONLY until it first settles (then `gridSettled` gates this
         // off). After that, size changes come through set_size, which calls
@@ -523,11 +523,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// behind it; `enqueueSurfaceFree` chains the free through both queues so it
     /// can never race an in-flight parse or draw (no use-after-free).
     public nonisolated func feed(_ data: Data) {
-        let hop = Prof.hopBegin()
-        ioQueue.async { [weak self] in
-            Prof.hopEnd(.surfaceFeedHop, hop)
-            self?.processFeed(data)
-        }
+        ioQueue.async { [weak self] in self?.processFeed(data) }
     }
 
     private func processFeed(_ data: Data) {
@@ -548,16 +544,11 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         surfaceLock.unlock()
 
         guard !data.isEmpty else { return }
-        Prof.span(.processOutput) {
-            data.withUnsafeBytes { raw in
-                guard let ptr = raw.bindMemory(to: CChar.self).baseAddress else { return }
-                ghostty_surface_process_output(s, ptr, UInt(data.count))
-            }
-            ghostty_surface_refresh(s)
+        data.withUnsafeBytes { raw in
+            guard let ptr = raw.bindMemory(to: CChar.self).baseAddress else { return }
+            ghostty_surface_process_output(s, ptr, UInt(data.count))
         }
-        // The engine has now consumed the bytes an echoed keystroke rode in on —
-        // close out the end-to-end measurement here.
-        Prof.noteEcho()
+        ghostty_surface_refresh(s)
         setNeedsDraw()
         // Draw-on-arrival: paint this output now (rate-capped) instead of waiting
         // for the next CVDisplayLink tick to discover the dirty flag. Both run on
@@ -606,9 +597,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
 
     /// Called by GhosttyRuntime when the engine has bytes for the host.
     func handleHostWrite(_ data: Data) {
-        // Bytes exist, so whatever key is armed was real input.
-        Prof.commitKeystroke()
-        Prof.span(.hostWrite) { onInput?(data) }
+        onInput?(data)
     }
 
     // MARK: - Input
@@ -620,21 +609,6 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     // approach) echoed special keys as private-use glyphs and never sent CR.
 
     public override func keyDown(with event: NSEvent) {
-        // How long this key sat in the window-server / AppKit queue before we got
-        // to it. NSEvent.timestamp shares the mach-uptime base with DispatchTime,
-        // so this is the pure "main thread was busy, your keystroke waited" figure.
-        if Prof.enabled {
-            let pressedNs = UInt64(max(0, event.timestamp) * 1e9)
-            let age = Prof.now() &- pressedNs
-            if age < 1_000_000_000 { Prof.mark(.keyEventLag, ns: age) }
-            // End-to-end is measured from when the user PRESSED the key, not from
-            // when we got around to it — the lag above is part of what they feel.
-            Prof.armKeystroke(atNs: pressedNs)
-        }
-        Prof.span(.keyDown) { keyDownInner(with: event) }
-    }
-
-    private func keyDownInner(with event: NSEvent) {
         // Scroll-review-compose: while reviewing history, the bar owns navigation
         // and editing keys (returns true = consumed). Printable text still flows
         // through the IME path below and branches into the draft in insertText.
@@ -674,35 +648,26 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
             }
         }
 
-        // Route through the macOS input system so IME composition (Chinese /
-        // Japanese / dead keys) works. The input context calls back into our
-        // NSTextInputClient conformance: `insertText` for committed text,
-        // `setMarkedText` for the in-flight composition, `doCommandBySelector`
-        // for special keys. If the context doesn't consume the event we encode
-        // it ourselves via the engine.
         // Ordinary typing on a plain keyboard layout doesn't need the input
         // method at all, and `handleEvent` is a synchronous IPC that blocks the
-        // main thread for a measured median of 15.73ms (max 73ms). Encode those
-        // keys directly. Anything that could involve composition — an IME input
-        // source, an in-flight preedit, or a modifier that can start a dead key
-        // — still goes the full route.
+        // main thread — profiled at a 15.73ms median, 73ms worst case, with a
+        // third-party IME active. Encode those keys directly. Anything that
+        // could involve composition — an IME input source, an in-flight preedit,
+        // or a modifier that can start a dead key — still takes the full route.
         if canBypassInputMethod(event) {
-            Prof.span(.keyBypass) {
-                sendKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
-            }
+            sendKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
             return
         }
 
+        // Everything else routes through the macOS input system so IME
+        // composition (Chinese / Japanese / dead keys) works. The input context
+        // calls back into our NSTextInputClient conformance: `insertText` for
+        // committed text, `setMarkedText` for the in-flight composition,
+        // `doCommandBySelector` for special keys. If the context doesn't consume
+        // the event we encode it ourselves via the engine.
         keyEventForIME = event
         defer { keyEventForIME = nil }
-        // IMK's handleEvent is a synchronous IPC that spins the runloop, so the
-        // output pipeline can be re-entered from inside it. Measure the call and
-        // how much output work happened within it — the two together say whether
-        // the IME is slow or merely absorbing our own output processing.
-        let outputBefore = Prof.outputWorkSoFar()
-        let consumed = Prof.span(.imeHandleEvent) { inputContext?.handleEvent(event) == true }
-        Prof.mark(.imeReentrant, ns: Prof.outputWorkSoFar() &- outputBefore)
-        if !consumed {
+        if inputContext?.handleEvent(event) != true {
             sendKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
         }
     }
@@ -1332,15 +1297,13 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         // ghostty_surface_key synchronously runs the engine's key encoding AND
         // its write-to-host callback, so this span covers everything from key to
         // "bytes handed to the tmux batcher".
-        Prof.span(.keyEncode) {
-            if let text = textOverride ?? translatedText(from: event) {
-                text.withCString { ptr in
-                    keyEvent.text = ptr
-                    ghostty_surface_key(surface, keyEvent)
-                }
-            } else {
+        if let text = textOverride ?? translatedText(from: event) {
+            text.withCString { ptr in
+                keyEvent.text = ptr
                 ghostty_surface_key(surface, keyEvent)
             }
+        } else {
+            ghostty_surface_key(surface, keyEvent)
         }
     }
 
@@ -1496,47 +1459,32 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     }
 
     // IMK queries these synchronously while `handleEvent` is blocked, so any
-    // cost here lands inside the keystroke. They're all constant-time by
-    // construction; the spans exist to prove that from data rather than
-    // by inspection.
+    // cost here would land inside the keystroke. Keep them constant-time.
 
-    public func selectedRange() -> NSRange {
-        Prof.span(.imeCallback) { NSRange(location: NSNotFound, length: 0) }
-    }
+    public func selectedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
 
     public func markedRange() -> NSRange {
-        Prof.span(.imeCallback) {
-            markedText.length > 0 ? NSRange(location: 0, length: markedText.length)
-                                  : NSRange(location: NSNotFound, length: 0)
-        }
+        markedText.length > 0 ? NSRange(location: 0, length: markedText.length)
+                              : NSRange(location: NSNotFound, length: 0)
     }
 
     public func attributedSubstring(forProposedRange range: NSRange,
                                     actualRange: NSRangePointer?) -> NSAttributedString? {
-        Prof.span(.imeCallback) { nil }
+        nil
     }
 
-    public func validAttributesForMarkedText() -> [NSAttributedString.Key] {
-        Prof.span(.imeCallback) { [] }
-    }
+    public func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
 
-    public func characterIndex(for point: NSPoint) -> Int {
-        Prof.span(.imeCallback) { 0 }
-    }
+    public func characterIndex(for point: NSPoint) -> Int { 0 }
 
     /// Where the IME candidate window should anchor. We don't track the exact
     /// cell cursor here, so anchor near the bottom-left of the surface — good
     /// enough that the candidate list is visible and near the typing area.
     public func firstRect(forCharacterRange range: NSRange,
                           actualRange: NSRangePointer?) -> NSRect {
-        // Measured separately from the other IME callbacks: unlike them this one
-        // isn't a constant — `convertToScreen` can involve the window server, and
-        // IMK asks for it on every keystroke.
-        Prof.span(.imeFirstRect) {
-            let local = NSRect(x: 4, y: bounds.height - 24, width: 1, height: 20)
-            let inWindow = convert(local, to: nil)
-            return window?.convertToScreen(inWindow) ?? inWindow
-        }
+        let local = NSRect(x: 4, y: bounds.height - 24, width: 1, height: 20)
+        let inWindow = convert(local, to: nil)
+        return window?.convertToScreen(inWindow) ?? inWindow
     }
 
     /// Special keys routed by the input system (Enter/Tab/Backspace/arrows/Esc).
