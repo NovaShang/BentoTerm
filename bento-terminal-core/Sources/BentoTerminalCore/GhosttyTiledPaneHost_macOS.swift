@@ -936,17 +936,22 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// ⌘D/⌘⇧D (and the pane-menu split items, hidden there) are no-ops.
     private var splitsAllowed: Bool { viewModel.sessionMode != .list }
 
-    /// tmux's five named layouts, under their real names, running the real
-    /// `select-layout`. They already existed on the server side and Bento simply
-    /// never offered them — hiding a capability doesn't simplify anything, it
-    /// just leaves the user unable to find it. Using tmux's names means the
-    /// menu and `select-layout even-horizontal` are interchangeable.
-    private static let tmuxLayouts = [
-        ("even-horizontal", "Panes in a row"),
-        ("even-vertical", "Panes in a column"),
-        ("main-horizontal", "One large pane on top"),
-        ("main-vertical", "One large pane on the left"),
-        ("tiled", "Even grid"),
+    /// tmux's five named layouts. The MENU says what you will see; the tmux
+    /// name rides along in the tooltip.
+    ///
+    /// This is the one place the "use tmux's own words" rule is deliberately
+    /// relaxed, because tmux's words are actively misleading here:
+    /// `even-horizontal` produces side-by-side COLUMNS (it splits along the
+    /// horizontal axis), which reads backwards to almost everyone — and the
+    /// same trap already bit the Split labels. A label that describes the
+    /// result is honest; the tooltip keeps the name you'd type at a command
+    /// line, so nothing is hidden.
+    static let tmuxLayouts: [(slug: String, label: String, symbol: String)] = [
+        ("even-horizontal", "Even Columns", "rectangle.split.3x1"),
+        ("even-vertical", "Even Rows", "rectangle.split.1x2"),
+        ("main-horizontal", "Main Pane on Top", "rectangle.tophalf.inset.filled"),
+        ("main-vertical", "Main Pane on Left", "rectangle.leadinghalf.inset.filled"),
+        ("tiled", "Grid", "square.grid.2x2"),
     ]
 
     private func layoutMenuItem() -> NSMenuItem {
@@ -954,11 +959,12 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         root.image = NSImage(systemSymbolName: "square.grid.2x2",
                              accessibilityDescription: "Layout")
         let sub = NSMenu()
-        for (name, note) in Self.tmuxLayouts {
-            let it = NSMenuItem(title: name, action: #selector(applyLayout(_:)), keyEquivalent: "")
+        for layout in Self.tmuxLayouts {
+            let it = NSMenuItem(title: layout.label, action: #selector(applyLayout(_:)), keyEquivalent: "")
             it.target = self
-            it.representedObject = name
-            it.toolTip = note
+            it.representedObject = layout.slug
+            it.toolTip = "tmux: select-layout \(layout.slug)"
+            it.image = NSImage(systemSymbolName: layout.symbol, accessibilityDescription: layout.label)
             sub.addItem(it)
         }
         root.submenu = sub
@@ -1070,18 +1076,17 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             PaletteItem(id: "cmd:" + id, title: title, systemImage: image,
                         matchText: title, action: .run(run))
         }
-        // tmux's named layouts, searchable by the name you'd type at a tmux
-        // command line ("Layout: main-vertical" matches both "layout" and
-        // "main-vertical").
-        let layouts = Self.tmuxLayouts.map { name, note in
-            PaletteItem(id: "cmd:layout-" + name,
-                        title: "Layout: \(name)",
-                        systemImage: "square.grid.2x2",
-                        matchText: "layout \(name) \(note)",
+        // Layouts are searchable by BOTH the readable label and the tmux slug,
+        // so "grid" and "tiled" both find the same entry.
+        let layouts = Self.tmuxLayouts.map { layout in
+            PaletteItem(id: "cmd:layout-" + layout.slug,
+                        title: "Layout: \(layout.label)",
+                        systemImage: layout.symbol,
+                        matchText: "layout \(layout.label) \(layout.slug)",
                         action: .run { [weak self] in
                             guard let self, let window = self.viewModel.activeWindowID else { return }
                             Task { [viewModel = self.viewModel] in
-                                _ = await viewModel.applyWindowLayout(window, layout: name)
+                                _ = await viewModel.applyWindowLayout(window, layout: layout.slug)
                             }
                         })
         }
@@ -1218,23 +1223,28 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         BentoTerminalWindow.newWindow()
     }
 
-    /// Switch to the Nth tmux window (⌘1..⌘9), 1-based, in tab order. No-op if
-    /// there's no window at that ordinal.
-    private func selectWindow(ordinal n: Int) {
-        let windows = viewModel.windows
-        guard n >= 1, n <= windows.count else { return }
-        viewModel.selectWindow(windows[n - 1].id)
+    /// Switch to the window with tmux's `#{window_index}` == n (⌘0..⌘9).
+    ///
+    /// This targets the INDEX, not the nth position, so ⌘3 goes where
+    /// `select-window -t 3` and tmux's own `prefix 3` go — and to the window the
+    /// toolbar labels `3:…`. Indices are sparse once windows are closed (1, 3,
+    /// 7…), so some digits do nothing; that is tmux's behavior, and it beats a
+    /// key that silently lands somewhere other than the label says.
+    private func selectWindow(index n: Int) {
+        guard let window = viewModel.windows.first(where: { $0.index == n }) else { return }
+        viewModel.selectWindow(window.id)
     }
 
-    @objc public func selectWindow1(_ sender: Any?) { selectWindow(ordinal: 1) }
-    @objc public func selectWindow2(_ sender: Any?) { selectWindow(ordinal: 2) }
-    @objc public func selectWindow3(_ sender: Any?) { selectWindow(ordinal: 3) }
-    @objc public func selectWindow4(_ sender: Any?) { selectWindow(ordinal: 4) }
-    @objc public func selectWindow5(_ sender: Any?) { selectWindow(ordinal: 5) }
-    @objc public func selectWindow6(_ sender: Any?) { selectWindow(ordinal: 6) }
-    @objc public func selectWindow7(_ sender: Any?) { selectWindow(ordinal: 7) }
-    @objc public func selectWindow8(_ sender: Any?) { selectWindow(ordinal: 8) }
-    @objc public func selectWindow9(_ sender: Any?) { selectWindow(ordinal: 9) }
+    @objc public func selectWindow0(_ sender: Any?) { selectWindow(index: 0) }
+    @objc public func selectWindow1(_ sender: Any?) { selectWindow(index: 1) }
+    @objc public func selectWindow2(_ sender: Any?) { selectWindow(index: 2) }
+    @objc public func selectWindow3(_ sender: Any?) { selectWindow(index: 3) }
+    @objc public func selectWindow4(_ sender: Any?) { selectWindow(index: 4) }
+    @objc public func selectWindow5(_ sender: Any?) { selectWindow(index: 5) }
+    @objc public func selectWindow6(_ sender: Any?) { selectWindow(index: 6) }
+    @objc public func selectWindow7(_ sender: Any?) { selectWindow(index: 7) }
+    @objc public func selectWindow8(_ sender: Any?) { selectWindow(index: 8) }
+    @objc public func selectWindow9(_ sender: Any?) { selectWindow(index: 9) }
 
     /// New tmux window (⌃⌘T), dispatched by mode: in List it's THE creation
     /// action — a new window seeded from the current pane (same as the
@@ -1245,6 +1255,25 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             Task { [viewModel] in await viewModel.newListWindow(.duplicateCurrent) }
         } else {
             viewModel.newWindow()
+        }
+    }
+
+    /// New window seeded from the current pane — same two seeds a split offers,
+    /// so "another window" and "another pane" are created the same way and only
+    /// differ in where the thing lands.
+    @objc func newWindowDuplicate(_ sender: Any?) {
+        Task { [viewModel] in await viewModel.newListWindow(.duplicateCurrent) }
+    }
+
+    @objc func newWindowPathCommand(_ sender: Any?) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let cwd = await self.viewModel.activePaneWorkingDirectory()
+            presentNewPaneDirectoryPanel(
+                title: "New Window", prompt: "Create", initialDirectory: cwd
+            ) { [viewModel = self.viewModel] path, command in
+                Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
+            }
         }
     }
 
@@ -1272,9 +1301,15 @@ public enum BentoPaneAction {
     public static let previousPane = #selector(GhosttyTiledPaneHost.selectPreviousPane(_:))
     public static let newWindow = #selector(GhosttyTiledPaneHost.newTerminalWindow(_:))
     public static let newTmuxWindow = #selector(GhosttyTiledPaneHost.newTmuxWindow(_:))
+    public static let splitDuplicate = #selector(GhosttyTiledPaneHost.splitDuplicateCurrent(_:))
+    public static let splitPathCommand = #selector(GhosttyTiledPaneHost.splitWithPathCommand(_:))
+    public static let newWindowDuplicate = #selector(GhosttyTiledPaneHost.newWindowDuplicate(_:))
+    public static let newWindowPathCommand = #selector(GhosttyTiledPaneHost.newWindowPathCommand(_:))
 
-    /// ⌘1..⌘9 → switch to the Nth tmux window (1-based). Index 0 = ⌘1.
+    /// ⌘0..⌘9 → switch to the window whose tmux index is that digit, so the
+    /// key matches the `index:name` the toolbar shows. Array slot N = ⌘N.
     public static let selectWindow: [Selector] = [
+        #selector(GhosttyTiledPaneHost.selectWindow0(_:)),
         #selector(GhosttyTiledPaneHost.selectWindow1(_:)),
         #selector(GhosttyTiledPaneHost.selectWindow2(_:)),
         #selector(GhosttyTiledPaneHost.selectWindow3(_:)),

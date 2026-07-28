@@ -476,7 +476,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onNewPlainShell = { BentoTerminalWindow.newWindowNoTmux() }
         toolbar.onNewSSHHost = { BentoTerminalWindow.newSSHWindow(host: $0) }
         toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
-        toolbar.onSelectWindow = { [weak self] id in self?.activeTab?.viewModel.selectWindow(id) }
         toolbar.onCloseWindow = { [weak self] in self?.activeTab?.viewModel.closeWindow() }
         toolbar.onFitSession = { [weak self] in self?.activeTab?.paneHost?.refitSessionToWindow() }
         toolbar.onSelectMode = { [weak self] mode in self?.requestMode(mode) }
@@ -487,8 +486,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             self.removeTab(tab)   // plain tabs vanish; there's nothing to reconnect
         }
         toolbar.onRenameSession = { [weak self] in self?.presentRenameSheet() }
-        toolbar.onMoveTabLeft = { [weak self] in self?.moveActiveSession(by: -1) }
-        toolbar.onMoveTabRight = { [weak self] in self?.moveActiveSession(by: 1) }
         win.toolbar = toolbar.makeToolbar()
         win.toolbarStyle = .unified
         // Remember the window's size + position across launches (AppKit persists
@@ -893,15 +890,17 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     // MARK: Bindings
 
-    /// Active tab → toolbar (the ⋯ menu's window list targets the active VM).
+    /// Active tab → toolbar. The centre strip IS the window list now, so it has
+    /// to rebuild whenever the session's windows or its current window change —
+    /// a window opened from a tmux command line shows up here too.
     private func rebindActiveToolbar(_ tab: SessionTab) {
         activeCancellables.removeAll()
         tab.viewModel.$windows
             .combineLatest(tab.viewModel.$activeWindowID)
             .receive(on: RunLoop.main)
-            .sink { [weak self] windows, activeID in
-                self?.toolbar.windows = windows
-                self?.toolbar.activeWindowID = activeID
+            .sink { [weak self, weak tab] _, _ in
+                guard let self, let tab, tab === self.activeTab else { return }
+                self.rebuildTabBar()
             }
             .store(in: &activeCancellables)
         // Mode drives the toolbar's Tiled|List switch and the sidebar (List
@@ -1032,13 +1031,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         }
         let activeIdx = activeWindowID.flatMap { id in visible.firstIndex { $0.id == id } } ?? -1
         toolbar.updateTabs(items, selected: activeIdx)
-        toolbar.windows = tmuxWindows
-        toolbar.activeWindowID = activeWindowID
-        // Reordering applies to sessions, which now live in the left menu.
-        toolbar.canMoveTabLeft = (activeKey.flatMap { sessionOrder.firstIndex(of: $0) } ?? 0) > 0
-        toolbar.canMoveTabRight = activeKey.flatMap { key in
-            sessionOrder.firstIndex(of: key).map { $0 < sessionOrder.count - 1 }
-        } ?? false
 
         if let active = activeTab {
             let name = active.viewModel.activeTmuxSessionName ?? active.windowTitle
@@ -1048,18 +1040,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Swap the active session with its neighbour `delta` slots away (−1 up,
-    /// +1 down) in the persisted order. Sessions are listed in the left button's
-    /// menu now, so this reorders that list.
-    private func moveActiveSession(by delta: Int) {
-        guard let key = activeKey,
-              let a = sessionOrder.firstIndex(of: key) else { return }
-        let b = a + delta
-        guard sessionOrder.indices.contains(b) else { return }
-        sessionOrder.swapAt(a, b)
-        persistSessionOrder()
-        rebuildTabBar()
-    }
 
     /// Map a visible-segment index to an action: the trailing `⋯` pops the full
     /// window list; any other segment selects that window.

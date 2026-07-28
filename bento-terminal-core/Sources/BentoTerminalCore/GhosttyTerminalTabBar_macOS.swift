@@ -10,10 +10,13 @@ import SwiftTmux
 /// (borderless ≤14, bordered "glass" on 26+).
 ///
 /// Layout (left → right):
-///   [▢ <session> ⌄]   ⸺flex⸺   [＋ New ⌄]   [⋯]
-/// The Sessions button pops the menubar's two-level session list; New pops the
-/// four creation methods (each with a plain title + one-line description); ⋯
-/// holds this-session actions plus Settings.
+///   [▢ <session> ⌄] [Parallel│Focus]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋ New ⌄] [⚙] [▤]
+///
+/// The named left button carries the session (its switcher today, its actions
+/// once sessions become native window tabs); the centre strip is the current
+/// session's tmux WINDOWS, labelled `index:name` the way `list-windows` labels
+/// them; New creates at every level (session / window / pane) plus the two
+/// non-tmux things; ⚙ opens Settings; ▤ toggles the preview dock.
 @MainActor
 final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     var onNewAgent: (() -> Void)?
@@ -21,7 +24,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     var onNewPlainShell: (() -> Void)?
     var onNewSSHHost: ((String) -> Void)?
     var onOpenSettings: (() -> Void)?
-    var onSelectWindow: ((TmuxWindowID) -> Void)?
     var onCloseWindow: (() -> Void)?
     var onRenameSession: (() -> Void)?
     var onDetach: (() -> Void)?
@@ -31,12 +33,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// The Tiled|List mode switch picked a mode (the manager runs `setMode`,
     /// warning first when a mixed external structure must be flattened).
     var onSelectMode: ((TmuxSessionMode) -> Void)?
-    var onMoveTabLeft: (() -> Void)?
-    var onMoveTabRight: (() -> Void)?
     var onTogglePreview: (() -> Void)?
 
-    var windows: [SwiftTmux.TmuxWindow] = []
-    var activeWindowID: TmuxWindowID?
     /// Every session Bento knows about, with its status dot — the left button's
     /// menu is the session switcher (the centre strip belongs to windows).
     var sessions: [(key: String, dot: NSImage?)] = []
@@ -44,10 +42,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     var onSelectSession: ((String) -> Void)?
     /// The active tab is a plain (no-tmux) terminal — its menu is just "Close".
     var activeTabIsPlain = false
-    /// Whether the active tab has a neighbor to swap with in each direction (drives
-    /// the "Move Tab Left/Right" reorder items in the right-click menu).
-    var canMoveTabLeft = false
-    var canMoveTabRight = false
 
     private let sessionsButton = NSButton()
     /// Tiled|List — the session's structural mode, next to the session button.
@@ -315,18 +309,15 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         pop(sessionActionsMenu(), from: sessionsButton)
     }
 
-    /// The current session's actions — the same menu the named left button and a
-    /// right-click on the tab strip both present. Operates on the active session.
-    /// Per the two-mode model, windows are de-emphasized here: only close and
-    /// switch remain (compat) — creation lives in the List sidebar / pane split
-    /// menus, and there is deliberately no rename (names derive live).
+    /// The session switcher plus this session's actions, behind the named left
+    /// button. Window switching lives in the centre strip and window creation in
+    /// the New menu, so neither is duplicated here.
     func sessionActionsMenu() -> NSMenu {
         let menu = NSMenu()
-        // Every session, the current one checkmarked — this button IS the
-        // session switcher now.
+        // Every session, the current one checkmarked. This is the switcher
+        // until sessions become native window tabs; then it goes away and only
+        // the actions below remain.
         sessionSwitchSection(menu)
-        // Reorder the active session in that list.
-        addMoveItems(to: menu)
         // A plain (no-tmux) terminal has no session/windows — just close it.
         if activeTabIsPlain {
             add(menu, "Close Terminal", #selector(closeTabAction))
@@ -372,22 +363,54 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         onSelectSession?(key)
     }
 
-    /// The ways to create something, each a plain title + a one-line explanation.
-    /// (Per-session "New Window" lives in the session menu, not here.)
+    /// Everything you can create, grouped by which level of tmux it lands on —
+    /// session, then window, then pane — with the two non-tmux things last.
+    ///
+    /// The old list mixed levels and named them by adjective: "New Multi Pane
+    /// Session" and "New Persistent Session" are both just tmux sessions
+    /// ("multi pane" is a layout, not a kind; EVERY tmux session is
+    /// persistent), and neither said anything about windows or panes, which
+    /// you could only create from elsewhere entirely.
     @objc private func newTapped() {
         let menu = NSMenu()
+
+        section(menu, "Session")
         menu.addItem(richItem(
-            symbol: "square.grid.2x2", title: "New Multi Pane Session",
-            note: "Set up an AI agent (Claude, Codex…) in a fresh tmux session laid out in panes.",
+            symbol: "sparkles", title: "New Session with Agent…",
+            note: "Set up an agent (Claude, Codex…) in a fresh tmux session, optionally split into panes.",
             action: #selector(newAgentAction)))
         menu.addItem(richItem(
-            symbol: "clock.arrow.circlepath", title: "New Persistent Session",
-            note: "A blank tmux session that keeps running on the server — reconnect anytime.",
+            symbol: "clock.arrow.circlepath", title: "New Empty Session",
+            note: "A blank tmux session on the host — it keeps running after you disconnect.",
             action: #selector(newTerminalAction)))
-        menu.addItem(.separator())
+
+        // Window and Pane offer the SAME two seeds — they differ only in where
+        // the new thing lands, so making them differ in how you create it would
+        // be an accident of history, not a distinction.
+        section(menu, "Window")
         menu.addItem(richItem(
-            symbol: "terminal", title: "New Plain Terminal",
-            note: "A quick shell with no tmux. Opens as a tab; closing it discards it for good.",
+            symbol: "plus.rectangle.on.folder", title: "Duplicate Current",
+            note: "A tmux window with the current pane's folder and command.",
+            action: #selector(newWindowDuplicateAction)))
+        menu.addItem(richItem(
+            symbol: "rectangle.badge.plus", title: "Path & Command…",
+            note: "A tmux window, choosing the folder and what to run in it.",
+            action: #selector(newWindowPathCommandAction)))
+
+        section(menu, "Pane")
+        menu.addItem(richItem(
+            symbol: "plus.square.on.square", title: "Duplicate Current",
+            note: "Split off a pane with the same folder and command.",
+            action: #selector(newPaneDuplicateAction)))
+        menu.addItem(richItem(
+            symbol: "terminal", title: "Path & Command…",
+            note: "Split off a pane, choosing the folder and what to run in it.",
+            action: #selector(newPanePathCommandAction)))
+
+        section(menu, "Other")
+        menu.addItem(richItem(
+            symbol: "macwindow", title: "New Terminal (no tmux)",
+            note: "A quick local shell. Closing it discards it for good.",
             action: #selector(newPlainShellAction)))
         let ssh = richItem(
             symbol: "network", title: "New SSH Connection",
@@ -395,7 +418,16 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             action: nil)
         ssh.submenu = sshHostsSubmenu()
         menu.addItem(ssh)
+
         pop(menu, from: newButton)
+    }
+
+    /// A disabled header row, preceded by a separator except at the top.
+    private func section(_ menu: NSMenu, _ title: String) {
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        let header = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
     }
 
     /// One item per concrete host in ~/.ssh/config (re-read on every open, so
@@ -464,15 +496,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         menu.addItem(item)
     }
 
-    /// Prepend the reorder items for the available direction(s), then a separator.
-    /// Unavailable directions are omitted (rather than disabled) so the menu stays
-    /// clean at the ends of the strip.
-    private func addMoveItems(to menu: NSMenu) {
-        var added = false
-        if canMoveTabLeft { add(menu, "Move Tab Left", #selector(moveTabLeftAction)); added = true }
-        if canMoveTabRight { add(menu, "Move Tab Right", #selector(moveTabRightAction)); added = true }
-        if added { menu.addItem(.separator()) }
-    }
 
     private func pop(_ menu: NSMenu, from button: NSView) {
         if let event = NSApp.currentEvent {
@@ -488,9 +511,14 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func newTerminalAction() { onNewTerminal?() }
     @objc private func closeWindowAction() { onCloseWindow?() }
     @objc private func closeTabAction() { onCloseTab?() }
-    @objc private func moveTabLeftAction() { onMoveTabLeft?() }
-    @objc private func moveTabRightAction() { onMoveTabRight?() }
     @objc private func newPlainShellAction() { onNewPlainShell?() }
+    // Window / pane creation goes through the responder chain, the same route
+    // the menu bar and the pane menu use, so it always lands on the pane host
+    // of whichever tab is active.
+    @objc private func newWindowDuplicateAction() { BentoPaneAction.dispatch(BentoPaneAction.newWindowDuplicate) }
+    @objc private func newWindowPathCommandAction() { BentoPaneAction.dispatch(BentoPaneAction.newWindowPathCommand) }
+    @objc private func newPaneDuplicateAction() { BentoPaneAction.dispatch(BentoPaneAction.splitDuplicate) }
+    @objc private func newPanePathCommandAction() { BentoPaneAction.dispatch(BentoPaneAction.splitPathCommand) }
     @objc private func newSSHHostAction(_ sender: NSMenuItem) {
         if let host = sender.representedObject as? String { onNewSSHHost?(host) }
     }
@@ -499,9 +527,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func detachAction() { onDetach?() }
     @objc private func killAction() { onKillSession?() }
     @objc private func fitSessionAction() { onFitSession?() }
-    @objc private func selectWindowAction(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? TmuxWindowID { onSelectWindow?(id) }
-    }
 }
 
 #endif

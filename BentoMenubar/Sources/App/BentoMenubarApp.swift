@@ -86,12 +86,13 @@ struct TerminalCommands: Commands {
             Button("Toggle Zoom") { BentoPaneAction.dispatch(BentoPaneAction.toggleZoom) }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
             Divider()
-            // ⌘1..⌘9 → switch tmux window. Tucked in a submenu to keep the top
-            // level tidy; the shortcuts fire whether or not the submenu is open.
+            // ⌘0..⌘9 → the window whose tmux INDEX is that digit, matching the
+            // `index:name` the toolbar shows and tmux's own `prefix <n>`.
+            // Tucked in a submenu; the shortcuts fire whether it's open or not.
             Menu("Select Window") {
-                ForEach(1...9, id: \.self) { n in
+                ForEach(0...9, id: \.self) { n in
                     Button("Window \(n)") {
-                        BentoPaneAction.dispatch(BentoPaneAction.selectWindow[n - 1])
+                        BentoPaneAction.dispatch(BentoPaneAction.selectWindow[n])
                     }
                     .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
                 }
