@@ -631,14 +631,23 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
 
     // MARK: - Scroll
 
+    /// Rows scrolled per row of finger travel, for high-precision (trackpad)
+    /// deltas. AppKit already accelerates those deltas, so tracking them 1:1
+    /// overshoots when you're reading text — half speed is the readable ratio.
+    /// Lower this to slow the trackpad further; the mouse wheel is unaffected.
+    private static let trackpadScrollRatio = 0.5
+
+    /// Sub-row remainder for the trackpad → wheel-report path, so a slow drag
+    /// still accumulates to whole rows instead of being truncated away.
+    private var wheelReportAccum: CGFloat = 0
+
     public override func scrollWheel(with event: NSEvent) {
         clearPathHover()   // rows shift under the cursor; stale highlight lies
         guard let surface else { return }
 
         // Mouse-reporting pane → forward wheel as button 64 (up) / 65 (down).
-        // One report per wheel event; coalesced trackpad deltas are fine here.
-        if mouseReporting.any, abs(event.scrollingDeltaY) > 0.0 {
-            forwardMouse(event, button: event.scrollingDeltaY > 0 ? 64 : 65, press: true)
+        if mouseReporting.any {
+            forwardScrollAsWheel(event)
             return
         }
 
@@ -664,7 +673,17 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
 
         var x = event.scrollingDeltaX
         var y = event.scrollingDeltaY
-        if !event.hasPreciseScrollingDeltas {
+        if event.hasPreciseScrollingDeltas {
+            // ghostty's precise path reads the delta in DEVICE PIXELS (it divides
+            // by the cell's pixel height to get rows), but AppKit reports trackpad
+            // deltas in POINTS — passing them raw made the speed depend on the
+            // display: 1:1 with the finger on a non-Retina monitor, half that on
+            // Retina. Convert points → pixels, then apply the ratio so every
+            // display scrolls alike.
+            let s = Double(currentScale) * Self.trackpadScrollRatio
+            x *= s
+            y *= s
+        } else {
             // Mouse wheel: deltas are in lines — scale so each notch moves a few rows.
             x *= 3
             y *= 3
@@ -672,6 +691,33 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         ghostty_surface_mouse_scroll(surface, x, y, mods)
         ghostty_surface_refresh(surface)
         setNeedsDraw()
+    }
+
+    /// Forward a scroll to a mouse-reporting program (an alt-screen TUI) as wheel
+    /// button reports. A wheel notch is one report, but a trackpad emits a
+    /// continuous stream of tiny deltas at ~60-120 Hz — one report each sent the
+    /// TUI flying. Accumulate the precise deltas and emit one report per whole
+    /// cell-row of travel instead, matching the touch path on iOS.
+    private func forwardScrollAsWheel(_ event: NSEvent) {
+        let dy = event.scrollingDeltaY
+        guard event.hasPreciseScrollingDeltas else {
+            guard dy != 0 else { return }
+            forwardMouse(event, button: dy > 0 ? 64 : 65, press: true)
+            return
+        }
+        if event.phase == .began { wheelReportAccum = 0 }   // fresh gesture
+        guard let cs = currentSize, cs.cellHeightPx > 0 else { return }
+        // Points of finger travel per report — the same ratio the local
+        // scrollback path uses, so both kinds of pane scroll at one speed.
+        let rowH = CGFloat(cs.cellHeightPx) / currentScale / Self.trackpadScrollRatio
+        wheelReportAccum += dy
+        let rows = Int(wheelReportAccum / rowH)
+        guard rows != 0 else { return }
+        wheelReportAccum -= CGFloat(rows) * rowH
+        let button = rows > 0 ? 64 : 65
+        // Cap the burst: a flick's momentum tail can cross many rows in one
+        // event, and TUIs handle a wall of wheel reports poorly.
+        for _ in 0..<min(abs(rows), 8) { forwardMouse(event, button: button, press: true) }
     }
 
     public override func mouseMoved(with event: NSEvent) {
