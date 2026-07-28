@@ -1434,30 +1434,48 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         setNeedsDraw()
     }
 
-    public func selectedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
+    // IMK queries these synchronously while `handleEvent` is blocked, so any
+    // cost here lands inside the keystroke. They're all constant-time by
+    // construction; the spans exist to prove that from data rather than
+    // by inspection.
+
+    public func selectedRange() -> NSRange {
+        Prof.span(.imeCallback) { NSRange(location: NSNotFound, length: 0) }
+    }
 
     public func markedRange() -> NSRange {
-        markedText.length > 0 ? NSRange(location: 0, length: markedText.length)
-                              : NSRange(location: NSNotFound, length: 0)
+        Prof.span(.imeCallback) {
+            markedText.length > 0 ? NSRange(location: 0, length: markedText.length)
+                                  : NSRange(location: NSNotFound, length: 0)
+        }
     }
 
     public func attributedSubstring(forProposedRange range: NSRange,
                                     actualRange: NSRangePointer?) -> NSAttributedString? {
-        nil
+        Prof.span(.imeCallback) { nil }
     }
 
-    public func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+    public func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+        Prof.span(.imeCallback) { [] }
+    }
 
-    public func characterIndex(for point: NSPoint) -> Int { 0 }
+    public func characterIndex(for point: NSPoint) -> Int {
+        Prof.span(.imeCallback) { 0 }
+    }
 
     /// Where the IME candidate window should anchor. We don't track the exact
     /// cell cursor here, so anchor near the bottom-left of the surface — good
     /// enough that the candidate list is visible and near the typing area.
     public func firstRect(forCharacterRange range: NSRange,
                           actualRange: NSRangePointer?) -> NSRect {
-        let local = NSRect(x: 4, y: bounds.height - 24, width: 1, height: 20)
-        let inWindow = convert(local, to: nil)
-        return window?.convertToScreen(inWindow) ?? inWindow
+        // Measured separately from the other IME callbacks: unlike them this one
+        // isn't a constant — `convertToScreen` can involve the window server, and
+        // IMK asks for it on every keystroke.
+        Prof.span(.imeFirstRect) {
+            let local = NSRect(x: 4, y: bounds.height - 24, width: 1, height: 20)
+            let inWindow = convert(local, to: nil)
+            return window?.convertToScreen(inWindow) ?? inWindow
+        }
     }
 
     /// Special keys routed by the input system (Enter/Tab/Backspace/arrows/Esc).

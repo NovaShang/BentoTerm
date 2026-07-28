@@ -5,7 +5,8 @@ import ServiceManagement
 import SwiftUI
 
 /// AppDelegate owns:
-///   - the daemon's lifecycle (start on launch, SIGTERM on terminate)
+///   - starting the daemon on launch (stopping it is explicit — see
+///     applicationWillTerminate)
 ///   - the background polling timer that refreshes status + tmux sessions
 ///
 /// Polling lives here, NOT in MenuContent, because the `MenuBarExtra` content
@@ -108,10 +109,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
+    /// Quitting takes down the GUI, NOT the background service.
+    ///
+    /// This used to SIGTERM the daemon on the way out, which welded the two
+    /// lifecycles together and defeated the point of having a daemon at all:
+    /// the relay exists so the phone can reach this Mac while nobody is sitting
+    /// at it. Quit the window half and the phone lost the Mac with it. The
+    /// daemon is a separate, launchd-managed process now — the menubar is its
+    /// control surface, not its container, and "Stop background service" is how
+    /// you shut it down on purpose.
     func applicationWillTerminate(_ notification: Notification) {
         Prof.flush()
         TelemetryService.shared.flush()
-        sendSIGTERMToDaemon()
     }
 
     /// Clicking the app icon while the menubar app is already running (Dock,
@@ -216,20 +225,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         tmuxWindows = fresh
     }
 
-    private func sendSIGTERMToDaemon() {
-        let home: URL
-        if let env = ProcessInfo.processInfo.environment["BENTO_HOME"] {
-            home = URL(fileURLWithPath: env)
-        } else {
-            home = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".bento")
-        }
-        let pidPath = home.appendingPathComponent("daemon.pid")
-        guard let txt = try? String(contentsOf: pidPath, encoding: .utf8),
-              let pid = pid_t(txt.trimmingCharacters(in: .whitespacesAndNewlines))
-        else { return }
-        kill(pid, SIGTERM)
-    }
 }
 
 /// LoginItem wraps the macOS 13+ Service Management API so the toggle in

@@ -53,6 +53,20 @@ struct MenuContent: View {
             .disabled(true)
         }
 
+        // The counterpart to Start: the service outlives the GUI on purpose,
+        // so there has to be a deliberate way to stop it. Quitting no longer
+        // does it by accident.
+        if app.status != nil {
+            Button(action: {
+                Task {
+                    try? await bento.stopDaemon()
+                    await app.refresh()
+                }
+            }) {
+                Label("Stop background service", systemImage: "stop.circle")
+            }
+        }
+
         Divider()
 
         // The one thing only this menu can do: with no window open the app has

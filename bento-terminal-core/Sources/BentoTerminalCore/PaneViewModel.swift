@@ -53,6 +53,7 @@ public final class PaneViewModel: ObservableObject, Identifiable {
 
     /// Feed data to this pane — appended to history and forwarded if bound.
     public func feedData(_ data: Data) {
+        Prof.noteOutputBytes(data.count)
         Prof.span(.paneFeed) {
             let clean = titleStripper.strip(data)
             guard !clean.isEmpty else { return }

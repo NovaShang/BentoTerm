@@ -41,6 +41,15 @@ public enum Prof {
         /// re-entered from inside a keystroke. Large value here means the IME
         /// call isn't slow by itself — it's absorbing the output pipeline. [main]
         case imeReentrant
+        /// Our NSTextInputClient replies to IMK's synchronous queries
+        /// (selectedRange, markedRange, attributedSubstring, …). IMK asks on
+        /// every keystroke, so a slow reply here would show up as a slow
+        /// `imeHandleEvent`. [main]
+        case imeCallback
+        /// `firstRect(forCharacterRange:)` — measured apart from the other
+        /// callbacks because it calls `convertToScreen`, which can reach the
+        /// window server, unlike the constant-returning ones. [main]
+        case imeFirstRect
         /// `sendKeyEvent` → `ghostty_surface_key` returns. [main]
         case keyEncode
         /// ghostty's write-to-host → `PaneViewModel.sendInput` → tmux enqueue. [main]
@@ -96,6 +105,8 @@ public enum Prof {
             case .keyEventLag: return "keyEventLag"
             case .imeHandleEvent: return "imeHandleEvent"
             case .imeReentrant: return "imeReentrant"
+            case .imeCallback: return "imeCallback"
+            case .imeFirstRect: return "imeFirstRect"
             case .keyEncode: return "keyEncode"
             case .hostWrite: return "hostWrite"
             case .inputBatchWait: return "inputBatchWait"
@@ -134,7 +145,8 @@ public enum Prof {
         /// the output stages it is measuring.
         var onMain: Bool {
             switch self {
-            case .keyDown, .imeHandleEvent, .keyEncode, .hostWrite, .routeIn,
+            case .keyDown, .imeHandleEvent, .imeCallback, .imeFirstRect,
+                 .keyEncode, .hostWrite, .routeIn,
                  .drain, .paneFeed, .historyTrim, .runtimeTick:
                 return true
             default:
@@ -217,6 +229,11 @@ public enum Prof {
         /// When the OLDEST byte currently sitting in tmux's input coalesce
         /// buffer was enqueued. 0 = buffer empty.
         var inputEnqueuedNs: UInt64 = 0
+        /// Terminal output bytes delivered to panes — how hard the OTHER panes
+        /// are working while you type, which is the variable being tested.
+        var outputBytes: UInt64 = 0
+        /// Label for the current measurement window (set when resetting).
+        var label: String = ""
     }
 
     private static let state = OSAllocatedUnfairLock(initialState: State())
@@ -283,6 +300,14 @@ public enum Prof {
     public static func end(_ stage: Stage, since t0: UInt64, topLevel: Bool = true) {
         guard enabled else { return }
         mark(stage, ns: now() &- t0, topLevel: topLevel)
+    }
+
+    /// Terminal output bytes delivered to a pane. Drives the throughput figure,
+    /// so a run can be read as "at N KB/s of output, typing cost M ms".
+    @inline(__always)
+    public static func noteOutputBytes(_ n: Int) {
+        guard enabled, n > 0 else { return }
+        state.withLockUnchecked { $0.outputBytes &+= UInt64(n) }
     }
 
     /// Main-thread output-pipeline nanoseconds so far. Diff across a region to
@@ -429,8 +454,41 @@ public enum Prof {
         CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
         runLoopObserver = observer
 
+        installSignalHandlers()
         startDumpTimer()
         dumpQueue.async { writeSummary(header: "profiler armed") }
+    }
+
+    // MARK: - Scenario control (signals)
+
+    private nonisolated(unsafe) static var signalSources: [DispatchSourceSignal] = []
+    private nonisolated(unsafe) static var snapshotSeq = 0
+
+    /// Comparing scenarios (idle panes vs busy panes, IME on vs off) needs a
+    /// clean window per scenario. Restarting the app for each one loses the
+    /// point, and quantiles can't be subtracted, so drive it with signals:
+    ///
+    ///   kill -USR1 <pid>   start a fresh window (counters zeroed)
+    ///   kill -USR2 <pid>   save the current window to <out>.N.txt
+    private static func installSignalHandlers() {
+        for sig in [SIGUSR1, SIGUSR2] {
+            // GCD's signal source only observes; the default disposition still
+            // applies and would kill the process. Ignore it first.
+            signal(sig, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: dumpQueue)
+            src.setEventHandler {
+                if sig == SIGUSR1 {
+                    reset()
+                    writeSummary(header: "window reset")
+                } else {
+                    snapshotSeq += 1
+                    let path = "\(outputPath).\(snapshotSeq).txt"
+                    writeSummary(header: "snapshot \(snapshotSeq)", to: path)
+                }
+            }
+            src.resume()
+            signalSources.append(src)
+        }
     }
 
     private static func closeTurn(busyNs: UInt64) {
@@ -514,10 +572,10 @@ public enum Prof {
         return String(format: "%5.2fms", Double(ns) / 1_000_000)
     }
 
-    private static func writeSummary(header: String?) {
+    private static func writeSummary(header: String?, to path: String? = nil) {
         guard enabled else { return }
-        let (snaps, worstNs, worstAccum, h16, h33, h100, busyNs, elapsed) =
-            state.withLockUnchecked { s -> ([Snapshot], UInt64, [UInt64], UInt64, UInt64, UInt64, UInt64, UInt64) in
+        let (snaps, worstNs, worstAccum, h16, h33, h100, busyNs, elapsed, outBytes) =
+            state.withLockUnchecked { s -> ([Snapshot], UInt64, [UInt64], UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) in
                 let snaps = Stage.allCases.compactMap { stage -> Snapshot? in
                     let st = s.stages[stage.rawValue]
                     guard st.count > 0 else { return nil }
@@ -532,15 +590,22 @@ public enum Prof {
                 }
                 let elapsed = s.startNs == 0 ? 0 : now() &- s.startNs
                 return (snaps, s.worstTurnNs, s.worstTurnAccum,
-                        s.hitches16, s.hitches33, s.hitches100, s.mainBusyNs, elapsed)
+                        s.hitches16, s.hitches33, s.hitches100, s.mainBusyNs, elapsed,
+                        s.outputBytes)
             }
 
         var out = ""
         out += "=== Bento input profile ===\n"
         if let header { out += "\(header)\n" }
+        let secs = Double(elapsed) / 1e9
         out += String(format: "window: %.1fs   main-thread busy: %.1f%%\n",
-                      Double(elapsed) / 1e9,
+                      secs,
                       elapsed == 0 ? 0 : Double(busyNs) / Double(elapsed) * 100)
+        // How hard the OTHER panes were working during this window — the load
+        // variable a scenario comparison is varying.
+        out += String(format: "output load: %.1f KB/s  (%.2f MB total)\n",
+                      secs > 0 ? Double(outBytes) / 1024 / secs : 0,
+                      Double(outBytes) / 1024 / 1024)
         out += String(format: "hitches: >16ms %llu   >33ms %llu   >100ms %llu   worst turn %.1fms\n\n",
                       h16, h33, h100, Double(worstNs) / 1e6)
 
@@ -577,7 +642,7 @@ public enum Prof {
                           ("other" as NSString).utf8String!, Double(unattributed) / 1e6)
         }
 
-        try? out.write(toFile: outputPath, atomically: true, encoding: .utf8)
+        try? out.write(toFile: path ?? outputPath, atomically: true, encoding: .utf8)
     }
 
     /// Force a summary write (e.g. on quit).
