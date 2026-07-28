@@ -602,8 +602,12 @@ struct TerminalWrapperView: View {
     /// which present after the menu dismisses).
     private var sessionMenu: some View {
         Menu {
+            // Same order as the Mac pane menu: create, then arrange, then the
+            // session-wide policy — so the two platforms can be described with
+            // one sentence instead of two.
             if viewModel.isTmuxReady {
                 splitSection
+                layoutSection
                 sessionSizeSection
             }
             Button { showSettings = true } label: {
@@ -645,23 +649,45 @@ struct TerminalWrapperView: View {
         }
     }
 
-    /// One-shot "claim the session at MY size" + the PRD §2.5 sticky
-    /// sizing-mode toggle, under a labeled section so the resize action is
-    /// findable (it used to hide as "Fit Tmux to Device").
+    /// tmux's named layouts — parity with the Mac pane menu. They were always
+    /// available on the server; only macOS had ever offered them.
     @ViewBuilder
-    private var sessionSizeSection: some View {
-        Section("Session Size") {
-            Button(action: { setSizing(.tracking) }) {
-                Label("Fit to This Device", systemImage: "arrow.down.right.and.arrow.up.left.rectangle")
-            }
-            Button(action: { setSizing(sizingMode == .tracking ? .pinned : .tracking) }) {
-                if sizingMode == .tracking {
-                    Label("Pin to Original Size", systemImage: "pin")
-                } else {
-                    Label("Track My Device", systemImage: "arrow.up.left.and.arrow.down.right")
+    private var layoutSection: some View {
+        if viewModel.sessionMode == .tiled, viewModel.paneViewModels.count > 1 {
+            Section("Layout") {
+                ForEach(TmuxNamedLayout.all) { layout in
+                    Button {
+                        guard let window = viewModel.activeWindowID else { return }
+                        Task { await viewModel.applyWindowLayout(window, layout: layout.slug) }
+                    } label: {
+                        Label(layout.label, systemImage: layout.symbol)
+                    }
                 }
             }
         }
+    }
+
+    /// The sticky sizing policy (see `TerminalSizingMode`). Two states, checked
+    /// — not a "fit it now" button, because tmux recomputes a window's size
+    /// from its clients and a one-shot push is undone by the next client.
+    @ViewBuilder
+    private var sessionSizeSection: some View {
+        Section("Session Size") {
+            ForEach(TerminalSizingMode.allCases, id: \.rawValue) { mode in
+                Button { setSizing(mode) } label: {
+                    if mode == sizingMode {
+                        Label(iosTitle(mode), systemImage: "checkmark")
+                    } else {
+                        Label(iosTitle(mode), systemImage: mode.symbol)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Same states as the Mac, said in this device's words.
+    private func iosTitle(_ mode: TerminalSizingMode) -> String {
+        mode == .tracking ? "Track This Device" : "Pin to Current Size"
     }
 
     /// Window ops: switch + close. Parallel(Tiled) ONLY, and it sits at the very

@@ -543,8 +543,9 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// responder-chain actions operate on it.
     private func showPaneMenu(for paneID: TmuxPaneID, from anchor: NSView) {
         let menu = NSMenu()
-        menu.addItem(item("Command Palette…", #selector(openCommandPalette(_:)), symbol: "command"))
-        menu.addItem(.separator())
+        // No "Command Palette…" here: the toolbar carries a permanent search
+        // field now, and a global action does not belong at the top of a menu
+        // that is otherwise entirely about THIS pane.
         let zoomed = (viewModel.zoomedPaneID == paneID)
         // Splits are Tiled mode's creation path — List mode (one pane per
         // window) creates via the sidebar's New Window instead, so no split
@@ -936,23 +937,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// ⌘D/⌘⇧D (and the pane-menu split items, hidden there) are no-ops.
     private var splitsAllowed: Bool { viewModel.sessionMode != .list }
 
-    /// tmux's five named layouts. The MENU says what you will see; the tmux
-    /// name rides along in the tooltip.
-    ///
-    /// This is the one place the "use tmux's own words" rule is deliberately
-    /// relaxed, because tmux's words are actively misleading here:
-    /// `even-horizontal` produces side-by-side COLUMNS (it splits along the
-    /// horizontal axis), which reads backwards to almost everyone — and the
-    /// same trap already bit the Split labels. A label that describes the
-    /// result is honest; the tooltip keeps the name you'd type at a command
-    /// line, so nothing is hidden.
-    static let tmuxLayouts: [(slug: String, label: String, symbol: String)] = [
-        ("even-horizontal", "Even Columns", "rectangle.split.3x1"),
-        ("even-vertical", "Even Rows", "rectangle.split.1x2"),
-        ("main-horizontal", "Main Pane on Top", "rectangle.tophalf.inset.filled"),
-        ("main-vertical", "Main Pane on Left", "rectangle.leadinghalf.inset.filled"),
-        ("tiled", "Grid", "square.grid.2x2"),
-    ]
+    static var tmuxLayouts: [TmuxNamedLayout] { TmuxNamedLayout.all }
 
     private func layoutMenuItem() -> NSMenuItem {
         let root = NSMenuItem(title: "Layout", action: nil, keyEquivalent: "")
