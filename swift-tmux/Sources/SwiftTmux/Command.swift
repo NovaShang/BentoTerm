@@ -160,7 +160,7 @@ public enum TmuxCommand: Sendable {
             // every later field and corrupts window_layout (which Bento saves for
             // the Tiled⇄List restore). The fixed fields (id/active/layout) have no
             // colons and come first; parseWindowList splits with maxSplits 3.
-            var cmd = "list-windows -F '#{window_id}:#{window_active}:#{window_layout}:#{window_name}'"
+            var cmd = "list-windows -F '#{window_id}:#{window_index}:#{window_active}:#{window_layout}:#{window_name}'"
             if let target { cmd += " -t \(escapeArg(target))" }
             return cmd
 

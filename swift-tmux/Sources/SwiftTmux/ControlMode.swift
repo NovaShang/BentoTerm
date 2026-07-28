@@ -96,14 +96,36 @@ public final class TmuxControlMode: @unchecked Sendable {
 
     /// Build the shell command that launches tmux in control-mode. Send the
     /// returned string over SSH to put the remote shell into `-CC` mode.
-    public func launchCommand(sessionName: String? = nil, groupWith: String? = nil) -> String {
+    ///
+    /// `path` / `command` seed the session when `-A` has to CREATE it (they are
+    /// ignored by tmux when it attaches to an existing one, which is the
+    /// behavior you want — re-attaching must not relaunch the agent).
+    ///
+    /// Seeding here rather than by typing a `tmux new-session -d …` script into
+    /// the shell beforehand is deliberate: that script raced the freshly spawned
+    /// login shell's pty, and when it lost, `-c` was dropped silently and the
+    /// agent came up in the wrong directory. This line is the same write we
+    /// already had to make, so there is no second chance to lose.
+    public func launchCommand(
+        sessionName: String? = nil,
+        groupWith: String? = nil,
+        path: String? = nil,
+        command: String? = nil
+    ) -> String {
+        // The shell — not tmux — expands `~`, and this string is read by the
+        // shell, so quote it for the shell (see TmuxShellQuote.path).
+        let dir = path.map { " -c \(TmuxShellQuote.path($0))" } ?? ""
+        let prog = command.flatMap { $0.isEmpty ? nil : " \(TmuxShellQuote.arg($0))" } ?? ""
         if let groupWith {
             let name = sessionName ?? "\(groupWith)-mobile"
+            // A grouped session shares the source's windows; seeding a
+            // directory or program would be meaningless (and tmux rejects the
+            // combination), so those are deliberately not applied here.
             return "tmux -CC new-session -A -s \(name) -t \(groupWith)\n"
         } else if let sessionName {
-            return "tmux -CC new-session -A -s \(sessionName)\n"
+            return "tmux -CC new-session -A -s \(sessionName)\(dir)\(prog)\n"
         } else {
-            return "tmux -CC new-session\n"
+            return "tmux -CC new-session\(dir)\(prog)\n"
         }
     }
 

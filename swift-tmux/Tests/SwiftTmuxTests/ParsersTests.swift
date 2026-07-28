@@ -71,24 +71,38 @@ struct ListParsersTests {
     }
 
     @Test func parseWindowListSingle() {
-        // Format: window_id:window_active:window_layout:window_name (name last).
-        let output = "@0:1:b25d,80x24,0,0,0:zsh"
+        // Format: window_id:window_index:window_active:window_layout:window_name
+        // (name last).
+        let output = "@0:3:1:b25d,80x24,0,0,0:zsh"
         let windows = TmuxParsers.parseWindowList(output)
         #expect(windows.count == 1)
         #expect(windows[0].id == TmuxWindowID(0))
+        #expect(windows[0].index == 3)
         #expect(windows[0].name == "zsh")
         #expect(windows[0].layout == "b25d,80x24,0,0,0")
         #expect(windows[0].isActive == true)
+    }
+
+    /// `index:name` is what tmux itself prints in `list-windows` and what
+    /// `select-window -t` targets — the UI shows the same string so a user can
+    /// carry the label straight over to a tmux command line.
+    @Test func indexedNameMatchesTmuxLabel() {
+        let windows = TmuxParsers.parseWindowList("@0:2:1:b25d,80x24,0,0,0:claude")
+        #expect(windows[0].indexedName == "2:claude")
+        // Unknown index (listing without the field) must not render a stray ":".
+        let legacy = TmuxWindow(id: TmuxWindowID(1), name: "zsh", panes: [], layout: nil)
+        #expect(legacy.indexedName == "zsh")
     }
 
     /// A colon in the window name (e.g. a title like "host:~/dir") must NOT
     /// corrupt the layout field — regression for the Tiled⇄List restore, which
     /// persists window_layout. Name is last so its colons stay in the name.
     @Test func parseWindowListNameWithColons() {
-        let output = "@3:0:6b1f,120x40,0,0{60x40,0,0,1,59x40,61,0,2}:host:~/src/app"
+        let output = "@3:7:0:6b1f,120x40,0,0{60x40,0,0,1,59x40,61,0,2}:host:~/src/app"
         let windows = TmuxParsers.parseWindowList(output)
         #expect(windows.count == 1)
         #expect(windows[0].id == TmuxWindowID(3))
+        #expect(windows[0].index == 7)
         #expect(windows[0].isActive == false)
         #expect(windows[0].layout == "6b1f,120x40,0,0{60x40,0,0,1,59x40,61,0,2}")
         #expect(windows[0].name == "host:~/src/app")

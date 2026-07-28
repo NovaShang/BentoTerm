@@ -3,9 +3,13 @@ import BentoTerminalCore
 
 /// "How Bento works" — the concept map (design doc §2), permanently
 /// re-readable. Every coach mark the user may have dismissed lives here in
-/// long form: host vs. remote, agents, persistent workspaces, pairing, state
-/// colors, the two views, and the voice gestures. Reached from the welcome
-/// screen and Settings → Help.
+/// long form: host and clients, agents, persistent tmux sessions, pairing,
+/// state colors, Parallel/Focus, and the voice gestures. Optional reading:
+/// an opt-in link on the welcome screen and an entry in Settings → Help —
+/// never a step the user must walk through.
+///
+/// Copy names the real tmux objects rather than a private vocabulary — the
+/// user meets those same words in `tmux ls` and in tmux's own docs.
 struct HowBentoWorksView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -41,18 +45,18 @@ private struct HowBentoWorksContent: View {
 
                     concept(
                         symbol: "desktopcomputer",
-                        title: "Your host",
-                        body: "The computer where agents actually work — your Mac or a server. Your phone is just the remote control: close it, and the work continues."
+                        title: "Host",
+                        body: "The computer that runs the tmux server — your Mac or a server. Every device you connect from, including this one, is just another tmux client: close it and the session keeps running."
                     )
                     concept(
                         symbol: "sparkles",
                         title: "Agents",
-                        body: "AI workers (like Claude Code) installed on the host. Each signs into its own account. Give one a folder and an instruction and it works on its own."
+                        body: "CLI agents (like Claude Code) installed on the host. Each signs into its own account. Give one a folder and an instruction and it works on its own."
                     )
                     concept(
                         symbol: "clock.arrow.circlepath",
-                        title: "Workspaces persist",
-                        body: "A workspace is a living project site. Disconnect, lock your phone, switch devices — everything is exactly where you left it until you close the workspace yourself."
+                        title: "Sessions persist",
+                        body: "A Bento session is a tmux session, living on the host. Disconnect, lock your phone, switch devices — it is exactly where you left it, and `tmux ls` on the host lists the same thing."
                     )
                     concept(
                         symbol: "qrcode",
@@ -65,8 +69,8 @@ private struct HowBentoWorksContent: View {
 
                     concept(
                         symbol: "rectangle.split.2x2",
-                        title: "Two views, one truth",
-                        body: "Parallel shows every agent at once, like a bento box. Focus shows one at a time — better on a phone. Switch freely with the toggle up top; nothing is ever lost."
+                        title: "Parallel and Focus",
+                        body: "Parallel keeps every pane in one tmux window, tiled — all agents visible at once. Focus breaks each pane out into its own window so one fills the screen: you give up the split view and get a readable one, which is what you want on a phone or when panes have gotten too small. Switching runs tmux's break-pane / join-pane — panes move, nothing is closed."
                     )
                     concept(
                         symbol: "mic",

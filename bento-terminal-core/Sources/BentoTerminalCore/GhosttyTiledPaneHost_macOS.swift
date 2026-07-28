@@ -554,8 +554,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             // are ambiguous): side-by-side panes vs stacked panes. The symbol mirrors
             // the resulting layout — splitVertically → two columns, splitHorizontally
             // → two rows (matches splitPane(horizontal:) below).
-            menu.addItem(item("Split Right", BentoPaneAction.splitVertically, symbol: "rectangle.split.2x1"))
-            menu.addItem(item("Split Down", BentoPaneAction.splitHorizontally, symbol: "rectangle.split.1x2"))
+            menu.addItem(item("Split Right (-h)", BentoPaneAction.splitVertically, symbol: "rectangle.split.2x1"))
+            menu.addItem(item("Split Down (-v)", BentoPaneAction.splitHorizontally, symbol: "rectangle.split.1x2"))
             menu.addItem(.separator())
             // Seeded splits — creation parity with List's New Window menu (the
             // same two seeds; both split to the right).
@@ -1032,8 +1032,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                         matchText: title, action: .run(run))
         }
         return [
-            cmd("splitRight", "Split Pane Right", "rectangle.split.2x1") { [weak self] in self?.splitPaneVertically(nil) },
-            cmd("splitDown", "Split Pane Down", "rectangle.split.1x2") { [weak self] in self?.splitPaneHorizontally(nil) },
+            cmd("splitRight", "Split Right (-h)", "rectangle.split.2x1") { [weak self] in self?.splitPaneVertically(nil) },
+            cmd("splitDown", "Split Down (-v)", "rectangle.split.1x2") { [weak self] in self?.splitPaneHorizontally(nil) },
             cmd("duplicate", "Duplicate Pane (dir + command)", "plus.square.on.square") { [weak self] in
                 guard let self else { return }
                 Task { await self.viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) }

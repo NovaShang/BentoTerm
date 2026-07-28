@@ -1,9 +1,13 @@
 import SwiftUI
 
-/// The one picture that answers every future "why": phone = remote control,
-/// host = where agents live and keep working. Shown on the first screen of
+/// The one picture that answers every future "why": the host runs the tmux
+/// server, every device is just another client. Shown on the first screen of
 /// both platforms' first-run flows and in Help → "How Bento works"
 /// (design doc §2). One implementation shared by iOS and macOS.
+///
+/// Names the real thing (tmux server / client) rather than a metaphor: the
+/// user will meet those words in `tmux ls`, in tmux's own docs, and in any
+/// other terminal, and a private vocabulary only breaks when it leaks.
 public struct ArchitectureDiagramView: View {
     /// Accent used for the link + host highlight (apps pass their brand green).
     let accent: Color
@@ -22,13 +26,13 @@ public struct ArchitectureDiagramView: View {
             endpoint(
                 symbol: "iphone",
                 title: "Your phone",
-                caption: "The remote control.\nClose it — work continues."
+                caption: "A tmux client.\nClose it — the session keeps running."
             )
             link
             endpoint(
                 symbol: "desktopcomputer",
                 title: "Your computer",
-                caption: "Agents live and work here.\nMac, Linux, or Windows (WSL).",
+                caption: "Runs the tmux server.\nMac, Linux, or Windows (WSL).",
                 highlighted: true
             )
         }
@@ -38,7 +42,7 @@ public struct ArchitectureDiagramView: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Your phone is a remote control connected through the Bento relay to your computer, where agents keep working even when the phone is closed.")
+        .accessibilityLabel("Your phone is a tmux client connected through the Bento relay to your computer, which runs the tmux server. Sessions keep running there even when the phone is closed.")
     }
 
     private func endpoint(symbol: String, title: String, caption: String, highlighted: Bool = false) -> some View {
@@ -144,7 +148,7 @@ public struct StateLegendCard: View {
                       title: "Done", detail: "finished while you looked away")
             legendRow(hex: PaneState.idleHex, symbol: "circle",
                       title: "Idle", detail: "waiting for an instruction")
-            Text("You manage a team by color — no need to read every pane.")
+            Text("Watch the colors — you don't have to read every pane.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .padding(.top, 2)

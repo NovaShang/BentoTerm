@@ -253,7 +253,7 @@ struct RelayPairView: View {
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(Color.bentoInk)
                     .multilineTextAlignment(.center)
-                Text("This phone and your computer now know each other — you won't need to pair again. Your workspaces are waiting.")
+                Text("This phone and your computer now know each other — you won't need to pair again. Your sessions are waiting.")
                     .font(.system(size: 14))
                     .foregroundStyle(Color.bentoInkDim)
                     .multilineTextAlignment(.center)
@@ -269,7 +269,7 @@ struct RelayPairView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "arrow.right.circle.fill")
                         .font(.system(size: 17, weight: .semibold))
-                    Text("Open workspaces")
+                    Text("Open sessions")
                         .font(.system(size: 16, weight: .semibold))
                 }
                 .foregroundStyle(Color.black)

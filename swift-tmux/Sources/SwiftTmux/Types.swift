@@ -75,14 +75,28 @@ public struct TmuxCommandResponse: Sendable {
 
 public struct TmuxWindow: Identifiable, Sendable, Hashable {
     public let id: TmuxWindowID
+    /// `#{window_index}` — the number tmux itself shows in `list-windows`,
+    /// targets with `select-window -t <index>`, and restores order with via
+    /// `move-window -t <index>`. Displayed as `index:name` so what the user
+    /// reads in Bento matches what they read in tmux. `nil` only when parsed
+    /// from a listing that predates the field.
+    public var index: Int?
     public var name: String
     public var panes: [Pane]
     public var layout: String?
     /// Whether this is the session's current window (`#{window_active}`).
     public var isActive: Bool
 
-    public init(id: TmuxWindowID, name: String, panes: [Pane], layout: String?, isActive: Bool = false) {
+    /// tmux's own `index:name` label. Falls back to the bare name when the
+    /// index is unknown so callers never render a stray separator.
+    public var indexedName: String {
+        guard let index else { return name }
+        return "\(index):\(name)"
+    }
+
+    public init(id: TmuxWindowID, index: Int? = nil, name: String, panes: [Pane], layout: String?, isActive: Bool = false) {
         self.id = id
+        self.index = index
         self.name = name
         self.panes = panes
         self.layout = layout

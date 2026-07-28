@@ -1172,11 +1172,11 @@ extension TerminalContainerVC {
                 return
             }
             completion([
-                UIAction(title: "Split Horizontal",
+                UIAction(title: "Split Right (-h)",
                          image: UIImage(systemName: "rectangle.split.2x1")) { [weak self] _ in
                     self?.onSplitRequested?(true)
                 },
-                UIAction(title: "Split Vertical",
+                UIAction(title: "Split Down (-v)",
                          image: UIImage(systemName: "rectangle.split.1x2")) { [weak self] _ in
                     self?.onSplitRequested?(false)
                 },

@@ -103,7 +103,7 @@ struct PairingWindow: View {
             }
             Text("iPhone connected")
                 .font(.system(size: 22, weight: .bold))
-            Text("Open Bento on the phone — your workspaces are already waiting there. This window will close itself.")
+            Text("Open Bento on the phone — your sessions are already waiting there. This window will close itself.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

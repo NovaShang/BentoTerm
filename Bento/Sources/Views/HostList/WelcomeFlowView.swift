@@ -7,7 +7,7 @@ import BentoTerminalCore
 /// walk the user to a working host via one of three paths:
 ///   A. "I have a Mac"  → install the Mac app, come back, scan its QR
 ///   B. "Linux / WSL"   → one-line installer + `bento pair`, scan its QR
-///   C. SSH direct      → the advanced path, unchanged HostEditView
+///   C. SSH direct      → a first-class transport, unchanged HostEditView
 struct WelcomeFlowView: View {
     /// Open the QR-scanning pair sheet (owned by HostListView).
     let onScanPair: () -> Void
@@ -81,10 +81,15 @@ struct WelcomeFlowView: View {
                         subtitle: "One command installs the Bento host."
                     ) { page = .linuxPath }
 
+                    // Not labelled "advanced" and not last-resort: plain SSH is a
+                    // fully supported transport by architectural rule (the app's
+                    // terminal intelligence is client-side, so nothing is lost
+                    // without the Bento host). If you already have a host you can
+                    // ssh into, this is the shortest path, not the hard one.
                     pathCard(
                         symbol: "terminal",
                         title: "Connect over SSH",
-                        subtitle: "Advanced — you'll need a server address and key."
+                        subtitle: "Already have a host you ssh into? Use it as-is — reads your ~/.ssh/config."
                     ) { onAddSSH() }
                 }
                 .padding(.horizontal, 24)
@@ -212,7 +217,7 @@ struct HostPathView: View {
                     .foregroundStyle(Color.bentoInkDim)
             }
             stepCard(number: 2, title: "Follow the Mac setup") {
-                Text("It installs an AI agent (like Claude Code) and starts your first workspace — about 3 minutes.")
+                Text("It installs a CLI agent (like Claude Code) and starts your first tmux session — about 3 minutes.")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.bentoInkDim)
                     .fixedSize(horizontal: false, vertical: true)
@@ -250,7 +255,7 @@ struct HostPathView: View {
             }
             stepCard(number: 3, title: "Give it an agent") {
                 copyRow("curl -fsSL https://claude.ai/install.sh | bash", mono: true)
-                Text("Agents are the AI workers that live on your server. Claude Code is the recommended one — no other software needed, and it signs into its own Anthropic account on first run. Bento also understands Codex, Gemini CLI, OpenCode and more if you prefer those.")
+                Text("Agents are CLI agents that run on your host. Claude Code is the recommended one — no other software needed, and it signs into its own Anthropic account on first run. Bento also understands Codex, Gemini CLI, OpenCode and more if you prefer those.")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.bentoInkDim)
                     .fixedSize(horizontal: false, vertical: true)

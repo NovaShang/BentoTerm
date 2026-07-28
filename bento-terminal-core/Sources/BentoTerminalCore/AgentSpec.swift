@@ -173,48 +173,12 @@ public struct AgentSpec: Hashable {
     }
 }
 
-extension AgentSpec {
-    /// Build a shell script that creates a detached tmux session matching
-    /// the spec. Send these lines over SSH BEFORE attaching via
-    /// `tmux -CC new-session -A -s <name>`; the `-A` then attaches to the
-    /// just-created session instead of creating a fresh empty one.
-    public var setupScript: String {
-        let name = Self.shellQuote(sessionName)
-        let dir = Self.shellQuotePath(workingDir)
-        let cmd = agentCommand.isEmpty ? "" : " " + Self.shellQuote(agentCommand)
-
-        var lines: [String] = [
-            "tmux new-session -d -s \(name) -c \(dir)\(cmd)"
-        ]
-        for _ in 1..<layout.paneCount {
-            lines.append("tmux split-window -t \(name) -c \(dir)\(cmd)")
-        }
-        if let layoutName = layout.tmuxLayoutName {
-            lines.append("tmux select-layout -t \(name) \(layoutName)")
-        }
-        return lines.joined(separator: "; ") + "\n"
-    }
-
-    private static func shellQuote(_ s: String) -> String {
-        let escaped = s.replacingOccurrences(of: "'", with: "'\\''")
-        return "'\(escaped)'"
-    }
-
-    /// Quote a directory path while preserving a leading `~` / `~/` so the
-    /// remote login shell expands it to the user's home directory. The rest of
-    /// the path stays single-quoted so spaces and metacharacters are safe.
-    ///
-    /// On iOS the home directory lives on the remote SSH host, so `~` must be
-    /// expanded by the remote shell — we can't resolve it locally the way the
-    /// macOS wizard does. Wrapping the whole path (incl. `~`) in single quotes
-    /// makes tmux receive a literal `~/...`, which doesn't exist, so tmux falls
-    /// back to its server cwd (`/`). Keeping the tilde outside the quotes fixes
-    /// that.
-    private static func shellQuotePath(_ s: String) -> String {
-        if s == "~" { return "~" }
-        if s.hasPrefix("~/") {
-            return "~/" + shellQuote(String(s.dropFirst(2)))
-        }
-        return shellQuote(s)
-    }
-}
+// A spec used to render a `setupScript` — a `tmux new-session -d …;
+// split-window …` line typed into the remote login shell a second before
+// attaching. It was removed, not moved: that write raced the freshly spawned
+// pty and, when it lost, dropped `-c <dir>` silently so the agent started in
+// the wrong folder. The session is now seeded on the `tmux -CC` launch line
+// itself (`TmuxControlMode.launchCommand`) and the extra panes are added over
+// control mode, where every command has a response we can log. The tilde
+// quoting rule that lived here now lives in `TmuxShellQuote`, with its
+// regression tests in swift-tmux's `LaunchCommandTests`.

@@ -181,12 +181,12 @@ struct TerminalWrapperView: View {
         .onChange(of: viewModel.isReconnecting) { was, now in
             // First successful reconnect → the persistence concept (§6.5).
             if was, !now, viewModel.isTmuxReady, tips.consume(.persistence) {
-                showTipToast("Your agents kept working while you were away. Workspaces stay alive until you close them.")
+                showTipToast("Your agents kept working while you were away — the tmux session runs on the host, not here. It stays alive until you close it.")
             }
         }
         .onChange(of: showsWindowTabs) { _, shown in
             if shown, tips.consume(.windowTabsIntro) {
-                showTipToast("One agent per screen — switch with the tabs below. Each tab's dot is that agent's status.")
+                showTipToast("Each tab is a tmux window holding one pane — switch with the tabs below. Each tab's dot is that window's status.")
             }
         }
         .onChange(of: viewModel.windows.count) { _, _ in maybeShowSidebarIntro() }
@@ -247,7 +247,7 @@ struct TerminalWrapperView: View {
         Task {
             let ok = await viewModel.setMode(.list)
             if ok, tips.consume(.focusAutoSwitch) {
-                showTipToast("Opened in Focus — one agent per screen. Parallel ⇄ Focus up top switches views; nothing is lost.")
+                showTipToast("Opened in Focus: each pane was moved into its own tmux window (break-pane), so one fills the screen. Parallel ⇄ Focus up top moves them back — nothing is closed.")
             }
         }
     }
@@ -265,7 +265,7 @@ struct TerminalWrapperView: View {
     private func handleWorkingChange(_ working: Int) {
         // Both boxes busy at once → the payoff line.
         if working >= 2, tips.consume(.parallelBothWorking) {
-            showTipToast("This is parallel — every box works at once. Whoever needs you changes color.")
+            showTipToast("This is Parallel — every pane in one tmux window, all working at once. Whoever needs you changes color.")
         }
         // The first solo agent has been working 10s (the user is idle,
         // watching) → suggest opening a second one.
@@ -288,7 +288,7 @@ struct TerminalWrapperView: View {
               viewModel.sessionMode == .list,
               isRegularWidth,
               tips.consume(.sidebarIntro) else { return }
-        showTipToast("Every window is one agent — tap to switch. The icons show who's working and who needs you.")
+        showTipToast("One tmux window per row — tap to switch. The number is the window index you'd use with select-window; the icon shows who's working and who needs you.")
     }
 
     /// §6.4 + Qwen suggestion — voice-send milestones. The advanced gestures
@@ -448,8 +448,8 @@ struct TerminalWrapperView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.bentoInk)
                 Text(viewModel.sessionMode == .list
-                     ? "Open a second agent: tap + in the window list."
-                     : "Open a second agent: ⋯ menu → Split.")
+                     ? "Open a second agent: tap + in the window list — that's a new tmux window."
+                     : "Open a second agent: ⋯ menu → Split Right (-h).")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.bentoInkDim)
                 Button("Got it") { withAnimation { showParallelTip = false } }
@@ -644,10 +644,10 @@ struct TerminalWrapperView: View {
         if viewModel.sessionMode == .tiled {
             Section("Split") {
                 Button(action: { viewModel.splitPane(horizontal: true) }) {
-                    Label("Split Horizontal", systemImage: "rectangle.split.2x1")
+                    Label("Split Right (-h)", systemImage: "rectangle.split.2x1")
                 }
                 Button(action: { viewModel.splitPane(horizontal: false) }) {
-                    Label("Split Vertical", systemImage: "rectangle.split.1x2")
+                    Label("Split Down (-v)", systemImage: "rectangle.split.1x2")
                 }
                 Button(action: { Task { await viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) } }) {
                     Label("Split — Duplicate Current", systemImage: "plus.square.on.square")

@@ -165,14 +165,32 @@ public extension TerminalViewModel {
         sessionPanes.filter { $0.windowID == windowID }
     }
 
-    /// The LIVE display name for a window: a single-pane window is named by
-    /// its pane's title (what's actually running — auto-updated, never
-    /// user-maintained); a multi-pane window (external structures) falls back
-    /// to the tmux window name. There is deliberately no rename anywhere.
+    /// The LIVE display name for a window, prefixed with tmux's own
+    /// `#{window_index}` so the label reads exactly like `list-windows` and can
+    /// be carried straight to `select-window -t <index>`. A single-pane window
+    /// is named by its pane's title (what's actually running — auto-updated); a
+    /// multi-pane window falls back to the tmux window name.
+    ///
+    /// The index is the honest part (it addresses the window in any tmux
+    /// command); the name is the useful part (it says what's running). Showing
+    /// only the derived name left users with a label that matched nothing they
+    /// could type.
     func windowDisplayName(_ windowID: TmuxWindowID) -> String {
+        let window = windows.first { $0.id == windowID }
+        let body = windowBodyName(windowID, window: window)
+        guard let index = window?.index else { return body }
+        return "\(index):\(body)"
+    }
+
+    /// `windowDisplayName` without the index prefix — for places that show the
+    /// index separately (or have no room for it).
+    func windowBodyName(_ windowID: TmuxWindowID) -> String {
+        windowBodyName(windowID, window: windows.first { $0.id == windowID })
+    }
+
+    private func windowBodyName(_ windowID: TmuxWindowID, window: TmuxWindow?) -> String {
         let winPanes = panes(in: windowID)
-        let windowName = windows.first { $0.id == windowID }?
-            .name.trimmingCharacters(in: .whitespaces)
+        let windowName = window?.name.trimmingCharacters(in: .whitespaces)
         if winPanes.count > 1 {
             return windowName.flatMap { $0.isEmpty ? nil : $0 } ?? "\(winPanes.count) panes"
         }

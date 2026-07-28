@@ -93,7 +93,7 @@ struct FirstRunWindow: View {
             }
             ArchitectureDiagramView(accent: .green)
                 .padding(.horizontal, 12)
-            Text("This Mac is the host — the place where your agents live and work. Your phone, when you pair it later, is just the remote control.")
+            Text("This Mac is the host — it runs the tmux server your agents live in. Every device you connect from, including a phone you pair later, is just another tmux client.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -107,8 +107,8 @@ struct FirstRunWindow: View {
 
     private var checklist: some View {
         VStack(alignment: .leading, spacing: 18) {
-            stepHeader("Prepare your workspace",
-                       "Three things make this Mac an agent host. Bento handles what it can; the rest takes a minute.")
+            stepHeader("Check this Mac",
+                       "Three things make this Mac an agent host. Anything already in place is checked off for you; only what's missing needs a minute.")
 
             checklistRow(
                 ok: daemonOK,
@@ -126,7 +126,7 @@ struct FirstRunWindow: View {
             checklistRow(
                 ok: agentPreset != nil,
                 pending: checkingAgent,
-                title: "An AI agent",
+                title: "An agent",
                 detail: agentDetailText
             ) {
                 if agentPreset == nil && !checkingAgent {
@@ -134,12 +134,17 @@ struct FirstRunWindow: View {
                 }
             }
 
-            checklistRow(
-                ok: agentPreset != nil,
-                pending: false,
-                title: "The agent's account",
-                detail: "Agents sign into their own account (Claude Code → your Anthropic account). The first time it starts, follow the sign-in prompts on its screen — about a minute. That's normal, not an error."
-            ) {}
+            // NOT a checklist row: nothing here can verify that the agent is
+            // signed in, and a green check for an unchecked thing is exactly the
+            // kind of claim this app is trying to stop making. It's a heads-up
+            // about what happens next, so it reads as one.
+            if agentPreset != nil {
+                Label("First launch, \(agentPreset?.rawValue ?? "the agent") will ask you to sign into its own account — follow the prompts on its screen. That's normal, not an error.",
+                      systemImage: "info.circle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if agentPreset == nil && !checkingAgent {
                 Text("No agent yet? You can continue with a plain shell and install one later.")
@@ -234,8 +239,8 @@ struct FirstRunWindow: View {
 
     private var workspace: some View {
         VStack(alignment: .leading, spacing: 18) {
-            stepHeader("Give your agent a workspace",
-                       "A workspace is a living project site: the agent works in one folder, and everything stays put until you close it — even if you disconnect or walk away.")
+            stepHeader("Start your first session",
+                       "Pick a folder and an agent, and Bento starts a tmux session running it there. The session lives on this Mac — disconnect or walk away and it keeps going, and `tmux ls` will list it.")
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("FOLDER")
@@ -262,7 +267,7 @@ struct FirstRunWindow: View {
             }
 
             if launched {
-                Label("Workspace launched — check the terminal window that just opened.",
+                Label("Session started — check the terminal window that just opened.",
                       systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                     .font(.callout)
@@ -353,12 +358,12 @@ struct FirstRunWindow: View {
     private var done: some View {
         VStack(alignment: .leading, spacing: 18) {
             stepHeader("You're set up",
-                       "Your workspace is live. Two ways to level up from here:")
+                       "Your session is live. Two ways to level up from here:")
 
             doneCard(
                 symbol: "square.grid.2x2",
                 title: "Open a second agent",
-                detail: "Agents work in parallel — one writes code while another researches. Each gets its own box."
+                detail: "Agents work in parallel — one writes code while another researches. Each gets its own pane."
             ) {
                 Button("New agent session…") { Windows.show(.wizard, env: bento) }
             }
@@ -482,7 +487,7 @@ struct FirstRunWindow: View {
             .keyboardShortcut(.defaultAction)
             .disabled(checkingAgent)
         case .workspace:
-            Button(launched ? "Continue" : "Launch my first workspace") {
+            Button(launched ? "Continue" : "Start my first session") {
                 if launched {
                     withAnimation { step = .voice }
                 } else {
@@ -512,8 +517,13 @@ struct FirstRunWindow: View {
         }
     }
 
+    /// A satisfied row collapses to one line: the point of a checklist is the
+    /// items that still need you, and explaining something already true reads as
+    /// being quizzed on it. Anything not yet OK (or still checking) stays open
+    /// with its detail and actions.
     private func checklistRow(ok: Bool, pending: Bool, title: String, detail: String, @ViewBuilder actions: () -> some View) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        let collapsed = ok && !pending
+        return HStack(alignment: collapsed ? .firstTextBaseline : .top, spacing: 12) {
             Group {
                 if pending {
                     ProgressView().controlSize(.small)
@@ -523,19 +533,37 @@ struct FirstRunWindow: View {
                         .foregroundStyle(ok ? .green : .secondary)
                 }
             }
-            .frame(width: 22, height: 22)
-            VStack(alignment: .leading, spacing: 4) {
+            .frame(width: 22, height: collapsed ? nil : 22)
+            if collapsed {
                 Text(title).font(.system(size: 14, weight: .semibold))
-                Text(detail)
+                Spacer(minLength: 8)
+                Text(collapsedNote(detail))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 8) { actions() }
+                    .lineLimit(1)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.system(size: 14, weight: .semibold))
+                    Text(detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) { actions() }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(collapsed ? 10 : 12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
+    }
+
+    /// First clause of a satisfied row's detail — enough to say WHAT was found
+    /// without re-teaching it ("Running", "Found Claude Code").
+    private func collapsedNote(_ detail: String) -> String {
+        let clause = detail.split(separator: "—", maxSplits: 1).first
+            .map { $0.trimmingCharacters(in: .whitespaces) } ?? detail
+        return clause.split(separator: ".", maxSplits: 1).first
+            .map { String($0).trimmingCharacters(in: .whitespaces) } ?? clause
     }
 
     // MARK: - Actions

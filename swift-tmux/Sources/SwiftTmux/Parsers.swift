@@ -90,25 +90,27 @@ public enum TmuxParsers {
     }
 
     /// Parse the output of `list-windows` with the format
-    /// `#{window_id}:#{window_active}:#{window_layout}:#{window_name}`.
+    /// `#{window_id}:#{window_index}:#{window_active}:#{window_layout}:#{window_name}`.
     /// `window_name` is free text (a title may contain colons), so it is the
     /// LAST field — every fixed field precedes it, mirroring `parsePaneList`'s
     /// `pane_title`. A colon in the name no longer corrupts `window_layout`
     /// (which Bento persists for the Tiled⇄List layout restore).
     public static func parseWindowList(_ output: String) -> [TmuxWindow] {
         output.split(separator: "\n").compactMap { line in
-            // maxSplits 3 → 4 fields; the name (last) may itself contain colons.
-            let parts = line.split(separator: ":", maxSplits: 3)
+            // maxSplits 4 → 5 fields; the name (last) may itself contain colons.
+            let parts = line.split(separator: ":", maxSplits: 4)
             guard parts.count >= 1,
                   let winID = TmuxWindowID(string: String(parts[0])) else {
                 return nil
             }
-            let isActive = parts.count > 1 && parts[1] == "1"
-            let layout = parts.count > 2 ? String(parts[2]) : nil
-            let name = parts.count > 3 ? String(parts[3]) : ""
+            let index = parts.count > 1 ? Int(parts[1]) : nil
+            let isActive = parts.count > 2 && parts[2] == "1"
+            let layout = parts.count > 3 ? String(parts[3]) : nil
+            let name = parts.count > 4 ? String(parts[4]) : ""
 
             return TmuxWindow(
                 id: winID,
+                index: index,
                 name: name,
                 panes: [],
                 layout: layout,

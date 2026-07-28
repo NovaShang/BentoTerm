@@ -63,9 +63,9 @@ struct TerminalCommands: Commands {
             Button("New Window (no tmux)") { BentoTerminalWindow.newWindowNoTmux() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             Divider()
-            Button("Split Vertically") { BentoPaneAction.dispatch(BentoPaneAction.splitVertically) }
+            Button("Split Right (-h)") { BentoPaneAction.dispatch(BentoPaneAction.splitVertically) }
                 .keyboardShortcut("d", modifiers: .command)
-            Button("Split Horizontally") { BentoPaneAction.dispatch(BentoPaneAction.splitHorizontally) }
+            Button("Split Down (-v)") { BentoPaneAction.dispatch(BentoPaneAction.splitHorizontally) }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
             Divider()
             Button("New tmux Window") { BentoPaneAction.dispatch(BentoPaneAction.newTmuxWindow) }
