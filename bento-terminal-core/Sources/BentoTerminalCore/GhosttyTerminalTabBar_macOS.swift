@@ -502,7 +502,21 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// behind a chevron. Fixed choices stay flat; unbounded lists nest — which
     /// is why SSH hosts are the one submenu here.
     ///
-    /// Every row names the LEVEL it creates at, because nothing else does. A
+    /// Every row is a complete command — "New …" and the level it creates at.
+    /// Leaning on the button's own label to supply the verb saves a word and
+    /// costs the row its ability to be read on its own, which is why every
+    /// macOS File menu spells out New Window / New Tab / New Folder.
+    ///
+    /// The ICON says the level and nothing else — both rows of a level share
+    /// one, so the icon column reads as three groups reinforcing the
+    /// separators, and the words carry what differs. Eight unrelated glyphs
+    /// (sparkles, a history clock, two different rectangle-plus variants…) made
+    /// the column noise: nothing to group by, and each symbol asking to be
+    /// decoded on its own. `rectangle.stack` = a session holding windows,
+    /// `macwindow` = one window, `square.split.2x1` = a split, and the two
+    /// non-tmux rows get literal ones.
+    ///
+    /// The level has to be spelled out too. A
     /// row reading just "Window" is read as a Mac window — that is what the
     /// word means everywhere else in the OS — when it means a tmux window; the
     /// menu bar already says "New tmux Window", and this now matches. "Pane"
@@ -517,42 +531,42 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         let menu = NSMenu()
 
         menu.addItem(plainItem(
-            symbol: "sparkles", title: "Session with Agent…",
+            symbol: "rectangle.stack", title: "New Session with Agent…",
             tip: "A fresh tmux session running Claude, Codex or another agent, optionally split into panes.",
             action: #selector(newAgentAction)))
         menu.addItem(plainItem(
-            symbol: "clock.arrow.circlepath", title: "Empty Session",
+            symbol: "rectangle.stack", title: "New Empty Session",
             tip: "A blank tmux session on the host. It keeps running after you disconnect.",
             action: #selector(newTerminalAction)))
 
         menu.addItem(.separator())
         menu.addItem(plainItem(
-            symbol: "plus.rectangle.on.folder", title: "tmux Window",
+            symbol: "macwindow", title: "New tmux Window",
             tip: "A tmux window in this session, with the current pane's folder and command.",
             action: #selector(newWindowDuplicateAction)))
         menu.addItem(plainItem(
-            symbol: "rectangle.badge.plus", title: "tmux Window at a Path…",
+            symbol: "macwindow", title: "New tmux Window at a Path…",
             tip: "A tmux window, choosing the folder and what to run in it.",
             action: #selector(newWindowPathCommandAction)))
 
         menu.addItem(.separator())
         menu.addItem(plainItem(
-            symbol: "square.split.2x1", title: "Split Pane",
+            symbol: "square.split.2x1", title: "New Pane",
             tip: "Split the current pane, inheriting its folder and command.",
             action: #selector(newPaneDuplicateAction)))
         menu.addItem(plainItem(
-            symbol: "terminal", title: "Split Pane at a Path…",
+            symbol: "square.split.2x1", title: "New Pane at a Path…",
             tip: "Split off a pane, choosing the folder and what to run in it.",
             action: #selector(newPanePathCommandAction)))
 
         menu.addItem(.separator())
         menu.addItem(plainItem(
-            symbol: "macwindow", title: "Terminal without tmux",
+            symbol: "terminal", title: "New Terminal without tmux",
             tip: "A quick local shell. Closing it discards it for good.",
             action: #selector(newPlainShellAction)))
         // The one unbounded list — however many hosts ~/.ssh/config has.
         let ssh = plainItem(
-            symbol: "network", title: "SSH Connection",
+            symbol: "network", title: "New SSH Connection",
             tip: "A terminal connected to a host from your ~/.ssh/config.",
             action: nil)
         ssh.submenu = sshHostsSubmenu()
