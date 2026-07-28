@@ -495,47 +495,56 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func newTapped() {
         let menu = NSMenu()
 
-        section(menu, "Session")
-        menu.addItem(richItem(
-            symbol: "sparkles", title: "New Session with Agent…",
-            note: "Set up an agent (Claude, Codex…) in a fresh tmux session, optionally split into panes.",
-            action: #selector(newAgentAction)))
-        menu.addItem(richItem(
-            symbol: "clock.arrow.circlepath", title: "New Empty Session",
-            note: "A blank tmux session on the host — it keeps running after you disconnect.",
-            action: #selector(newTerminalAction)))
+        // One row per tmux level, each opening the two ways to seed it.
+        //
+        // Flat, this menu listed "Duplicate Current" and "Path & Command…"
+        // TWICE — once under Window, once under Pane — separated only by a
+        // disabled header, which is about the weakest thing on screen. The eye
+        // had to read all four rows to find the single word that differed.
+        // Nested, the repeated pair is never visible twice at once, and what
+        // distinguishes it is the row you just pointed at rather than grey text
+        // above it. Explanations are tooltips: eight two-line notes turned a
+        // pick-one menu into a paragraph.
+        menu.addItem(submenu(
+            symbol: "sparkles", title: "Session",
+            items: [
+                (symbol: "sparkles", title: "With Agent…",
+                 tip: "A fresh tmux session running Claude, Codex or another agent, optionally split into panes.",
+                 action: #selector(newAgentAction)),
+                (symbol: "clock.arrow.circlepath", title: "Empty",
+                 tip: "A blank tmux session on the host. It keeps running after you disconnect.",
+                 action: #selector(newTerminalAction)),
+            ]))
+        menu.addItem(submenu(
+            symbol: "plus.rectangle.on.folder", title: "Window",
+            items: [
+                (symbol: "plus.square.on.square", title: "Duplicate Current",
+                 tip: "A tmux window with the current pane's folder and command.",
+                 action: #selector(newWindowDuplicateAction)),
+                (symbol: "rectangle.badge.plus", title: "Path & Command…",
+                 tip: "A tmux window, choosing the folder and what to run in it.",
+                 action: #selector(newWindowPathCommandAction)),
+            ]))
+        menu.addItem(submenu(
+            symbol: "square.split.2x1", title: "Pane",
+            items: [
+                (symbol: "plus.square.on.square", title: "Duplicate Current",
+                 tip: "Split off a pane with the current one's folder and command.",
+                 action: #selector(newPaneDuplicateAction)),
+                (symbol: "terminal", title: "Path & Command…",
+                 tip: "Split off a pane, choosing the folder and what to run in it.",
+                 action: #selector(newPanePathCommandAction)),
+            ]))
 
-        // Window and Pane offer the SAME two seeds — they differ only in where
-        // the new thing lands, so making them differ in how you create it would
-        // be an accident of history, not a distinction.
-        section(menu, "Window")
-        menu.addItem(richItem(
-            symbol: "plus.rectangle.on.folder", title: "Duplicate Current",
-            note: "A tmux window with the current pane's folder and command.",
-            action: #selector(newWindowDuplicateAction)))
-        menu.addItem(richItem(
-            symbol: "rectangle.badge.plus", title: "Path & Command…",
-            note: "A tmux window, choosing the folder and what to run in it.",
-            action: #selector(newWindowPathCommandAction)))
-
-        section(menu, "Pane")
-        menu.addItem(richItem(
-            symbol: "plus.square.on.square", title: "Duplicate Current",
-            note: "Split off a pane with the same folder and command.",
-            action: #selector(newPaneDuplicateAction)))
-        menu.addItem(richItem(
-            symbol: "terminal", title: "Path & Command…",
-            note: "Split off a pane, choosing the folder and what to run in it.",
-            action: #selector(newPanePathCommandAction)))
-
-        section(menu, "Other")
-        menu.addItem(richItem(
-            symbol: "macwindow", title: "New Terminal (no tmux)",
-            note: "A quick local shell. Closing it discards it for good.",
+        // Not tmux objects, and each is a single action — no submenu to open.
+        menu.addItem(.separator())
+        menu.addItem(plainItem(
+            symbol: "macwindow", title: "Terminal without tmux",
+            tip: "A quick local shell. Closing it discards it for good.",
             action: #selector(newPlainShellAction)))
-        let ssh = richItem(
-            symbol: "network", title: "New SSH Connection",
-            note: "Open a terminal connected to a host from your ~/.ssh/config.",
+        let ssh = plainItem(
+            symbol: "network", title: "SSH Connection",
+            tip: "A terminal connected to a host from your ~/.ssh/config.",
             action: nil)
         ssh.submenu = sshHostsSubmenu()
         menu.addItem(ssh)
@@ -543,12 +552,25 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         pop(menu, from: newButton)
     }
 
-    /// A disabled header row, preceded by a separator except at the top.
-    private func section(_ menu: NSMenu, _ title: String) {
-        if !menu.items.isEmpty { menu.addItem(.separator()) }
-        let header = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
+    private typealias NewItem = (symbol: String, title: String, tip: String, action: Selector)
+
+    private func submenu(symbol: String, title: String, items: [NewItem]) -> NSMenuItem {
+        let root = plainItem(symbol: symbol, title: title, tip: "", action: nil)
+        let sub = NSMenu()
+        for i in items {
+            sub.addItem(plainItem(symbol: i.symbol, title: i.title, tip: i.tip, action: i.action))
+        }
+        root.submenu = sub
+        return root
+    }
+
+    /// A one-line row: symbol, title, and the explanation on hover.
+    private func plainItem(symbol: String, title: String, tip: String, action: Selector?) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        if !tip.isEmpty { item.toolTip = tip }
+        return item
     }
 
     /// One item per concrete host in ~/.ssh/config (re-read on every open, so
@@ -570,46 +592,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         return menu
     }
 
-    /// A menu item with a larger SF Symbol, a bold title, and a smaller grey note
-    /// balanced onto two lines (an NSMenu sizes to the widest line, so the note is
-    /// split in half rather than left as one long line that blows the menu out).
-    private func richItem(symbol: String, title: String, note: String, action: Selector?) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        let cfg = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
-            .withSymbolConfiguration(cfg)
-        let para = NSMutableParagraphStyle()
-        para.lineSpacing = 2
-        let text = NSMutableAttributedString(string: title, attributes: [
-            .font: NSFont.menuFont(ofSize: 0),
-            .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: para,
-        ])
-        text.append(NSAttributedString(string: "\n" + balancedTwoLines(note), attributes: [
-            .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
-            .foregroundColor: NSColor.secondaryLabelColor,
-            .paragraphStyle: para,
-        ]))
-        item.attributedTitle = text
-        return item
-    }
 
-    /// Split `text` into exactly two lines at the word boundary that makes the two
-    /// lines the most even — keeps every note to two lines and the menu narrow.
-    private func balancedTwoLines(_ text: String) -> String {
-        let words = text.split(separator: " ").map(String.init)
-        guard words.count > 1 else { return text }
-        let total = words.reduce(0) { $0 + $1.count } + (words.count - 1)
-        var bestSplit = 1, bestDiff = Int.max
-        for split in 1..<words.count {
-            let line1 = words[0..<split].joined(separator: " ").count
-            let diff = abs(line1 - (total - line1 - 1))
-            if diff < bestDiff { bestDiff = diff; bestSplit = split }
-        }
-        return words[0..<bestSplit].joined(separator: " ") + "\n"
-             + words[bestSplit...].joined(separator: " ")
-    }
 
     private func add(_ menu: NSMenu, _ title: String, _ action: Selector) {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
