@@ -18,6 +18,7 @@ struct SettingsView: View {
     @AppStorage("terminal_font_family") private var fontFamily: String = "sf-mono"
     @AppStorage(BentoTerminalWindow.defaultSessionNameKey) private var defaultSessionName: String = "bento"
     @AppStorage(BentoTerminalWindow.autoHideToolbarFullscreenKey) private var autoHideToolbar = true
+    @AppStorage(BentoTerminalWindow.newSessionPlacementKey) private var newSessionPlacement = "system"
     @AppStorage("speech_engine") private var speechEngine = "apple"
     @AppStorage("speech_locale") private var speechLocale = "auto"
     @AppStorage("openai_api_key") private var openaiKey = ""
@@ -182,8 +183,13 @@ struct SettingsView: View {
 
             Section {
                 TextField("Default session name", text: $defaultSessionName, prompt: Text("bento"))
+                Picker("Open a new session", selection: $newSessionPlacement) {
+                    ForEach(BentoTerminalWindow.NewSessionPlacement.allCases, id: \.rawValue) {
+                        Text($0.title).tag($0.rawValue)
+                    }
+                }
             } header: { Text("Sessions") } footer: {
-                Text("Clicking the app icon opens the terminal window and reconnects the session you last had open. With no previous session, it creates one with this name.")
+                Text("Clicking the app icon opens the terminal window and reconnects the session you last had open. With no previous session, it creates one with this name.\n\nmacOS already has a system-wide answer for tabs vs. windows (System Settings → Desktop & Dock → “Prefer tabs when opening documents”), which Bento follows by default. Either way you can still merge windows into tabs or drag a tab out into its own window.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

@@ -159,6 +159,42 @@ public enum BentoTerminalWindow {
         openPlain(title: title, command: command)
     }
 
+    /// Where a new session lands: a tab in the existing group, or its own
+    /// window. macOS already asks this question globally (System Settings →
+    /// Desktop & Dock → "Prefer tabs when opening documents"), so the default
+    /// is to follow it rather than invent a second answer; the override is for
+    /// people who want Bento specifically different from the rest of their Mac.
+    public enum NewSessionPlacement: String, CaseIterable, Sendable {
+        case system, tab, window
+
+        public var title: String {
+            switch self {
+            case .system: return "Follow System Setting"
+            case .tab:    return "As a Tab"
+            case .window: return "In a New Window"
+            }
+        }
+    }
+
+    public nonisolated static let newSessionPlacementKey = "mac_new_session_placement"
+
+    public nonisolated static var newSessionPlacement: NewSessionPlacement {
+        get {
+            UserDefaults.standard.string(forKey: newSessionPlacementKey)
+                .flatMap(NewSessionPlacement.init(rawValue:)) ?? .system
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: newSessionPlacementKey) }
+    }
+
+    /// Whether the NEXT session should join the current tab group.
+    static var shouldOpenAsTab: Bool {
+        switch newSessionPlacement {
+        case .tab:    return true
+        case .window: return false
+        case .system: return NSWindow.userTabbingPreference == .always
+        }
+    }
+
     /// Create a window for `tab` and join it to the existing tab group.
     ///
     /// Sessions are macOS window tabs now, one NSWindow each, rather than a
@@ -178,8 +214,11 @@ public enum BentoTerminalWindow {
             // every close-while-others-remain has already recorded the set.
             updateActivationPolicy()
         }
-        // Join the frontmost existing window's group; ordering is AppKit's.
-        if let host = frontmostManager()?.window {
+        // Join the frontmost window's group only when tabs are what the user
+        // wants; otherwise this stands alone. Either way `tabbingIdentifier` is
+        // set, so Merge All Windows and dragging a tab out both keep working —
+        // the preference decides the DEFAULT, not what's possible.
+        if shouldOpenAsTab, let host = frontmostManager()?.window {
             host.addTabbedWindow(m.window, ordered: .above)
         }
         managers.append(m)
@@ -405,7 +444,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // the tab bar entirely at one tab, which is why a session strip only
         // appears once there is more than one session to switch between.
         win.tabbingIdentifier = "bento.terminal"
-        win.tabbingMode = .preferred
+        // `.automatic` keeps manual merging available in both modes; whether a
+        // NEW session tabs is decided by `shouldOpenAsTab`, not by forcing the
+        // mode here.
+        win.tabbingMode = .automatic
         win.titleVisibility = .hidden
         // Full-size content: the sidebar column runs the window's full height
         // (Finder-style) and the title bar blends into the terminal — the
@@ -495,6 +537,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // left. That gives tmux's three levels three fixed places (session /
         // window / pane) instead of leaving the middle one homeless.
         toolbar.onSelectSegment = { [weak self] idx in self?.segmentPicked(idx) }
+        // Open sessions raise their tab; a dormant one opens as a new tab.
+        toolbar.onSelectSession = { key in BentoTerminalWindow.focusOrOpen(session: key) }
         toolbar.onOpenSearch = { [weak self] in
             guard let self else { return }
             self.tab.paneHost?.presentCommandPalette(from: self.toolbar.searchAnchor)
@@ -908,10 +952,16 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// One app window therefore shows one session; several projects means
     /// several app windows, which is what ⌘` already switches between.
     private func rebuildTabBar() {
-        // Sessions are native window tabs now, so the toolbar no longer carries
-        // a switcher for them — its left button is this session's ACTIONS. The
-        // tab's own title carries the status dot instead.
         updateTabTitle()
+        // The tab bar only knows about sessions that are OPEN, so the left
+        // button still lists every session on the machine — a dormant one is
+        // otherwise unreachable.
+        let openKeys = BentoTerminalWindow.openSessionKeys
+        let all = (Set(serverSessions).union(openKeys)).sorted()
+        toolbar.sessions = all.map { name in
+            (key: name, dot: dotImage(for: dot(forSession: name)), isOpen: openKeys.contains(name))
+        }
+        toolbar.activeSessionKey = tab.sessionKey
 
         let tmuxWindows = tab.isPlain ? [] : tab.viewModel.windows
         let maxVisible = computeMaxVisible()
@@ -1005,7 +1055,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     ///     iPhone clients and lags behind the poll).
     ///   • color (filled only) — agent activity, highest priority first:
     ///     awaiting (amber) → done-unseen (green) → working (blue) → idle (gray).
-    private enum SessionDot: String { case awaiting, doneUnseen, working, idle, dormant, plain }
+    fileprivate enum SessionDot: String { case awaiting, doneUnseen, working, idle, dormant, plain }
 
     /// Put the session name and its status on the native tab.
     ///
@@ -1039,7 +1089,14 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         }
     }
 
-    private func sessionDot(for name: String) -> SessionDot {
+    /// The dot for ANY session name: its own manager's live state when it's
+    /// open here, a hollow ring when it only exists on the server.
+    private func dot(forSession name: String) -> SessionDot {
+        guard let m = BentoTerminalWindow.manager(for: name) else { return .dormant }
+        return m.sessionDot(for: name)
+    }
+
+    fileprivate func sessionDot(for name: String) -> SessionDot {
         if tab.isPlain { return .plain }   // no tmux → a terminal glyph, not a dot
         let vm = tab.viewModel
         if vm.agentsWaiting > 0    { return .awaiting }

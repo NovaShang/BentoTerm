@@ -39,6 +39,13 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     /// The active tab is a plain (no-tmux) terminal — its menu is just "Close".
     var activeTabIsPlain = false
+    /// EVERY tmux session on the machine, open here or not, with its dot.
+    /// Native tabs can only switch between sessions that are already open, so
+    /// without this list a session running on the machine but not loaded in
+    /// Bento is unreachable — the tab bar has no row for it to appear in.
+    var sessions: [(key: String, dot: NSImage?, isOpen: Bool)] = []
+    var activeSessionKey: String?
+    var onSelectSession: ((String) -> Void)?
 
     private let sessionsButton = NSButton()
     /// Tiled|List — the session's structural mode, next to the session button.
@@ -184,6 +191,36 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     }
 
     @objc private func searchTapped() { onOpenSearch?() }
+
+    /// Every session on the machine. Open ones just raise their tab; a dormant
+    /// one (running on the server, not loaded here) opens as a NEW native tab,
+    /// which is the only way to reach it — the tab bar can't show a tab that
+    /// doesn't exist yet.
+    private func sessionSwitchSection(_ menu: NSMenu) {
+        guard !sessions.isEmpty else { return }
+        let header = NSMenuItem(title: "Sessions", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        for session in sessions {
+            let item = NSMenuItem(title: session.key,
+                                  action: #selector(selectSessionAction(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = session.key
+            item.image = session.dot
+            item.state = (session.key == activeSessionKey) ? .on : .off
+            // A hollow dot already says "not open"; the suffix says what
+            // clicking will DO, since it opens rather than switches.
+            if !session.isOpen { item.title = "\(session.key)  —  open in a new tab" }
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+    }
+
+    @objc private func selectSessionAction(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        onSelectSession?(key)
+    }
 
     /// Whichever search control is currently on screen — the panel hangs off it.
     var searchAnchor: NSView { centerShowsTabs ? searchCompact : searchField }
@@ -388,8 +425,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// the New menu, so neither is duplicated here.
     func sessionActionsMenu() -> NSMenu {
         let menu = NSMenu()
-        // No session switcher here: sessions are native window tabs, and the
-        // tab bar IS the switcher. This button carries the ACTIONS.
+        // The tab bar switches between OPEN sessions; this list covers the rest
+        // — picking one that isn't loaded opens it as a new tab.
+        sessionSwitchSection(menu)
         // A plain (no-tmux) terminal has no session/windows — just close it.
         if activeTabIsPlain {
             add(menu, "Close Terminal", #selector(closeTabAction))
