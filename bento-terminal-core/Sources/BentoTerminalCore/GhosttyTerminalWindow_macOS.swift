@@ -35,7 +35,6 @@ public enum BentoTerminalWindow {
     /// App-provided hooks for toolbar actions that live in the app target.
     public static var onNewAgentSession: (() -> Void)?
     public static var onOpenSettings: (() -> Void)?
-    public static var sessionsMenuProvider: (() -> NSMenu?)?
     /// Kill a tmux session by name via a one-shot CLI command (reliable —
     /// independent of any control-mode connection). Wired in the app target.
     public static var killSessionCLI: ((String) -> Void)?

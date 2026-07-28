@@ -12,8 +12,18 @@ struct MenuContent: View {
     @ObservedObject var app: AppDelegate
 
     var body: some View {
-        // Status header. Disabled buttons let us attach an SF Symbol via
-        // Label; Text alone would render without an icon.
+        // This menu is the face of the RESIDENT half — it exists because the
+        // background service does, and it covers what that service owns:
+        // whether it's running, who is paired with it, and how to shut it all
+        // down. Anything about a session belongs to the window that has it;
+        // windows are an ordinary Mac app (⌘N / ⌘W / ⌘Q, native tabs, a Window
+        // menu), and Bento recedes to this icon when the last one closes.
+        //
+        // It used to also list every session with Rename and Kill, plus three
+        // ways to create things. All of that now lives in the window, where
+        // there is a session in front of you to act on — a global menu offering
+        // "Kill session" is a destructive action with no context, which is
+        // exactly how a session got killed by the titlebar menu this replaced.
         Button(action: {}) {
             Label(statusLine, systemImage: statusSymbol)
         }
@@ -45,35 +55,26 @@ struct MenuContent: View {
 
         Divider()
 
+        // The one thing only this menu can do: with no window open the app has
+        // no Dock icon, so this is the way back in. It restores the sessions
+        // that were open, and the window's own chrome takes over from there.
+        Button(action: { BentoTerminalWindow.openMainWindow() }) {
+            Label("Open Bento", systemImage: "macwindow")
+        }
+        .keyboardShortcut("o")
+
+        Divider()
+
         Button(action: { Windows.show(.pair, env: bento) }) {
             Label("Pair new iPhone…", systemImage: "iphone.and.arrow.right.outward")
         }
         .keyboardShortcut("p")
         .disabled(app.status == nil)
 
-        Button(action: { Windows.show(.wizard, env: bento) }) {
-            Label("New agent session…", systemImage: "square.grid.2x2")
-        }
-        .keyboardShortcut("n")
-
-        Button(action: { BentoTerminalWindow.newWindow() }) {
-            Label("New terminal (Ghostty)…", systemImage: "apple.terminal")
-        }
-        .keyboardShortcut("t")
-
-        SSHHostsMenu()
-
         Button(action: { Windows.show(.devices, env: bento) }) {
             Label("Paired devices…", systemImage: "lock.iphone")
         }
         .disabled(app.status == nil)
-
-        if !app.tmuxSessions.isEmpty {
-            Divider()
-            Section("Sessions · click to open") {
-                SessionsMenuView(app: app)
-            }
-        }
 
         Divider()
 
@@ -84,15 +85,6 @@ struct MenuContent: View {
             Label("Settings…", systemImage: "gearshape")
         }
         .keyboardShortcut(",")
-
-        Button(action: { Windows.show(.firstRun, env: bento) }) {
-            Label("Getting started guide…", systemImage: "questionmark.circle")
-        }
-
-        Button(action: { Task { await app.refresh() } }) {
-            Label("Refresh", systemImage: "arrow.clockwise")
-        }
-        .keyboardShortcut("r")
 
         Divider()
 
@@ -114,130 +106,4 @@ struct MenuContent: View {
         guard let s = app.status else { return "xmark.circle" }
         return s.relayConnected ? "wifi" : "wifi.exclamationmark"
     }
-}
-
-/// "New SSH connection" — one item per concrete host in ~/.ssh/config, each
-/// opening a plain terminal tab running `ssh <host>`. The config is re-read
-/// whenever this view re-renders (the daemon-status poll refreshes the menu),
-/// so edits show up without a restart. No/unreadable config → disabled hint,
-/// same pattern as "No sessions" below.
-struct SSHHostsMenu: View {
-    var body: some View {
-        let hosts = SSHConfigHosts.hosts()
-        Menu {
-            if hosts.isEmpty {
-                Button("No hosts in ~/.ssh/config") {}.disabled(true)
-            }
-            ForEach(hosts, id: \.self) { host in
-                Button(host) { BentoTerminalWindow.newSSHWindow(host: host) }
-            }
-        } label: {
-            Label("New SSH connection", systemImage: "network")
-        }
-    }
-}
-
-/// The session list, shared by the menubar dropdown AND the terminal toolbar's
-/// Sessions button (hosted there via `NSHostingMenu`) so both behave identically:
-/// clicking a session's first level (its `primaryAction`) attaches/opens it,
-/// while the disclosure arrow reveals its windows + Rename + Kill.
-struct SessionsMenuView: View {
-    @ObservedObject var app: AppDelegate
-
-    var body: some View {
-        if app.tmuxSessions.isEmpty {
-            Button("No sessions") {}.disabled(true)
-        }
-        ForEach(app.tmuxSessions) { s in
-            Menu {
-                let windows = app.tmuxWindows[s.name] ?? []
-                if !windows.isEmpty {
-                    Section("Windows") {
-                        ForEach(windows) { w in
-                            Button {
-                                Task { try? await TmuxCLI.attach(session: s.name, window: w.index) }
-                            } label: {
-                                Label(
-                                    "\(w.index): \(w.name)\(w.paneCount > 1 ? "  ·  \(w.paneCount) panes" : "")",
-                                    systemImage: w.active ? "circle.fill" : "circle"
-                                )
-                            }
-                        }
-                    }
-                    Divider()
-                }
-                Button("Rename session…") {
-                    if let newName = promptRename(current: s.name) {
-                        Task {
-                            try? await TmuxCLI.rename(session: s.name, to: newName)
-                            await app.refresh()
-                        }
-                    }
-                }
-                Divider()
-                Button("Kill session", role: .destructive) {
-                    Task {
-                        try? await TmuxCLI.kill(session: s.name)
-                        await app.refresh()
-                    }
-                }
-            } label: {
-                let isOpen = BentoTerminalWindow.openSessionKeys.contains(s.name)
-                Label(
-                    "\(s.name)  ·  \(relativeActivity(s.lastActivity))",
-                    // ✓ = already open as a Bento tab (clicking focuses it, not a
-                    // duplicate); otherwise the tmux attached/detached eye.
-                    systemImage: isOpen ? "checkmark.circle.fill"
-                        : (s.attached ? "eye.fill" : "eye.slash")
-                )
-            } primaryAction: {
-                // Already open → just bring its tab forward; don't open a second.
-                if BentoTerminalWindow.openSessionKeys.contains(s.name) {
-                    BentoTerminalWindow.focusOrOpen(session: s.name)
-                } else {
-                    Task { try? await TmuxCLI.attach(session: s.name) }
-                }
-            }
-        }
-    }
-}
-
-/// relativeActivity returns a macOS-conventional "5m ago" / "just now"
-/// string. RelativeDateTimeFormatter isn't `Sendable` in Swift 6, so we
-/// allocate one per call (cheap — under 0.1ms per call in practice).
-/// Internal so the terminal toolbar's Sessions menu can format identically.
-func relativeActivity(_ date: Date) -> String {
-    if date == .distantPast { return "—" }
-    let now = Date()
-    if now.timeIntervalSince(date) < 60 { return "just now" }
-    let f = RelativeDateTimeFormatter()
-    f.unitsStyle = .abbreviated
-    return f.localizedString(for: date, relativeTo: now)
-}
-
-/// promptRename pops a small modal NSAlert with just a text field. We
-/// suppress the default app-icon badge so the dialog stays compact.
-/// Internal so the terminal toolbar's Sessions menu can reuse the same prompt.
-@MainActor
-func promptRename(current: String) -> String? {
-    NSApp.activate(ignoringOtherApps: true)
-    let alert = NSAlert()
-    alert.messageText = "Rename “\(current)”"
-    alert.informativeText = ""
-    // Suppress the default Bento icon on the left — a rename prompt doesn't
-    // need a branded badge.
-    alert.icon = NSImage(size: NSSize(width: 1, height: 1))
-    alert.addButton(withTitle: "Rename")
-    alert.addButton(withTitle: "Cancel")
-
-    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-    field.stringValue = current
-    field.selectText(nil)
-    alert.accessoryView = field
-    alert.window.initialFirstResponder = field
-
-    guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-    let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty, trimmed != current else { return nil }
-    return trimmed
 }

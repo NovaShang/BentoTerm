@@ -61,17 +61,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 await self?.refresh()
             }
         }
-        // The terminal toolbar's Sessions button reuses the menubar's SwiftUI
-        // session list verbatim (via NSHostingMenu) so the two behave identically.
-        // NSHostingMenu is macOS 14.4+; older systems get a flat clickable list.
-        BentoTerminalWindow.sessionsMenuProvider = { [weak self] in
-            guard let self else { return nil }
-            if #available(macOS 14.4, *) {
-                return NSHostingMenu(rootView: SessionsMenuView(app: self))
-            }
-            return self.flatSessionsMenu()
-        }
-
         // Opt-in telemetry (no-op unless the user enabled the Settings toggle):
         // count today as an active day, and route batches through the same
         // relay the daemon uses if the user configured a custom one.
@@ -190,27 +179,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         BentoTerminalWindow.newSessionTab()
     }
 
-    /// Flat fallback for macOS < 14.4 (no NSHostingMenu): each session is a
-    /// directly-clickable item that attaches it. The first level is still
-    /// clickable, just without the per-session windows/rename/kill submenu.
-    private func flatSessionsMenu() -> NSMenu {
-        let menu = NSMenu()
-        if tmuxSessions.isEmpty {
-            let item = NSMenuItem(title: "No sessions", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-        }
-        for s in tmuxSessions {
-            let item = NSMenuItem(title: "\(s.name)  ·  \(relativeActivity(s.lastActivity))",
-                                  action: #selector(attachSessionFlat(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = s.name
-            item.image = NSImage(systemSymbolName: s.attached ? "eye.fill" : "eye.slash",
-                                 accessibilityDescription: nil)
-            menu.addItem(item)
-        }
-        return menu
-    }
 
     @objc private func attachSessionFlat(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String else { return }
