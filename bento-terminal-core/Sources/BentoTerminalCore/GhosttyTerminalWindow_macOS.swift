@@ -424,6 +424,12 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// current session's actions (the power-user path alongside the named button).
     private var rightClickMonitor: Any?
 
+    /// The window's content area shrinks when the native tab bar appears and
+    /// grows back when it goes — WITHOUT the window frame changing, so no
+    /// resize/layout pass fires on its own. Without this the terminal sat under
+    /// the new tab bar, and closing the last other tab left a dead strip.
+    private var contentRectObs: NSKeyValueObservation?
+
     /// Toolbar bindings to the *active* tab's VM (re-subscribed on switch).
     private var activeCancellables = Set<AnyCancellable>()
     /// Per-tab subscriptions (agent dots + tab titles), keyed by tab identity.
@@ -444,10 +450,14 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // the tab bar entirely at one tab, which is why a session strip only
         // appears once there is more than one session to switch between.
         win.tabbingIdentifier = "bento.terminal"
-        // `.automatic` keeps manual merging available in both modes; whether a
-        // NEW session tabs is decided by `shouldOpenAsTab`, not by forcing the
-        // mode here.
-        win.tabbingMode = .automatic
+        // `.preferred` when we're about to tab: `.automatic` defers to the
+        // system preference at a moment AppKit picks, and with this window's
+        // hidden title + full-size content that ended in windows joined to a
+        // group whose tab bar never appeared — sessions became invisible
+        // 33-pixel strips offscreen. Stating the intent avoids the ambiguity;
+        // `tabbingIdentifier` is set either way, so Merge All Windows and
+        // dragging a tab out still work in both modes.
+        win.tabbingMode = BentoTerminalWindow.shouldOpenAsTab ? .preferred : .automatic
         win.titleVisibility = .hidden
         // Full-size content: the sidebar column runs the window's full height
         // (Finder-style) and the title bar blends into the terminal — the
@@ -572,6 +582,9 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         }
         self.window = win
         layoutContent()
+        contentRectObs = win.observe(\.contentLayoutRect, options: [.new]) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.layoutContent() }
+        }
 
         // Right-click on the tab strip → current session's actions. Scoped to the
         // toolbar band, in the centered region where the tabs live (so the side
@@ -715,9 +728,26 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// content puts the column under it; the safe area says by how much).
     /// Divider drag / sidebar collapse resize flows into the pane host, which
     /// re-fits the tmux client grid — the same path as a window resize.
+    /// Height of the chrome above the content: the title bar, PLUS the native
+    /// tab bar when the window is in a tab group.
+    ///
+    /// `contentRoot.safeAreaInsets.top` only covers the title bar — this view
+    /// is nested inside the split view controller, and the tab bar never
+    /// reached it — so the terminal drew under the tab bar. The window's own
+    /// `contentLayoutRect` is the honest measure: content-view height minus
+    /// layout-rect height is exactly the chrome, whatever it currently
+    /// contains.
+    private var topChromeInset: CGFloat {
+        guard let win = window, let content = win.contentView else {
+            return contentRoot.safeAreaInsets.top
+        }
+        return max(content.bounds.height - win.contentLayoutRect.height,
+                   contentRoot.safeAreaInsets.top)
+    }
+
     private func layoutContent() {
         let b = contentRoot.bounds
-        let top = contentRoot.safeAreaInsets.top
+        let top = topChromeInset
         container.frame = NSRect(x: 0, y: 0, width: b.width, height: max(b.height - top, 0))
         topFill.frame = NSRect(x: 0, y: max(b.height - top, 0), width: b.width, height: top)
     }
@@ -929,6 +959,16 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     private func migrateSessionKey(of tab: SessionTab, to name: String) {
         let old = tab.sessionKey
         guard !name.isEmpty, name != old else { return }
+        // Killing a session does NOT detach its clients — tmux parks them on
+        // another session. So "my session is now called X" has two meanings: a
+        // rename (X is mine), or my session died and I've been re-homed onto
+        // someone else's. If a window already shows X, this is the second case
+        // and there is nothing here to keep: two windows on one session is a
+        // duplicate, and the poll would never close it because X is alive.
+        if let other = BentoTerminalWindow.manager(for: name), other !== self {
+            window.close()
+            return
+        }
         tab.sessionKey = name
         // Drop the old name from a not-yet-refreshed poll snapshot so the next
         // one doesn't read this window's session as gone.
@@ -1218,6 +1258,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         // Free every session's surfaces BEFORE AppKit tears the window down.
         if let m = rightClickMonitor { NSEvent.removeMonitor(m); rightClickMonitor = nil }
+        contentRectObs?.invalidate()
+        contentRectObs = nil
         activeCancellables.removeAll()
         tabCancellables.removeAll()
         // Drop the sidebar's SwiftUI observation before the VMs are torn down.
