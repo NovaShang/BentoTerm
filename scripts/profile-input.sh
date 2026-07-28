@@ -49,8 +49,10 @@ if ls "$APP/Contents/MacOS/" | grep -q 'debug.dylib'; then
   echo "WARNING: bundle contains a debug dylib — these numbers are not Release numbers." >&2
 fi
 
-# One instance only; a second copy fights over the same tmux sessions.
-pkill -x Bento 2>/dev/null || true
+# One instance only; a second copy fights over the same tmux sessions. Match on
+# the macOS bundle path, NOT the process name — a Bento running in the iOS
+# simulator is also called "Bento" and must not be caught by this.
+pkill -f 'Build/Products/Release/Bento.app/Contents/MacOS/Bento' 2>/dev/null || true
 sleep 1
 
 rm -f "$OUT"
