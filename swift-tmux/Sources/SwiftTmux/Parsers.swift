@@ -6,16 +6,16 @@ import Foundation
 /// shell where tmux ran directly.
 public enum TmuxParsers {
     /// Parse the output of `list-panes` with the format
-    /// `#{pane_id}:…:#{mouse_sgr_flag}:#{window_active}:#{window_id}:#{pane_title}`.
+    /// `#{pane_id}:…:#{alternate_on}:#{window_active}:#{window_id}:#{pane_title}`.
     /// The zoom flag is per-window (every pane in a zoomed window reports 1).
     /// Every fixed field precedes `pane_title` (last) so the title may contain
     /// colons; `window_active`/`window_id` make session-wide listings (`-s`)
     /// attributable to windows without separate window state.
     public static func parsePaneList(_ output: String) -> [Pane] {
         output.split(separator: "\n").compactMap { line in
-            // maxSplits 12 → 13 fields; the title (last) may itself contain
+            // maxSplits 13 → 14 fields; the title (last) may itself contain
             // colons, so every fixed field is placed before it.
-            let parts = line.split(separator: ":", maxSplits: 12)
+            let parts = line.split(separator: ":", maxSplits: 13)
             guard parts.count >= 6,
                   let paneID = TmuxPaneID(string: String(parts[0])),
                   let width = Int(parts[1]),
@@ -29,9 +29,10 @@ public enum TmuxParsers {
             let command = parts.count > 7 ? String(parts[7]) : nil
             let mouseAny = parts.count > 8 && parts[8] == "1"
             let mouseSGR = parts.count > 9 && parts[9] == "1"
-            let inActiveWindow = parts.count > 10 ? parts[10] == "1" : true
-            let windowID = parts.count > 11 ? TmuxWindowID(string: String(parts[11])) : nil
-            let title = parts.count > 12 ? String(parts[12]) : nil
+            let alternateOn = parts.count > 10 && parts[10] == "1"
+            let inActiveWindow = parts.count > 11 ? parts[11] == "1" : true
+            let windowID = parts.count > 12 ? TmuxWindowID(string: String(parts[12])) : nil
+            let title = parts.count > 13 ? String(parts[13]) : nil
 
             return Pane(
                 id: paneID,
@@ -45,6 +46,7 @@ public enum TmuxParsers {
                 title: title,
                 mouseAny: mouseAny,
                 mouseSGR: mouseSGR,
+                alternateOn: alternateOn,
                 windowID: windowID,
                 inActiveWindow: inActiveWindow
             )

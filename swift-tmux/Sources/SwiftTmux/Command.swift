@@ -207,7 +207,7 @@ public enum TmuxCommand: Sendable {
         case .listPanes(let target, let allWindows, let sessionWide):
             // window_id sits just before pane_title: the title (last field) may
             // itself contain colons, so every fixed field must precede it.
-            var cmd = "list-panes -F '#{pane_id}:#{pane_width}:#{pane_height}:#{pane_left}:#{pane_top}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}:#{mouse_any_flag}:#{mouse_sgr_flag}:#{window_active}:#{window_id}:#{pane_title}'"
+            var cmd = "list-panes -F '#{pane_id}:#{pane_width}:#{pane_height}:#{pane_left}:#{pane_top}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}:#{mouse_any_flag}:#{mouse_sgr_flag}:#{alternate_on}:#{window_active}:#{window_id}:#{pane_title}'"
             if allWindows { cmd += " -a" }
             else if sessionWide {
                 cmd += " -s"

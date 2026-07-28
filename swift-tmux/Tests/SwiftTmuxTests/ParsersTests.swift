@@ -23,7 +23,7 @@ struct ListParsersTests {
     }
 
     @Test func parsePaneListSingle() {
-        let output = "%0:80:24:0:0:1:0:zsh:0:0:1:@1:localhost"
+        let output = "%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:localhost"
         let panes = TmuxParsers.parsePaneList(output)
         #expect(panes.count == 1)
         #expect(panes[0].id == TmuxPaneID(0))
@@ -37,8 +37,8 @@ struct ListParsersTests {
 
     @Test func parsePaneListMultiple() {
         let output = """
-        %0:40:24:0:0:1:0:zsh:0:0:1:@1:host
-        %1:40:24:40:0:0:0:vim:0:0:1:@1:host
+        %0:40:24:0:0:1:0:zsh:0:0:0:1:@1:host
+        %1:40:24:40:0:0:0:vim:0:0:0:1:@1:host
         """
         let panes = TmuxParsers.parsePaneList(output)
         #expect(panes.count == 2)
@@ -49,15 +49,26 @@ struct ListParsersTests {
 
     @Test func parsePaneListZoomed() {
         // window_zoomed_flag = 1 on the active pane.
-        let output = "%0:120:40:0:0:1:1:vim:0:0:1:@1:host"
+        let output = "%0:120:40:0:0:1:1:vim:0:0:0:1:@1:host"
         let panes = TmuxParsers.parsePaneList(output)
         #expect(panes.count == 1)
         #expect(panes[0].isZoomed)
     }
 
+    @Test func parsePaneListAlternateScreen() {
+        // alternate_on = 1: a fullscreen TUI owns the screen (turn nav stands down).
+        let panes = TmuxParsers.parsePaneList("%0:80:24:0:0:1:0:nvim:1:1:1:1:@1:host")
+        #expect(panes.count == 1)
+        #expect(panes[0].alternateOn)
+        #expect(panes[0].title == "host")
+        // …and the primary screen keeps it off.
+        let plain = TmuxParsers.parsePaneList("%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:host")
+        #expect(!plain[0].alternateOn)
+    }
+
     @Test func parsePaneListTitleWithColons() {
         // pane_title is the last field and may contain colons (e.g. a path).
-        let output = "%0:80:24:0:0:1:0:zsh:0:0:1:@1:user@host: ~/code"
+        let output = "%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:user@host: ~/code"
         let panes = TmuxParsers.parsePaneList(output)
         #expect(panes.count == 1)
         #expect(panes[0].currentCommand == "zsh")
@@ -65,7 +76,7 @@ struct ListParsersTests {
     }
 
     @Test func parsePaneListSkipsGarbage() {
-        let panes = TmuxParsers.parsePaneList("not-a-pane-line\n%0:80:24:0:0:1:0:zsh:0:0:1:@1:host")
+        let panes = TmuxParsers.parsePaneList("not-a-pane-line\n%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:host")
         #expect(panes.count == 1)
         #expect(panes[0].id == TmuxPaneID(0))
     }

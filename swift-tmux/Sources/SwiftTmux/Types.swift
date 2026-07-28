@@ -125,6 +125,12 @@ public struct Pane: Identifiable, Sendable, Hashable {
     /// The pane requested SGR-encoded mouse reports (`mouse_sgr_flag`); otherwise
     /// use the legacy X10/normal byte encoding.
     public var mouseSGR: Bool
+    /// The program is drawing on the alternate screen (tmux `alternate_on`) —
+    /// a fullscreen TUI. Like the mouse flags, control mode swallows the
+    /// program's `?1049h`, so tmux's flag is the only way to know. Scrollback
+    /// features (turn navigation) are meaningless here: the TUI owns the screen
+    /// and keeps its own history.
+    public var alternateOn: Bool
     /// The window this pane belongs to (`window_id`). Populated by session-wide
     /// `list-panes -s`; nil when the listing was scoped to a single window.
     public var windowID: TmuxWindowID?
@@ -145,6 +151,7 @@ public struct Pane: Identifiable, Sendable, Hashable {
         title: String?,
         mouseAny: Bool = false,
         mouseSGR: Bool = false,
+        alternateOn: Bool = false,
         windowID: TmuxWindowID? = nil,
         inActiveWindow: Bool = true
     ) {
@@ -159,6 +166,7 @@ public struct Pane: Identifiable, Sendable, Hashable {
         self.title = title
         self.mouseAny = mouseAny
         self.mouseSGR = mouseSGR
+        self.alternateOn = alternateOn
         self.windowID = windowID
         self.inActiveWindow = inActiveWindow
     }

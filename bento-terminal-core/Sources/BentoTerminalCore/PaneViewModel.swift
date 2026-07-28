@@ -6,7 +6,15 @@ import SwiftTmux
 @MainActor
 public final class PaneViewModel: ObservableObject, Identifiable {
     public nonisolated let paneID: TmuxPaneID
-    @Published public var pane: Pane
+    @Published public var pane: Pane {
+        didSet {
+            // Entering / leaving a fullscreen TUI decides whether turn nav applies,
+            // and that flag arrives on a pane-list refresh — not on a scroll event —
+            // so react here instead of waiting for the next SCROLLBAR action.
+            guard pane.alternateOn != oldValue.alternateOn else { return }
+            if pane.alternateOn { recomputeAvailability() } else { scheduleRescan() }
+        }
+    }
     @Published public var isActive: Bool = false
     @Published public var paneState: PaneState = .idle
 
@@ -140,9 +148,17 @@ public final class PaneViewModel: ObservableObject, Identifiable {
 
     private var atBottom: Bool { viewportTopRow + viewportRows >= totalRows }
 
+    /// Turn navigation walks the pane's SCROLLBACK for prompt boundaries, so it
+    /// only means anything on the primary screen. A fullscreen TUI (Claude Code's
+    /// fullscreen mode, vim, less) draws on the alternate screen and scrolls its
+    /// own transcript internally — there are no boundaries below to find, and the
+    /// scrollback still holds whatever was there before the TUI started. Hide the
+    /// chevrons / edge pager rather than offer a jump that goes somewhere unrelated.
+    private var turnNavApplies: Bool { !pane.alternateOn }
+
     private func recomputeAvailability() {
-        let up = nav.boundaryAbove(focusRow) != nil
-        let down = nav.boundaryBelow(focusRow) != nil || !atBottom
+        let up = turnNavApplies && nav.boundaryAbove(focusRow) != nil
+        let down = turnNavApplies && (nav.boundaryBelow(focusRow) != nil || !atBottom)
         if up != canJumpUp { canJumpUp = up }
         if down != canJumpDown { canJumpDown = down }
     }
@@ -159,6 +175,14 @@ public final class PaneViewModel: ObservableObject, Identifiable {
     /// Re-read the scrollback and re-find turn boundaries, using the pane's
     /// profile `promptBoundary` regexes (resolved from its current command).
     public func rescan() {
+        // Also skips the read_text of the whole scrollback that a scan needs —
+        // a fullscreen agent pane repaints constantly, so this is the hot path.
+        guard turnNavApplies else {
+            nav = TurnNavigator()
+            lastScanTotal = totalRows
+            recomputeAvailability()
+            return
+        }
         let patterns = ProfileStore.shared.promptBoundary(forCommand: pane.currentCommand)
         let text = (patterns.isEmpty ? nil : onReadScrollback?()) ?? ""
         // `pane.width` is the terminal's column count = the wrap width, so the scan
@@ -179,6 +203,7 @@ public final class PaneViewModel: ObservableObject, Identifiable {
     private var focusRow: Int { viewportTopRow + Self.jumpLead }
 
     public func jumpToOlderMark() {
+        guard turnNavApplies else { return }
         rescan()
         guard let row = nav.boundaryAbove(focusRow) else { return }
         jumpToBoundary(row)
@@ -186,6 +211,7 @@ public final class PaneViewModel: ObservableObject, Identifiable {
 
     /// Jump to the next (newer) turn below; past the newest, return to live.
     public func jumpToNewerMark() {
+        guard turnNavApplies else { return }
         rescan()
         if let row = nav.boundaryBelow(focusRow) {
             jumpToBoundary(row)
