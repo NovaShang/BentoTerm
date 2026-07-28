@@ -37,6 +37,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     var windows: [SwiftTmux.TmuxWindow] = []
     var activeWindowID: TmuxWindowID?
+    /// Every session Bento knows about, with its status dot — the left button's
+    /// menu is the session switcher (the centre strip belongs to windows).
+    var sessions: [(key: String, dot: NSImage?)] = []
+    var activeSessionKey: String?
+    var onSelectSession: ((String) -> Void)?
     /// The active tab is a plain (no-tmux) terminal — its menu is just "Close".
     var activeTabIsPlain = false
     /// Whether the active tab has a neighbor to swap with in each direction (drives
@@ -152,7 +157,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         g.controlRepresentation = .expanded
         g.target = self
         g.action = #selector(tabsGroupAction)
-        g.label = "Sessions"
+        g.label = "Windows"
     }
 
     /// Refresh the session segments (titles + agent dots) and the selection. The
@@ -188,7 +193,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             target: self,
             action: #selector(tabsGroupAction))
         g.controlRepresentation = .expanded
-        g.label = "Sessions"
+        g.label = "Windows"
         tabsGroup = g
         guard let tb = toolbarRef,
               let idx = tb.items.firstIndex(where: { $0.itemIdentifier == Self.centerID })
@@ -317,9 +322,10 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// menus, and there is deliberately no rename (names derive live).
     func sessionActionsMenu() -> NSMenu {
         let menu = NSMenu()
-        // Reorder the active tab in the strip. Only the available direction(s) are
-        // shown (native segmented controls can't be dragged, so this is the reorder
-        // affordance). Applies to plain tabs too — they're in the strip as well.
+        // Every session, the current one checkmarked — this button IS the
+        // session switcher now.
+        sessionSwitchSection(menu)
+        // Reorder the active session in that list.
         addMoveItems(to: menu)
         // A plain (no-tmux) terminal has no session/windows — just close it.
         if activeTabIsPlain {
@@ -333,24 +339,37 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         add(menu, "Detach (keep running)", #selector(detachAction))  // unload; session survives
         add(menu, "Kill Session", #selector(killAction))             // destroy the tmux session
         menu.addItem(.separator())
-        let header = NSMenuItem(title: "Windows", action: nil, keyEquivalent: "")
+        add(menu, "Close Window", #selector(closeWindowAction))
+        // No window SWITCH list here any more: windows own the centre strip, so
+        // duplicating them in this menu would give the same thing two homes and
+        // leave the user unsure which one is authoritative.
+        return menu
+    }
+
+    /// Sessions live behind the named button on the left: switching between
+    /// them is a project-level move (rarer than switching windows) and the
+    /// centre strip now belongs to the current session's windows.
+    private func sessionSwitchSection(_ menu: NSMenu) {
+        guard !sessions.isEmpty else { return }
+        let header = NSMenuItem(title: "Sessions", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
-        add(menu, "Close Window", #selector(closeWindowAction))
-        // Switch list — every window in this session, the current one checkmarked.
-        if windows.count > 1 {
-            menu.addItem(.separator())
-            for (idx, w) in windows.enumerated() {
-                let name = w.name.trimmingCharacters(in: .whitespaces)
-                let title = name.isEmpty ? "\(idx + 1)" : "\(idx + 1): \(name)"
-                let it = NSMenuItem(title: title, action: #selector(selectWindowAction(_:)), keyEquivalent: "")
-                it.target = self
-                it.representedObject = w.id
-                it.state = (w.id == activeWindowID) ? .on : .off
-                menu.addItem(it)
-            }
+        for session in sessions {
+            let item = NSMenuItem(title: session.key,
+                                  action: #selector(selectSessionAction(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = session.key
+            item.image = session.dot
+            item.state = (session.key == activeSessionKey) ? .on : .off
+            menu.addItem(item)
         }
-        return menu
+        menu.addItem(.separator())
+    }
+
+    @objc private func selectSessionAction(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        onSelectSession?(key)
     }
 
     /// The ways to create something, each a plain title + a one-line explanation.

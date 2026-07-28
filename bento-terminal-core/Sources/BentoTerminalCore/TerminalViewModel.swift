@@ -1135,8 +1135,18 @@ public final class TerminalViewModel: ObservableObject {
 
     /// Rename the active tmux window (the session menu's "Rename Window…").
     public func renameWindow(to newName: String) {
+        guard let id = activeWindowID else { return }
+        renameWindow(id, to: newName)
+    }
+
+    /// Rename a specific window — the sidebar's per-row "Rename Window…".
+    ///
+    /// Note this turns tmux's `automatic-rename` off for that window, which is
+    /// what the user is asking for by naming it: the name stops tracking the
+    /// running command and starts meaning what they typed.
+    public func renameWindow(_ id: TmuxWindowID, to newName: String) {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard usingTmux, !trimmed.isEmpty, let id = activeWindowID else { return }
+        guard usingTmux, !trimmed.isEmpty else { return }
         tmuxService.sendFireAndForget(.renameWindow(id: id, name: trimmed))
         Task {
             try? await Task.sleep(for: .milliseconds(200))

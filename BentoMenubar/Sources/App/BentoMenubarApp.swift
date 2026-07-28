@@ -58,18 +58,23 @@ struct TerminalCommands: Commands {
             Button("Toggle Preview Panel") { BentoTerminalWindow.togglePreviewDock() }
                 .keyboardShortcut("p", modifiers: [.command, .option])
             Divider()
-            Button("New Terminal Window") { BentoTerminalWindow.newWindow() }
+            // ⌘T is the reflex key in every terminal, and in tmux the reflex
+            // action is `prefix-c` — a new WINDOW in the session you're in. It
+            // used to create a whole new session here (a heavier, rarer thing
+            // that needs a name and shows up in `tmux ls`) while the everyday
+            // new-window sat on ⌃⌘T. Frequency and resistance were inverted.
+            Button("New tmux Window") { BentoPaneAction.dispatch(BentoPaneAction.newTmuxWindow) }
                 .keyboardShortcut("t", modifiers: .command)
-            Button("New Window (no tmux)") { BentoTerminalWindow.newWindowNoTmux() }
+            Button("New Session") { BentoTerminalWindow.newWindow() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
+            Button("New Window (no tmux)") { BentoTerminalWindow.newWindowNoTmux() }
+                .keyboardShortcut("t", modifiers: [.command, .option, .shift])
             Divider()
             Button("Split Right (-h)") { BentoPaneAction.dispatch(BentoPaneAction.splitVertically) }
                 .keyboardShortcut("d", modifiers: .command)
             Button("Split Down (-v)") { BentoPaneAction.dispatch(BentoPaneAction.splitHorizontally) }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
             Divider()
-            Button("New tmux Window") { BentoPaneAction.dispatch(BentoPaneAction.newTmuxWindow) }
-                .keyboardShortcut("t", modifiers: [.command, .control])
             Button("Select Next Pane") { BentoPaneAction.dispatch(BentoPaneAction.nextPane) }
                 .keyboardShortcut("]", modifiers: .command)
             Button("Select Previous Pane") { BentoPaneAction.dispatch(BentoPaneAction.previousPane) }

@@ -6,7 +6,7 @@ import SwiftTmux
 /// styling; each row is a window with its live display name and aggregate
 /// state dot. The phone uses the bottom tab bar instead.
 ///
-/// Per the two-mode design: no rename (names derive from what's running),
+/// Per-row: rename (which turns tmux automatic-rename off for that window),
 /// creation offers exactly the two seeds (duplicate current / specify
 /// path+command), and closing confirms because processes die.
 @MainActor
@@ -17,6 +17,8 @@ public struct WindowSidebar: View {
     @State private var hoveredWindow: TmuxWindowID?
     @State private var pendingMove: TmuxWindowID?
     @State private var moveSessionName = ""
+    @State private var pendingRename: TmuxWindowID?
+    @State private var renameText = ""
     @State private var landingChoice: (window: TmuxWindowID, session: String)?
 
     public init(viewModel: TerminalViewModel) {
@@ -60,6 +62,19 @@ public struct WindowSidebar: View {
             NewWindowForm { path, command in
                 Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
             }
+        }
+        .alert("Rename Window", isPresented: Binding(
+            get: { pendingRename != nil },
+            set: { if !$0 { pendingRename = nil } }
+        )) {
+            TextField("Window name", text: $renameText)
+            Button("Rename") {
+                if let id = pendingRename { viewModel.renameWindow(id, to: renameText) }
+                pendingRename = nil
+            }
+            Button("Cancel", role: .cancel) { pendingRename = nil }
+        } message: {
+            Text("tmux stops auto-naming this window from what's running in it.")
         }
         .alert("Move to New Session", isPresented: Binding(
             get: { pendingMove != nil },
@@ -142,6 +157,12 @@ public struct WindowSidebar: View {
             else if hoveredWindow == window.id { hoveredWindow = nil }
         }
         .contextMenu {
+            // Renaming lives here rather than on the toolbar's centre label,
+            // which in Focus is a read-only title.
+            Button("Rename Window…") {
+                renameText = viewModel.windowBodyName(window.id)
+                pendingRename = window.id
+            }
             WindowMoveToSessionMenu(viewModel: viewModel) { session in
                 moveWindow(window.id, to: session)
             } onNewSession: {

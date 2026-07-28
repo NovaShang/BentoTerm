@@ -42,6 +42,18 @@ public enum WindowDisplayStatus: Equatable, Sendable {
     case working    // an agent is running — blue
     case awaiting   // an agent needs input — amber
     case doneUnseen // an agent finished while unfocused — green (✓)
+
+    /// Stable signature for the toolbar strip: the segment group is rebuilt
+    /// whenever a title OR a dot changes, and mutating a live group's images
+    /// doesn't reliably re-render.
+    public var dotKey: String {
+        switch self {
+        case .idle: return "idle"
+        case .working: return "working"
+        case .awaiting: return "awaiting"
+        case .doneUnseen: return "doneUnseen"
+        }
+    }
 }
 
 /// Where a cross-session move lands in the target session. `.auto` derives

@@ -326,7 +326,9 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// The session currently shown (always loaded).
     private var activeKey: String?
     /// The sessions currently shown as segments (subset when overflowing).
-    private var visibleSessions: [String] = []
+    /// The tmux windows currently shown as segments (a subset when they
+    /// overflow the strip). Sessions moved to the named button on the left.
+    private var visibleWindows: [TmuxWindowID] = []
 
     private let toolbar = TerminalToolbarController()
     /// The window's content is the SYSTEM sidebar arrangement — an
@@ -462,10 +464,13 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             self, selector: #selector(surfaceBackgroundChanged(_:)),
             name: .ghosttySurfaceBackgroundChanged, object: nil)
 
-        // Toolbar: Sessions ⌄ | [session tabs] | New ⌄ | ⋯ — center hosts the
-        // session tabs (every tmux session, loaded or not) as a Finder-style
-        // segmented `NSToolbarItemGroup`.
+        // Toolbar: <session> ⌄ | [window tabs] | New ⌄ | ⋯ — the centre hosts the
+        // current session's tmux WINDOWS as a Finder-style segmented
+        // `NSToolbarItemGroup`; sessions live in the named button's menu on the
+        // left. That gives tmux's three levels three fixed places (session /
+        // window / pane) instead of leaving the middle one homeless.
         toolbar.onSelectSegment = { [weak self] idx in self?.segmentPicked(idx) }
+        toolbar.onSelectSession = { [weak self] key in self?.selectSession(key) }
         toolbar.onNewAgent = { BentoTerminalWindow.onNewAgentSession?() }
         toolbar.onNewTerminal = { BentoTerminalWindow.newSessionTab() }
         toolbar.onNewPlainShell = { BentoTerminalWindow.newWindowNoTmux() }
@@ -610,6 +615,11 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             sidebarHosting.rootView = AnyView(EmptyView())
             sidebarHostKey = nil
         }
+        // In Focus the toolbar's centre shows the current window's name as a
+        // label, not a switcher — the sidebar IS the switcher. Letting the user
+        // drag it shut would leave Focus with no way to change window at all,
+        // so it is pinned open while that mode is on.
+        sidebarItem.canCollapse = !showing
         if sidebarItem.isCollapsed == showing {
             sidebarItem.animator().isCollapsed = !showing
         }
@@ -966,34 +976,69 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         MacAwaitingNotifier.shared.clear(sessionKey: old)
     }
 
+    /// Fill the toolbar's centre strip with the ACTIVE SESSION'S WINDOWS, and
+    /// leave sessions to the named button on the left.
+    ///
+    /// tmux nests session → window → pane, and the strip used to be sessions,
+    /// which left the middle level with no permanent home at all: windows
+    /// appeared only in Focus mode's sidebar, so in the default view a user's
+    /// `prefix-n` / `prefix-1..9` habit had nothing to look at. Mapping the
+    /// strip to windows also matches iTerm2's tmux integration (window → tab,
+    /// pane → split) — the muscle memory most arrivals bring, since control
+    /// mode was built for iTerm2 in the first place.
+    ///
+    /// One app window therefore shows one session; several projects means
+    /// several app windows, which is what ⌘` already switches between.
     private func rebuildTabBar() {
         reconcileSessionOrder()
-        let all = allSessions()
-        let maxVisible = computeMaxVisible()
-        var visible = Array(all.prefix(maxVisible))
-        // Keep the active session visible even if it'd land in the overflow.
-        if let active = activeKey, !visible.contains(active), all.contains(active), !visible.isEmpty {
-            visible[visible.count - 1] = active
+        toolbar.sessions = allSessions().map { name in
+            (key: name, dot: dotImage(for: sessionDot(for: name)))
         }
-        visibleSessions = visible
-        hasOverflow = all.count > visible.count
+        toolbar.activeSessionKey = activeKey
 
-        // One segment per visible session (status dot + name); a trailing `⋯`
-        // segment when sessions overflow. `key` is a stable signature of the dot
-        // so the controller knows when a dot — not just a title — changed.
-        var items: [(title: String, key: String, image: NSImage?)] = visible.map { name in
-            let dot = sessionDot(for: name)
-            return (name, dot.rawValue, dotImage(for: dot))
+        var tmuxWindows = activeTab.map { $0.isPlain ? [] : $0.viewModel.windows } ?? []
+        // In Focus the centre names what you are looking at rather than
+        // offering the switch: the sidebar (pinned open in that mode) is the
+        // switcher, and two switchers for the same thing would leave the user
+        // guessing which one is authoritative.
+        if activeTab?.viewModel.sessionMode == .list,
+           let currentID = activeTab?.viewModel.activeWindowID,
+           let current = tmuxWindows.first(where: { $0.id == currentID }) {
+            tmuxWindows = [current]
+        }
+        let maxVisible = computeMaxVisible()
+        var visible = Array(tmuxWindows.prefix(maxVisible))
+        // Keep the current window visible even if it would land in the overflow.
+        let activeWindowID = activeTab?.viewModel.activeWindowID
+        if let activeWindowID, !visible.contains(where: { $0.id == activeWindowID }),
+           let current = tmuxWindows.first(where: { $0.id == activeWindowID }), !visible.isEmpty {
+            visible[visible.count - 1] = current
+        }
+        visibleWindows = visible.map(\.id)
+        hasOverflow = tmuxWindows.count > visible.count
+
+        // `index:name` is tmux's own label, so what the strip says is what
+        // `select-window -t` takes. `key` carries the status so the controller
+        // knows when a dot — not just a title — changed.
+        var items: [(title: String, key: String, image: NSImage?)] = visible.map { window in
+            let vm = activeTab?.viewModel
+            let status = vm?.windowStatus(window.id) ?? .idle
+            let body = vm?.windowBodyName(window.id) ?? window.name
+            let label = window.index.map { "\($0):\(body)" } ?? body
+            return (label, status.dotKey, dotImage(for: status))
         }
         if hasOverflow {
-            items.append(("", "more", NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More sessions")))
+            items.append(("", "more", NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More windows")))
         }
-        let activeIdx = activeKey.flatMap { visible.firstIndex(of: $0) } ?? -1
+        let activeIdx = activeWindowID.flatMap { id in visible.firstIndex { $0.id == id } } ?? -1
         toolbar.updateTabs(items, selected: activeIdx)
-        // Reorder affordance: whether the active tab has a visible neighbor to swap
-        // with on each side.
-        toolbar.canMoveTabLeft = activeIdx > 0
-        toolbar.canMoveTabRight = activeIdx >= 0 && activeIdx < visibleSessions.count - 1
+        toolbar.windows = tmuxWindows
+        toolbar.activeWindowID = activeWindowID
+        // Reordering applies to sessions, which now live in the left menu.
+        toolbar.canMoveTabLeft = (activeKey.flatMap { sessionOrder.firstIndex(of: $0) } ?? 0) > 0
+        toolbar.canMoveTabRight = activeKey.flatMap { key in
+            sessionOrder.firstIndex(of: key).map { $0 < sessionOrder.count - 1 }
+        } ?? false
 
         if let active = activeTab {
             let name = active.viewModel.activeTmuxSessionName ?? active.windowTitle
@@ -1003,32 +1048,29 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Swap the active tab with its visible neighbor `delta` slots away (−1 left,
-    /// +1 right) in the persisted order — the right-click "Move Tab Left/Right"
-    /// reorder, since the native segmented strip can't be dragged.
+    /// Swap the active session with its neighbour `delta` slots away (−1 up,
+    /// +1 down) in the persisted order. Sessions are listed in the left button's
+    /// menu now, so this reorders that list.
     private func moveActiveSession(by delta: Int) {
         guard let key = activeKey,
-              let visIdx = visibleSessions.firstIndex(of: key) else { return }
-        let target = visIdx + delta
-        guard visibleSessions.indices.contains(target) else { return }
-        let neighbor = visibleSessions[target]
-        guard let a = sessionOrder.firstIndex(of: key),
-              let b = sessionOrder.firstIndex(of: neighbor) else { return }
+              let a = sessionOrder.firstIndex(of: key) else { return }
+        let b = a + delta
+        guard sessionOrder.indices.contains(b) else { return }
         sessionOrder.swapAt(a, b)
         persistSessionOrder()
         rebuildTabBar()
     }
 
     /// Map a visible-segment index to an action: the trailing `⋯` pops the full
-    /// session list; any other segment selects that session.
+    /// window list; any other segment selects that window.
     private func segmentPicked(_ idx: Int) {
-        if hasOverflow && idx == visibleSessions.count {
+        if hasOverflow && idx == visibleWindows.count {
             // Pop the overflow list at the cursor, then restore the selection
             // (the `⋯` segment must not stay highlighted).
             overflowMenu().popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
             rebuildTabBar()
-        } else if visibleSessions.indices.contains(idx) {
-            selectSession(visibleSessions[idx])
+        } else if visibleWindows.indices.contains(idx) {
+            activeTab?.viewModel.selectWindow(visibleWindows[idx])
         }
     }
 
@@ -1129,21 +1171,38 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         return max(1, Int(budget / 110))
     }
 
-    /// The overflow `⋯` menu — every session, the active one checkmarked.
+    /// The overflow `⋯` menu — every window in this session, the current one
+    /// checkmarked, labelled the way `list-windows` labels them.
     private func overflowMenu() -> NSMenu {
         let menu = NSMenu()
-        for name in allSessions() {
-            let item = NSMenuItem(title: name, action: #selector(overflowPicked(_:)), keyEquivalent: "")
+        guard let vm = activeTab?.viewModel else { return menu }
+        for window in vm.windows {
+            let body = vm.windowBodyName(window.id)
+            let title = window.index.map { "\($0): \(body)" } ?? body
+            let item = NSMenuItem(title: title, action: #selector(overflowPicked(_:)), keyEquivalent: "")
             item.target = self
-            item.representedObject = name
-            item.state = (name == activeKey) ? .on : .off
+            item.representedObject = window.id
+            item.state = (window.id == vm.activeWindowID) ? .on : .off
             menu.addItem(item)
         }
         return menu
     }
 
     @objc private func overflowPicked(_ sender: NSMenuItem) {
-        if let name = sender.representedObject as? String { selectSession(name) }
+        if let id = sender.representedObject as? TmuxWindowID {
+            activeTab?.viewModel.selectWindow(id)
+        }
+    }
+
+    /// Status dot for a window segment, reusing the session-dot rasterizer so
+    /// both levels of the hierarchy read with the same colour language.
+    private func dotImage(for status: WindowDisplayStatus) -> NSImage {
+        switch status {
+        case .awaiting:   return dotImage(for: SessionDot.awaiting)
+        case .doneUnseen: return dotImage(for: SessionDot.doneUnseen)
+        case .working:    return dotImage(for: SessionDot.working)
+        case .idle:       return dotImage(for: SessionDot.idle)
+        }
     }
 
     private func presentRenameSheet() {
