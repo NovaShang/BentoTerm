@@ -122,6 +122,16 @@ public enum TmuxCommand: Sendable {
     // Input
     case sendKeys(pane: TmuxPaneID, keys: String, literal: Bool = true)
 
+    /// Drive a pane that tmux has put in a mode (copy-mode). `send-keys -X`
+    /// speaks copy-mode COMMANDS rather than keys, so it works whatever key
+    /// table (vi / emacs) the user configured — sending a literal `q` or `Up`
+    /// would depend on their bindings. `count` maps to `-N`, tmux's repeat.
+    ///
+    /// Bento does not implement copy-mode; this exists so a pane that entered it
+    /// from OUTSIDE (another client, a script, the user's own binding) is not a
+    /// frozen rectangle — it can still be scrolled and dismissed.
+    case copyModeCommand(pane: TmuxPaneID, command: String, count: Int? = nil)
+
     // Info
     case displayMessage(format: String, target: TmuxPaneID? = nil)
     case listClients
@@ -207,7 +217,7 @@ public enum TmuxCommand: Sendable {
         case .listPanes(let target, let allWindows, let sessionWide):
             // window_id sits just before pane_title: the title (last field) may
             // itself contain colons, so every fixed field must precede it.
-            var cmd = "list-panes -F '#{pane_id}:#{pane_width}:#{pane_height}:#{pane_left}:#{pane_top}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}:#{mouse_any_flag}:#{mouse_sgr_flag}:#{alternate_on}:#{window_active}:#{window_id}:#{pane_title}'"
+            var cmd = "list-panes -F '#{pane_id}:#{pane_width}:#{pane_height}:#{pane_left}:#{pane_top}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}:#{mouse_any_flag}:#{mouse_sgr_flag}:#{alternate_on}:#{window_active}:#{window_id}:#{pane_in_mode}:#{pane_title}'"
             if allWindows { cmd += " -a" }
             else if sessionWide {
                 cmd += " -s"
@@ -296,6 +306,12 @@ public enum TmuxCommand: Sendable {
             var cmd = "send-keys -t \(pane)"
             if literal { cmd += " -l" }
             cmd += " \(escapeArg(keys))"
+            return cmd
+
+        case .copyModeCommand(let pane, let command, let count):
+            var cmd = "send-keys -t \(pane) -X"
+            if let count, count > 1 { cmd += " -N \(count)" }
+            cmd += " \(escapeArg(command))"
             return cmd
 
         case .displayMessage(let format, let target):

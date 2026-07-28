@@ -23,7 +23,7 @@ struct ListParsersTests {
     }
 
     @Test func parsePaneListSingle() {
-        let output = "%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:localhost"
+        let output = "%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:0:localhost"
         let panes = TmuxParsers.parsePaneList(output)
         #expect(panes.count == 1)
         #expect(panes[0].id == TmuxPaneID(0))
@@ -33,12 +33,13 @@ struct ListParsersTests {
         #expect(!panes[0].isZoomed)
         #expect(panes[0].currentCommand == "zsh")
         #expect(panes[0].title == "localhost")
+        #expect(!panes[0].inMode)
     }
 
     @Test func parsePaneListMultiple() {
         let output = """
-        %0:40:24:0:0:1:0:zsh:0:0:0:1:@1:host
-        %1:40:24:40:0:0:0:vim:0:0:0:1:@1:host
+        %0:40:24:0:0:1:0:zsh:0:0:0:1:@1:0:host
+        %1:40:24:40:0:0:0:vim:0:0:0:1:@1:0:host
         """
         let panes = TmuxParsers.parsePaneList(output)
         #expect(panes.count == 2)
@@ -49,7 +50,7 @@ struct ListParsersTests {
 
     @Test func parsePaneListZoomed() {
         // window_zoomed_flag = 1 on the active pane.
-        let output = "%0:120:40:0:0:1:1:vim:0:0:0:1:@1:host"
+        let output = "%0:120:40:0:0:1:1:vim:0:0:0:1:@1:0:host"
         let panes = TmuxParsers.parsePaneList(output)
         #expect(panes.count == 1)
         #expect(panes[0].isZoomed)
@@ -57,18 +58,28 @@ struct ListParsersTests {
 
     @Test func parsePaneListAlternateScreen() {
         // alternate_on = 1: a fullscreen TUI owns the screen (turn nav stands down).
-        let panes = TmuxParsers.parsePaneList("%0:80:24:0:0:1:0:nvim:1:1:1:1:@1:host")
+        let panes = TmuxParsers.parsePaneList("%0:80:24:0:0:1:0:nvim:1:1:1:1:@1:0:host")
         #expect(panes.count == 1)
         #expect(panes[0].alternateOn)
         #expect(panes[0].title == "host")
         // …and the primary screen keeps it off.
-        let plain = TmuxParsers.parsePaneList("%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:host")
+        let plain = TmuxParsers.parsePaneList("%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:0:host")
         #expect(!plain[0].alternateOn)
+    }
+
+    @Test func parsePaneListInMode() {
+        // pane_in_mode = 1: tmux has the pane in copy-mode. Bento can't see this
+        // from the output stream (tmux draws the mode as ordinary pane content),
+        // and while it's set our own scroll gestures fight tmux's.
+        let panes = TmuxParsers.parsePaneList("%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:1:host")
+        #expect(panes.count == 1)
+        #expect(panes[0].inMode)
+        #expect(panes[0].title == "host")
     }
 
     @Test func parsePaneListTitleWithColons() {
         // pane_title is the last field and may contain colons (e.g. a path).
-        let output = "%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:user@host: ~/code"
+        let output = "%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:0:user@host: ~/code"
         let panes = TmuxParsers.parsePaneList(output)
         #expect(panes.count == 1)
         #expect(panes[0].currentCommand == "zsh")
@@ -76,7 +87,7 @@ struct ListParsersTests {
     }
 
     @Test func parsePaneListSkipsGarbage() {
-        let panes = TmuxParsers.parsePaneList("not-a-pane-line\n%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:host")
+        let panes = TmuxParsers.parsePaneList("not-a-pane-line\n%0:80:24:0:0:1:0:zsh:0:0:0:1:@1:0:host")
         #expect(panes.count == 1)
         #expect(panes[0].id == TmuxPaneID(0))
     }

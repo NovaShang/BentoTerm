@@ -162,6 +162,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         false
     }
 
+    // There is deliberately NO `applicationShouldTerminate` confirmation, and we
+    // deliberately do not call libghostty's `ghostty_surface_needs_confirm_quit`
+    // / `ghostty_app_needs_confirm_quit`.
+    //
+    // Those exist for a terminal that OWNS its processes: quitting kills them, so
+    // it has to ask. Bento is a tmux client. Quitting is a detach — the session,
+    // its windows, its panes and everything running in them survive on the
+    // server, and `tmux attach` (or reopening Bento) brings them right back.
+    // Prompting "there are processes still running" would teach the user to fear
+    // an action that is lossless, which is worse than not prompting at all.
+    //
+    // The only surfaces this would be honest for are the non-tmux ones (New →
+    // Other), and they are not worth a modal on the way out. Revisit only if
+    // non-tmux panes become a real part of the product.
+
     /// Backs the native tab bar's `+` button: open a brand-new tmux session as a
     /// tab. The responder chain reaches the app delegate for our session windows
     /// (which have no NSWindowController), and implementing this is also what

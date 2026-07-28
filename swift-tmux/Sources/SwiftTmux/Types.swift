@@ -138,6 +138,12 @@ public struct Pane: Identifiable, Sendable, Hashable {
     /// (`window_active`). Lets a session-wide listing carve out the current
     /// window's panes without relying on separately-refreshed window state.
     public var inActiveWindow: Bool
+    /// tmux has this pane in a mode — copy-mode being the one that matters
+    /// (`pane_in_mode`). A client can't tell from the output stream: tmux draws
+    /// the mode's UI as ordinary pane content. While it's set, keys sent with
+    /// `send-keys` are consumed by tmux's mode handler instead of reaching the
+    /// program, and the pane will not scroll on its own.
+    public var inMode: Bool
 
     public init(
         id: TmuxPaneID,
@@ -153,7 +159,8 @@ public struct Pane: Identifiable, Sendable, Hashable {
         mouseSGR: Bool = false,
         alternateOn: Bool = false,
         windowID: TmuxWindowID? = nil,
-        inActiveWindow: Bool = true
+        inActiveWindow: Bool = true,
+        inMode: Bool = false
     ) {
         self.id = id
         self.width = width
@@ -169,5 +176,6 @@ public struct Pane: Identifiable, Sendable, Hashable {
         self.alternateOn = alternateOn
         self.windowID = windowID
         self.inActiveWindow = inActiveWindow
+        self.inMode = inMode
     }
 }

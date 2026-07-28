@@ -685,6 +685,17 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         clearPathHover()   // rows shift under the cursor; stale highlight lies
         guard let surface else { return }
 
+        // tmux has this pane in copy-mode: IT owns the viewport, and it repaints
+        // the pane from its own scroll position. Running our scrollback scroll as
+        // well means two scroll positions for one screen — you scroll up, tmux
+        // repaints the same rows, nothing appears to move. Hand the wheel to
+        // tmux's copy-mode instead.
+        if tmuxInMode {
+            let rows = copyModeScrollRows(event)
+            if rows != 0 { onCopyModeScroll?(rows) }
+            return
+        }
+
         // Mouse-reporting pane → forward wheel as button 64 (up) / 65 (down).
         // ⇧-scroll falls through to our own scrollback, matching xterm (and the
         // ⇧-drag bypass right below it).
@@ -733,6 +744,53 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         ghostty_surface_mouse_scroll(surface, x, y, mods)
         ghostty_surface_refresh(surface)
         setNeedsDraw()
+    }
+
+    // MARK: - tmux copy-mode (entered from outside Bento)
+
+    /// tmux reports this pane as `pane_in_mode`. Bento does not implement
+    /// copy-mode; this flag exists so a pane that entered it elsewhere (another
+    /// client, a script, the user's own binding) isn't a rectangle that ignores
+    /// the scroll wheel with no explanation.
+    public var tmuxInMode = false {
+        didSet {
+            guard oldValue != tmuxInMode else { return }
+            if tmuxInMode {
+                // Right-click, not the title-bar glyph: Focus mode hides the pane
+                // title bar entirely, so the badge isn't always there to point at.
+                PaneHintChip.show("tmux copy-mode — scroll to move, right-click to exit", in: self)
+            } else {
+                PaneHintChip.dismiss(in: self)
+            }
+        }
+    }
+
+    /// Leave copy-mode (host sends tmux's `cancel`).
+    public var onExitCopyMode: (() -> Void)?
+
+    /// Wheel travel in copy-mode, in rows (positive = toward older output). The
+    /// host turns this into `send-keys -X -N n scroll-up`.
+    public var onCopyModeScroll: ((Int) -> Void)?
+
+    private var copyModeScrollAccum: CGFloat = 0
+
+    private func copyModeScrollRows(_ event: NSEvent) -> Int {
+        let dy = event.scrollingDeltaY
+        guard event.hasPreciseScrollingDeltas else {
+            return dy == 0 ? 0 : (dy > 0 ? 3 : -3)   // one notch ≈ a few rows
+        }
+        if event.phase == .began { copyModeScrollAccum = 0 }
+        guard let cs = currentSize, cs.cellHeightPx > 0 else { return 0 }
+        // Same points-per-row as the local scrollback path, so a pane in
+        // copy-mode scrolls at the speed the others do.
+        let rowH = CGFloat(cs.cellHeightPx) / currentScale / Self.trackpadScrollRatio
+        copyModeScrollAccum += dy
+        let rows = Int(copyModeScrollAccum / rowH)
+        guard rows != 0 else { return 0 }
+        copyModeScrollAccum -= CGFloat(rows) * rowH
+        // Cap the burst; a flick's momentum tail would otherwise send tmux a very
+        // large repeat count in one command.
+        return max(-12, min(12, rows))
     }
 
     /// Forward a scroll to a mouse-reporting program (an alt-screen TUI) as wheel
@@ -1113,6 +1171,15 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         let find = NSMenuItem(title: "Find…", action: #selector(contextFind), keyEquivalent: "f")
         find.target = self
         menu.addItem(find)
+        // Always reachable, unlike the title-bar badge (Focus mode has no title
+        // bar), and the mode is easy to enter by accident from another client.
+        if tmuxInMode {
+            menu.addItem(.separator())
+            let exitMode = NSMenuItem(title: "Exit tmux copy-mode",
+                                      action: #selector(contextExitCopyMode), keyEquivalent: "")
+            exitMode.target = self
+            menu.addItem(exitMode)
+        }
         // Only offered where it can matter — a pane whose program has taken the
         // mouse. ⇧-drag is the per-gesture answer; this is the sticky one.
         if mouseReporting.any {
@@ -1128,6 +1195,8 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     }
 
     @objc private func contextFind() { beginSearch() }
+
+    @objc private func contextExitCopyMode() { onExitCopyMode?() }
 
     @objc private func contextToggleMouseReporting() {
         mouseReportingSuppressed.toggle()

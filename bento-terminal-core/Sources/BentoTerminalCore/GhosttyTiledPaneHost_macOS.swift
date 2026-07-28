@@ -249,6 +249,17 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         }
         surface.onInput = { [weak paneVM] data in paneVM?.sendInput(data) }
         surface.onSelect = { [weak self] in self?.viewModel.selectPane(paneID) }
+        // Wheel in a pane tmux has in copy-mode → tmux's own scroll, not ours.
+        surface.onCopyModeScroll = { [weak self] rows in
+            self?.viewModel.scrollCopyMode(paneID, rows: rows)
+        }
+        surface.onExitCopyMode = { [weak self] in self?.viewModel.exitCopyMode(paneID) }
+        // The sticky mouse-reporting override is per-surface state, so the title
+        // bar's glyph has to follow it rather than the pane list.
+        surface.onMouseReportingSuppressedChanged = { [weak self] _ in
+            guard let self, let cell = self.cells[paneID] else { return }
+            self.refreshModeBadge(cell)
+        }
         surface.onVoicePrewarm = { [weak self] in self?.voiceController.prewarm() }
         surface.onVoiceStart = { [weak self] screenPt in self?.startVoice(forPane: paneID, atScreen: screenPt) }
         surface.onVoiceDrag = { [weak self] screenPt in self?.voiceController.update(toScreen: screenPt) }
@@ -343,6 +354,16 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         }
         container.onJumpDown = { [weak self, weak paneVM] in
             self?.viewModel.selectPane(paneID); paneVM?.jumpToNewerMark()
+        }
+        // The mode glyph is also the way OUT of the mode it reports — a badge you
+        // can't act on just tells you you're stuck.
+        container.onModeBadge = { [weak self] in
+            guard let self, let cell = self.cells[paneID] else { return }
+            if cell.surface.tmuxInMode {
+                self.viewModel.exitCopyMode(paneID)
+            } else if cell.surface.mouseReportingSuppressed {
+                cell.surface.mouseReportingSuppressed = false
+            }
         }
     }
 
@@ -824,6 +845,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             cell.container.titleBarHeight = titleBar
             if let pv = vmByID[id] {
                 cell.surface.mouseReporting = .init(any: pv.pane.mouseAny, sgr: pv.pane.mouseSGR)
+                cell.surface.tmuxInMode = pv.pane.inMode
+                refreshModeBadge(cell)
             }
         }
 
@@ -1254,6 +1277,19 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         viewModel.swapPane(active, up: false)
     }
 
+    /// Recompute a pane's trailing mode glyph. copy-mode wins over suppressed
+    /// mouse reporting: it changes what the KEYBOARD does, which is the more
+    /// surprising of the two.
+    private func refreshModeBadge(_ cell: PaneCell) {
+        if cell.surface.tmuxInMode {
+            cell.container.modeBadge = .copyMode
+        } else if cell.surface.mouseReportingSuppressed {
+            cell.container.modeBadge = .mouseReportingOff
+        } else {
+            cell.container.modeBadge = .none
+        }
+    }
+
     // MARK: - Find in pane (⌘F)
     //
     // Pane-scoped on purpose: the toolbar's omnibox is app-scoped (commands /
@@ -1519,6 +1555,14 @@ final class PaneCellView: NSView {
         didSet { titleBar.paneState = paneState; updateStateTint(); applyBorder() }
     }
 
+    /// Trailing mode glyph — see `PaneTitleBar.ModeBadge`.
+    var modeBadge: PaneTitleBar.ModeBadge = .none {
+        didSet { titleBar.modeBadge = modeBadge }
+    }
+    var onModeBadge: (() -> Void)? {
+        didSet { titleBar.onModeBadge = onModeBadge }
+    }
+
     var agentFinishedUnseen: Bool = false {
         didSet { titleBar.agentFinishedUnseen = agentFinishedUnseen; updateStateTint(); applyBorder() }
     }
@@ -1680,6 +1724,9 @@ final class PaneTitleBar: NSView {
     private let stateIcon = NSImageView()
     let zoomButton = NSButton()
     let menuButton = NSButton()
+    /// Trailing mode glyph (copy-mode / mouse reporting off). Hidden by default —
+    /// "nothing unusual" must not carry a marker, same rule as idle state.
+    private let modeButton = NSButton()
     /// Scroll-bookmark jump chevrons, left of zoom. Shown only when a jump in that
     /// direction is possible (e.g. no "down" at the live bottom).
     let markUpButton = NSButton()
@@ -1707,6 +1754,61 @@ final class PaneTitleBar: NSView {
     var text: String = "" {
         didSet { label.stringValue = text }
     }
+
+    /// A non-default MODE this pane is sitting in. Deliberately separate from
+    /// `paneState`: state is what the program is doing (working / awaiting /
+    /// done), a mode is something about the pane that changes how it responds to
+    /// you. Mixing them into the leading glyph would overload one slot with two
+    /// unrelated meanings, so modes get their own trailing slot and never borrow
+    /// a state color.
+    enum ModeBadge: Equatable {
+        case none
+        /// tmux has this pane in copy-mode (entered from outside Bento).
+        case copyMode
+        /// The user suppressed mouse reporting for this pane.
+        case mouseReportingOff
+
+        var symbol: String? {
+            switch self {
+            case .none: return nil
+            case .copyMode: return "doc.on.doc"
+            case .mouseReportingOff: return "cursorarrow.slash"
+            }
+        }
+
+        var help: String? {
+            switch self {
+            case .none: return nil
+            case .copyMode: return "tmux copy-mode — click to exit"
+            case .mouseReportingOff: return "Mouse reporting off — click to turn back on"
+            }
+        }
+    }
+
+    /// copy-mode wins when both apply: it changes what the KEYBOARD does, which
+    /// is the more surprising of the two.
+    var modeBadge: ModeBadge = .none {
+        didSet {
+            guard oldValue != modeBadge else { return }
+            updateModeBadge()
+            needsLayout = true
+        }
+    }
+    var onModeBadge: (() -> Void)?
+
+    private func updateModeBadge() {
+        guard let symbol = modeBadge.symbol else {
+            modeButton.isHidden = true
+            return
+        }
+        let cfg = NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
+        modeButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: modeBadge.help)?
+            .withSymbolConfiguration(cfg)
+        modeButton.toolTip = modeBadge.help
+        modeButton.isHidden = false
+    }
+
+    @objc private func modeTapped() { onModeBadge?() }
 
     /// Pane working/idle/awaiting — drives the leading state glyph (play/question)
     /// and the title-bar band color (blue / amber / green).
@@ -1767,6 +1869,9 @@ final class PaneTitleBar: NSView {
         menuButton.contentTintColor = ink
         markUpButton.contentTintColor = ink
         markDownButton.contentTintColor = ink
+        // Same ink as the rest of the bar: a mode is information, not an alarm,
+        // and it must never read as one of the state colors.
+        modeButton.contentTintColor = ink
     }
 
     /// Re-derive the band/ink CGColors on a light/dark flip (see PaneCellView).
@@ -1793,8 +1898,10 @@ final class PaneTitleBar: NSView {
         configure(menuButton, symbol: "ellipsis", fallback: "⋯", action: #selector(menuTapped))
         configure(markUpButton, symbol: "chevron.up", fallback: "▲", action: #selector(markUpTapped))
         configure(markDownButton, symbol: "chevron.down", fallback: "▼", action: #selector(markDownTapped))
+        configure(modeButton, symbol: "cursorarrow.slash", fallback: "⊘", action: #selector(modeTapped))
         markUpButton.isHidden = true
         markDownButton.isHidden = true
+        modeButton.isHidden = true
 
         label.font = .systemFont(ofSize: 10, weight: .medium)
         label.textColor = NSColor(white: 0.65, alpha: 1.0)
@@ -1823,7 +1930,14 @@ final class PaneTitleBar: NSView {
         var markX = zoomX
         if canJumpDown { markX -= 4 + s; markDownButton.frame = NSRect(x: markX, y: y, width: s, height: s) }
         if canJumpUp { markX -= 4 + s; markUpButton.frame = NSRect(x: markX, y: y, width: s, height: s) }
-        let chromeLeftX = (canJumpUp || canJumpDown) ? markX : zoomX
+        // Mode glyph sits leftmost in the trailing cluster, and like the chevrons
+        // yields its slot to the label when there is no mode.
+        var modeX = (canJumpUp || canJumpDown) ? markX : zoomX
+        if modeBadge != .none {
+            modeX -= 4 + s
+            modeButton.frame = NSRect(x: modeX, y: y, width: s, height: s)
+        }
+        let chromeLeftX = modeBadge != .none ? modeX : ((canJumpUp || canJumpDown) ? markX : zoomX)
         // Fixed-width leading slot for the state glyph, so the title never shifts
         // as state changes (idle = empty slot, same x for the label).
         let icon: CGFloat = 13

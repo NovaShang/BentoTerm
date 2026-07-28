@@ -62,6 +62,16 @@ struct CommandTests {
         #expect(cmd.commandString.contains("#{pane_active}"))
     }
 
+    @Test func copyModeCommandUsesXAndRepeat() {
+        // -X sends a copy-mode COMMAND (not a key), so it is independent of the
+        // user's vi/emacs copy-mode bindings.
+        let scroll = TmuxCommand.copyModeCommand(pane: TmuxPaneID(3), command: "scroll-up", count: 4)
+        #expect(scroll.commandString == "send-keys -t %3 -X -N 4 scroll-up")
+        // A count of 1 (or none) omits -N.
+        let cancel = TmuxCommand.copyModeCommand(pane: TmuxPaneID(3), command: "cancel")
+        #expect(cancel.commandString == "send-keys -t %3 -X cancel")
+    }
+
     @Test func listWindowsFormat() {
         let cmd = TmuxCommand.listWindows()
         #expect(cmd.commandString.hasPrefix("list-windows -F "))

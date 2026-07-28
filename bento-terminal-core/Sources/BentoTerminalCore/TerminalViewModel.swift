@@ -720,6 +720,11 @@ public final class TerminalViewModel: ObservableObject {
                 paneStates[pane] = state   // keep the window-dot aggregate in step
                 stateVersion += 1
             }
+            // tmux's notification carries only the pane id — not which mode — so
+            // re-list to pick up `pane_in_mode`. Without this the copy-mode badge
+            // would wait for the 2s poll, which is long enough for the pane to
+            // look broken (scrolling does nothing, no explanation).
+            Task { await refreshPanes() }
 
         case .exit:
             usingTmux = false
@@ -1023,6 +1028,31 @@ public final class TerminalViewModel: ObservableObject {
     }
 
     // MARK: - Actions
+
+    // MARK: - tmux copy-mode
+    //
+    // Bento does NOT implement copy-mode: everything it exists for in a bare
+    // terminal (scrollback, keyboard selection, rectangle select) is already
+    // native here, because each pane has a real terminal surface with a real
+    // scrollback. What IS needed is not being broken when a pane enters the mode
+    // from somewhere else — another client, a script, the user's own binding.
+
+    /// Scroll a pane that tmux has in copy-mode. Positive `rows` = toward older
+    /// output.
+    public func scrollCopyMode(_ pane: TmuxPaneID, rows: Int) {
+        guard rows != 0 else { return }
+        tmuxService.sendFireAndForget(.copyModeCommand(
+            pane: pane,
+            command: rows > 0 ? "scroll-up" : "scroll-down",
+            count: abs(rows)))
+    }
+
+    /// Leave copy-mode. `cancel` is a copy-mode COMMAND, so it works whether the
+    /// user's mode keys are vi or emacs — sending a literal `q` would not.
+    public func exitCopyMode(_ pane: TmuxPaneID) {
+        tmuxService.sendFireAndForget(.copyModeCommand(pane: pane, command: "cancel"))
+        Task { await refreshPanes() }
+    }
 
     public func splitPane(horizontal: Bool) {
         if let activePaneID {
