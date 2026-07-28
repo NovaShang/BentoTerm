@@ -1103,7 +1103,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             cmd("prevPane", "Select Previous Pane", "arrow.left.square") { [weak self] in self?.selectPreviousPane(nil) },
             cmd("newTmuxWindow", "New tmux Window", "plus.rectangle.on.folder") { [weak self] in self?.newTmuxWindow(nil) },
             cmd("newWindow", "New Terminal Window", "macwindow.badge.plus") { BentoTerminalWindow.newWindow() },
-            cmd("fit", "Fit Session to Window", "arrow.up.left.and.down.right.magnifyingglass") { BentoTerminalWindow.fitActiveSession() },
+            cmd("fit", "Track Session Size to This Window", "arrow.up.left.and.down.right.magnifyingglass") { BentoTerminalWindow.trackActiveSessionSize() },
             cmd("toggleDock", "Toggle Preview Panel", "sidebar.trailing") { BentoTerminalWindow.togglePreviewDock() },
         ]
     }

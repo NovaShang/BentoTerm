@@ -178,6 +178,46 @@ struct LiveTmuxRoundTripTests {
                 "every window must still auto-rename; got \(flags)")
     }
 
+    /// Pinning a session's size has to survive other clients.
+    ///
+    /// The old "Fit Session to This Window" pushed one `refresh-client -C` and
+    /// looked like it did nothing: tmux derives a window's size from its
+    /// clients, and under the default `window-size latest` the most recently
+    /// used client wins, so the push was undone immediately. A pin therefore
+    /// has to switch `window-size` to `manual` — only then does `resize-window`
+    /// stick.
+    @Test func pinningSizeHoldsOnlyUnderManualWindowSize() throws {
+        let tmux = try LiveTmux()
+        defer { tmux.shutdown() }
+
+        try tmux.run(["new-session", "-d", "-s", "work", "-x", "200", "-y", "50"])
+        let window = try #require(try tmux.windows().first)
+
+        // Default policy: the size is derived, so a manual resize does not hold.
+        #expect(try tmux.capture(["show-options", "-gv", "window-size"])
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "latest")
+
+        try tmux.runScript([
+            TmuxCommand.setWindowOption(name: "window-size", value: "manual").commandString,
+            TmuxCommand.resizeWindow(window: window.id, width: 120, height: 30).commandString,
+        ])
+        #expect(try tmux.size(of: window.id) == "120x30")
+
+        // A different requested size must not move it while pinned.
+        try tmux.runScript([
+            TmuxCommand.resizeWindow(window: window.id, width: 90, height: 20).commandString
+        ])
+        #expect(try tmux.size(of: window.id) == "90x20",
+                "resize-window is the ONE thing allowed to move a pinned window")
+
+        // Back to tracking: the option returns and clients govern again.
+        try tmux.runScript([
+            TmuxCommand.setWindowOption(name: "window-size", value: "latest").commandString
+        ])
+        #expect(try tmux.capture(["show-options", "-wv", "-t", "\(window.id)", "window-size"])
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "latest")
+    }
+
     /// The snapshot is stored in a tmux session option and read back through
     /// tmux's parser. This is where the brace hazard bit before.
     @Test func snapshotSurvivesStorageInATmuxOption() throws {
@@ -283,6 +323,11 @@ struct LiveTmux {
         // from what the app actually asks tmux for.
         let args = LiveTmux.splitTmuxArgs(fmt)
         return TmuxParsers.parseWindowList(try capture(args))
+    }
+
+    func size(of window: TmuxWindowID) throws -> String {
+        try capture(["display-message", "-p", "-t", "\(window)", "#{window_width}x#{window_height}"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func panes() throws -> [TmuxPaneID] {

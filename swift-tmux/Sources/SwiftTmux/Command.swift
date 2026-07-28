@@ -91,6 +91,14 @@ public enum TmuxCommand: Sendable {
     /// Set a session-scoped (user) option, e.g. `@bento_orig_layout`. Server-side
     /// storage that survives client disconnects and app restarts.
     case setSessionOption(target: String? = nil, name: String, value: String)
+    /// Set a WINDOW option (`set-option -w`), e.g. `window-size`. Window
+    /// options are a separate namespace from session options — setting
+    /// `window-size` without `-w` lands on the wrong table.
+    case setWindowOption(window: TmuxWindowID? = nil, name: String, value: String)
+    /// `resize-window -x/-y`. Only takes effect under `window-size manual`;
+    /// under the default `latest` the size is recomputed from whichever client
+    /// was used most recently and this is immediately undone.
+    case resizeWindow(window: TmuxWindowID? = nil, width: Int, height: Int)
     /// Read a session-scoped option's value (`-qv`: value only, silent when unset).
     case showSessionOption(target: String? = nil, name: String)
     case killPane(id: TmuxPaneID)
@@ -235,6 +243,16 @@ public enum TmuxCommand: Sendable {
             var cmd = "set-option"
             if let target { cmd += " -t \(escapeArg(target))" }
             return cmd + " \(name) \(escapeArg(value))"
+
+        case .setWindowOption(let window, let name, let value):
+            var cmd = "set-option -w"
+            if let window { cmd += " -t \(window)" }
+            return cmd + " \(name) \(escapeArg(value))"
+
+        case .resizeWindow(let window, let width, let height):
+            var cmd = "resize-window"
+            if let window { cmd += " -t \(window)" }
+            return cmd + " -x \(width) -y \(height)"
 
         case .showSessionOption(let target, let name):
             var cmd = "show-options -qv"

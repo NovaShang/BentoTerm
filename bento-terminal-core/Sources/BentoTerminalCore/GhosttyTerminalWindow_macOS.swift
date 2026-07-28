@@ -72,10 +72,13 @@ public enum BentoTerminalWindow {
     /// open reconnects them). The red traffic-light button does the same.
     public static func closeMainWindow() { manager?.requestClose() }
 
-    /// Menu-bar command: re-assert the active window's grid on its tmux session
-    /// (see GhosttyTiledPaneHost.refitSessionToWindow) — for when another
-    /// attached client (an iPad) shrank the shared canvas.
-    public static func fitActiveSession() { manager?.activeTab?.paneHost?.refitSessionToWindow() }
+    /// Menu-bar command: hand sizing back to this window. A one-shot re-fit
+    /// used to live here and looked broken — tmux recomputes a window's size
+    /// from its clients, so the push was undone as soon as any other client was
+    /// used. This sets the sticky policy instead (see `TerminalSizingMode`).
+    public static func trackActiveSessionSize() {
+        manager?.activeTab?.viewModel.setSizingMode(.tracking)
+    }
 
     /// ⌘P: open the command palette over the focused window's active pane.
     public static func presentCommandPalette() { manager?.activeTab?.paneHost?.presentCommandPalette() }
@@ -477,7 +480,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onNewSSHHost = { BentoTerminalWindow.newSSHWindow(host: $0) }
         toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
         toolbar.onCloseWindow = { [weak self] in self?.activeTab?.viewModel.closeWindow() }
-        toolbar.onFitSession = { [weak self] in self?.activeTab?.paneHost?.refitSessionToWindow() }
+        toolbar.onSetSizingMode = { [weak self] mode in
+            self?.activeTab?.viewModel.setSizingMode(mode)
+            self?.rebuildTabBar()
+        }
         toolbar.onSelectMode = { [weak self] mode in self?.requestMode(mode) }
         toolbar.onKillSession = { [weak self] in self?.killActiveSession() }
         toolbar.onDetach = { [weak self] in self?.detachActiveSession() }
@@ -1037,6 +1043,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             window.title = name
             toolbar.setSessionTitle(name)
             toolbar.activeTabIsPlain = active.isPlain
+            toolbar.sizingMode = active.viewModel.sizingMode
         }
     }
 

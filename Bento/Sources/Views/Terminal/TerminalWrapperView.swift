@@ -3,24 +3,6 @@ import SwiftTmux
 import Combine
 import BentoTerminalCore
 
-/// Sticky size state (PRD §2.5). Tracking = we own the size (= device); Pinned =
-/// respect the window's native (foreign) size and never auto-resize. It's a
-/// state, not a one-shot action: remembered per session.
-enum TerminalSizingMode: String {
-    case tracking
-    case pinned
-
-    /// Persisted choice for a session key, or nil if the user hasn't chosen yet
-    /// (→ show the connect dialog).
-    static func stored(for key: String) -> TerminalSizingMode? {
-        guard let raw = UserDefaults.standard.string(forKey: "sizingMode.\(key)") else { return nil }
-        return TerminalSizingMode(rawValue: raw)
-    }
-    static func store(_ mode: TerminalSizingMode, for key: String) {
-        UserDefaults.standard.set(mode.rawValue, forKey: "sizingMode.\(key)")
-    }
-}
-
 /// Bridges the UIKit terminal views into SwiftUI navigation.
 /// The TerminalViewModel and VoiceInputController are owned by the parent
 /// (HostSessionsView) and passed in — the session has already been picked
@@ -227,7 +209,11 @@ struct TerminalWrapperView: View {
 
     private func setSizing(_ mode: TerminalSizingMode) {
         sizingMode = mode
-        TerminalSizingMode.store(mode, for: sessionKey)
+        // Route through the view model so the choice also lands on the tmux
+        // server (`window-size`). Storing it locally only ever suppressed OUR
+        // pushes — another attached client could still reflow the session, so a
+        // "pin" didn't actually pin anything.
+        viewModel.setSizingMode(mode)
         if mode == .tracking { viewModel.resetTmuxClientToDeviceSize() }
     }
 

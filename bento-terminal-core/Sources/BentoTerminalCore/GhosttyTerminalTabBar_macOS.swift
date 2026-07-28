@@ -28,7 +28,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     var onRenameSession: (() -> Void)?
     var onDetach: (() -> Void)?
     var onKillSession: (() -> Void)?
-    var onFitSession: (() -> Void)?
+    var onSetSizingMode: ((TerminalSizingMode) -> Void)?
+    /// The active session's current sizing policy (drives the checkmark).
+    var sizingMode: TerminalSizingMode = .tracking
     var onCloseTab: (() -> Void)?
     /// The Tiled|List mode switch picked a mode (the manager runs `setMode`,
     /// warning first when a mixed external structure must be flattened).
@@ -324,11 +326,13 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             return menu
         }
         add(menu, "Rename Session…", #selector(renameAction))
-        // Re-assert THIS window's size on the session — for when another
-        // attached client (an iPad) shrank the shared canvas.
-        add(menu, "Fit Session to This Window", #selector(fitSessionAction))
+        menu.addItem(sizingMenuItem())
+        menu.addItem(.separator())
         add(menu, "Detach (keep running)", #selector(detachAction))  // unload; session survives
-        add(menu, "Kill Session", #selector(killAction))             // destroy the tmux session
+        // Destructive, and one row away from Detach — which is its harmless
+        // twin — so a separator keeps them from being adjacent targets.
+        menu.addItem(.separator())
+        add(menu, "Kill Session", #selector(killAction))
         menu.addItem(.separator())
         add(menu, "Close Window", #selector(closeWindowAction))
         // No window SWITCH list here any more: windows own the centre strip, so
@@ -361,6 +365,40 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func selectSessionAction(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
         onSelectSession?(key)
+    }
+
+    /// Who governs the window size — a checked pair, not a "do it now" button.
+    /// The old single "Fit Session to This Window" was a one-shot that tmux
+    /// undid as soon as any other client was used (see `TerminalSizingMode`).
+    private func sizingMenuItem() -> NSMenuItem {
+        let root = NSMenuItem(title: "Session Size", action: nil, keyEquivalent: "")
+        root.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right",
+                             accessibilityDescription: "Session Size")
+        let sub = NSMenu()
+        for mode in TerminalSizingMode.allCases {
+            let it = NSMenuItem(title: mode.title, action: #selector(sizingAction(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = mode.rawValue
+            it.state = (mode == sizingMode) ? .on : .off
+            it.image = NSImage(systemSymbolName: mode.symbol, accessibilityDescription: mode.title)
+            sub.addItem(it)
+        }
+        sub.addItem(.separator())
+        let note = NSMenuItem(
+            title: sizingMode == .tracking
+                ? "This window's size drives the session."
+                : "Frozen — other clients can't reflow it either.",
+            action: nil, keyEquivalent: "")
+        note.isEnabled = false
+        sub.addItem(note)
+        root.submenu = sub
+        return root
+    }
+
+    @objc private func sizingAction(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let mode = TerminalSizingMode(rawValue: raw) else { return }
+        onSetSizingMode?(mode)
     }
 
     /// Everything you can create, grouped by which level of tmux it lands on —
@@ -526,7 +564,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func renameAction() { onRenameSession?() }
     @objc private func detachAction() { onDetach?() }
     @objc private func killAction() { onKillSession?() }
-    @objc private func fitSessionAction() { onFitSession?() }
 }
 
 #endif

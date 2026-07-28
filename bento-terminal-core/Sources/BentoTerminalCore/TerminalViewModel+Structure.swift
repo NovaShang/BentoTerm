@@ -617,6 +617,47 @@ public extension TerminalViewModel {
         DIAG("[MODE] restore select-layout win=\(win) name=[\(step.name)] layout=[\(layout)] err=\(resp.isError) out=[\(resp.output.trimmingCharacters(in: .whitespacesAndNewlines))]")
     }
 
+    /// Put the session's sizing policy into tmux, so the choice survives this
+    /// client going away and holds against other attached clients.
+    ///
+    /// `.tracking` leaves `window-size` on `latest` — the caller keeps pushing
+    /// `refresh-client -C`, and this window governs whenever it's the one being
+    /// used. `.pinned` switches to `manual` and freezes the current grid with a
+    /// single `resize-window`; under `manual` tmux stops deriving the size from
+    /// clients at all, which is the only way a pin actually holds.
+    @discardableResult
+    public func applySizingMode(_ mode: TerminalSizingMode) async -> Bool {
+        guard usingTmux else { return false }
+        switch mode {
+        case .tracking:
+            let resp = await tmuxService.send(.setWindowOption(name: "window-size", value: "latest"))
+            if resp.isError { dlog("applySizingMode tracking: \(resp.output)") }
+            return !resp.isError
+        case .pinned:
+            // Freeze at what's on screen right now, so pinning never resizes
+            // anything by itself — it only stops future changes.
+            guard let window = windows.first(where: { $0.id == activeWindowID }) ?? windows.first,
+                  let size = await currentWindowSize(window.id) else {
+                dlog("applySizingMode pinned: no window size to pin")
+                return false
+            }
+            _ = await tmuxService.send(.setWindowOption(name: "window-size", value: "manual"))
+            let resp = await tmuxService.send(
+                .resizeWindow(window: window.id, width: size.cols, height: size.rows))
+            if resp.isError { dlog("applySizingMode pinned: \(resp.output)") }
+            return !resp.isError
+        }
+    }
+
+    private func currentWindowSize(_ windowID: TmuxWindowID) async -> (cols: Int, rows: Int)? {
+        let resp = await tmuxService.send(
+            .displayMessage(format: "#{window_width}x#{window_height}", target: nil))
+        guard !resp.isError else { return nil }
+        let parts = resp.output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "x")
+        guard parts.count == 2, let cols = Int(parts[0]), let rows = Int(parts[1]) else { return nil }
+        return (cols, rows)
+    }
+
     /// Apply one of tmux's named layouts (`even-horizontal`, `main-vertical`,
     /// `tiled`, …) to a window. Bento's own tiling reads the result back from
     /// `%layout-change`, so this is tmux rearranging its own window rather than

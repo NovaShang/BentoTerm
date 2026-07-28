@@ -93,6 +93,9 @@ public final class TerminalViewModel: ObservableObject {
     var modePreferenceLoaded = false
     /// The session's current window (drives the active tab highlight).
     @Published public var activeWindowID: TmuxWindowID?
+    /// Who governs the tmux window's size (see `TerminalSizingMode`). Sticky
+    /// per session; restored on attach by `restoreSizingMode`.
+    @Published public var sizingMode: TerminalSizingMode = .tracking
     @Published public var isTmuxReady = false
 
     /// Where we are in the session lifecycle.
@@ -640,6 +643,10 @@ public final class TerminalViewModel: ObservableObject {
 
         isTmuxReady = true
         phase = .tmuxReady
+        // The sizing policy lives on the tmux server (`window-size`), so a
+        // reconnect has to re-assert it — otherwise a pinned session silently
+        // goes back to tracking the first client that touches it.
+        restoreSizingMode(for: sessionName)
         startStatePolling()
         // Warm the session list so Move-to-Session menus (which resolve
         // synchronously from this cache) have targets on their FIRST open —
@@ -1234,9 +1241,38 @@ public final class TerminalViewModel: ObservableObject {
     /// each visible pane (SIGWINCH on the remote shell). Used when the visible
     /// area changes for a single-pane / zoomed / focused session so the active
     /// pane fills exactly the area above the keyboard — same UX as non-tmux.
+    ///
+    /// Gated on the sizing mode HERE rather than at each call site: a pin has to
+    /// hold against every path that could push a size (live resize, zoom, font
+    /// change, keyboard avoidance), and one of them being missed is what a
+    /// half-applied pin looks like.
     public func resizeTmuxClient(cols: Int, rows: Int) {
-        guard usingTmux else { return }
+        guard usingTmux, sizingMode == .tracking else { return }
         tmuxService.sendFireAndForget(.refreshClient(width: cols, height: rows))
+    }
+
+    /// Change who governs the window size, persist it, and put the matching
+    /// policy into tmux. See `TerminalSizingMode` for why this is a state.
+    public func setSizingMode(_ mode: TerminalSizingMode) {
+        sizingMode = mode
+        if let session = activeTmuxSessionName {
+            TerminalSizingMode.store(mode, for: session)
+        }
+        Task { [weak self] in
+            await self?.applySizingMode(mode)
+            // Returning to tracking must re-assert this client immediately;
+            // otherwise the window keeps whatever the pin froze it at until
+            // something else happens to resize.
+            if mode == .tracking { self?.resetTmuxClientToDeviceSize() }
+        }
+    }
+
+    /// Load the stored policy for a session and re-assert it on tmux — the
+    /// choice is server-affecting, so reconnecting has to restore it.
+    func restoreSizingMode(for session: String) {
+        let mode = TerminalSizingMode.stored(for: session) ?? .tracking
+        sizingMode = mode
+        Task { [weak self] in await self?.applySizingMode(mode) }
     }
 
     /// User-triggered: resize the tmux client to fit the current device
