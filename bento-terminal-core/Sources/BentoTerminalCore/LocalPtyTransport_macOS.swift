@@ -13,6 +13,9 @@ public final class LocalPtyTransport: TerminalTransport, @unchecked Sendable {
     public var onDataReceived: (@Sendable (Data) -> Void)?
     public var onStateChanged: (@Sendable (TerminalConnectionState) -> Void)?
 
+    /// A pty on this machine — bulk reads (deep `capture-pane` seeds) are cheap.
+    public var isLocalLink: Bool { true }
+
     /// `command` overrides the default login shell (e.g. a `tmux -CC` invocation).
     public init(command: [String]? = nil) {
         self.command = command

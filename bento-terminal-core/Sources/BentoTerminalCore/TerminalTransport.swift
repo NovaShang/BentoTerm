@@ -41,6 +41,14 @@ public protocol TerminalTransport: AnyObject, Sendable {
     /// a healthy connection just because the suspend grace expired. Should
     /// answer within a few seconds; `false` means the caller must reconnect.
     func probeLiveness() async -> Bool
+
+    /// Whether tmux is reached over a local pipe rather than a network link.
+    ///
+    /// Not cosmetic: it decides how much bulk this connection can be asked for.
+    /// A `capture-pane` of deep scrollback is nearly free on a pty and expensive
+    /// over SSH/relay, where the bytes are also decrypted and drained on the
+    /// main thread of a phone.
+    var isLocalLink: Bool { get }
 }
 
 public extension TerminalTransport {
@@ -50,6 +58,10 @@ public extension TerminalTransport {
         if case .connected = state { return true }
         return false
     }
+
+    /// Default to the conservative answer — anything that hasn't declared itself
+    /// local is assumed to be paying for every byte.
+    var isLocalLink: Bool { false }
 }
 
 /// Host-app services the cross-platform TerminalViewModel needs but that are

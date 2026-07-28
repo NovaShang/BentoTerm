@@ -1037,15 +1037,25 @@ public final class TerminalViewModel: ObservableObject {
     /// deep one adds latency to the window switch that reveals it. 2000 = tmux's
     /// own default `history-limit`. Override without a rebuild via the
     /// `terminal_seed_history_lines` default.
-    static var seedHistoryLines: Int {
+    /// 2000 = tmux's own default `history-limit`, over a local pty where the
+    /// capture is a pipe read.
+    ///
+    /// Over a network link it is a very different bill: the same capture is
+    /// decrypted and drained on the main thread (iOS does all of that there),
+    /// it is paid again on every window switch, and `escapes: true` inflates a
+    /// colorful agent pane several-fold. So a remote link seeds a few screens —
+    /// enough that scrolling back and ⌘F still find something, not enough to
+    /// stall an attach on a phone.
+    var seedHistoryLines: Int {
         let v = UserDefaults.standard.integer(forKey: "terminal_seed_history_lines")
-        return v > 0 ? v : 2000
+        if v > 0 { return v }
+        return transport.isLocalLink ? 2000 : 400
     }
 
     private func seedNewPanes(_ ids: [TmuxPaneID]) async {
         for paneVM in paneViewModels where ids.contains(paneVM.paneID) {
             let screen = paneVM.pane.height > 0 ? paneVM.pane.height : 50
-            let lines = max(screen, Self.seedHistoryLines)
+            let lines = max(screen, seedHistoryLines)
             // Seed the fresh surface with the pane's current screen.
             // `escapes: true` keeps SGR color/style codes so a freshly
             // shown pane (e.g. after a window switch) seeds in full color
