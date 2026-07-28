@@ -33,6 +33,14 @@ public enum Prof {
         /// The AppKit event's own age when we first see it: `now − event.timestamp`.
         /// This is the pure "main thread was busy, your key waited" number. [main]
         case keyEventLag
+        /// `inputContext.handleEvent` — the synchronous trip through macOS's
+        /// input method system, which every printable keystroke makes. [main]
+        case imeHandleEvent
+        /// Main-thread work by OTHER stages that ran INSIDE `imeHandleEvent`.
+        /// IMK's synchronous call spins the runloop, so output processing can be
+        /// re-entered from inside a keystroke. Large value here means the IME
+        /// call isn't slow by itself — it's absorbing the output pipeline. [main]
+        case imeReentrant
         /// `sendKeyEvent` → `ghostty_surface_key` returns. [main]
         case keyEncode
         /// ghostty's write-to-host → `PaneViewModel.sendInput` → tmux enqueue. [main]
@@ -86,6 +94,8 @@ public enum Prof {
             switch self {
             case .keyDown: return "keyDown"
             case .keyEventLag: return "keyEventLag"
+            case .imeHandleEvent: return "imeHandleEvent"
+            case .imeReentrant: return "imeReentrant"
             case .keyEncode: return "keyEncode"
             case .hostWrite: return "hostWrite"
             case .inputBatchWait: return "inputBatchWait"
@@ -119,11 +129,25 @@ public enum Prof {
             }
         }
 
-        /// Runs on the main thread, so it contributes to a hitch.
+        /// Runs on the main thread, so it contributes to a hitch. `imeReentrant`
+        /// is excluded on purpose: it double-counts time already attributed to
+        /// the output stages it is measuring.
         var onMain: Bool {
             switch self {
-            case .keyDown, .keyEncode, .hostWrite, .routeIn, .drain,
-                 .paneFeed, .historyTrim, .runtimeTick:
+            case .keyDown, .imeHandleEvent, .keyEncode, .hostWrite, .routeIn,
+                 .drain, .paneFeed, .historyTrim, .runtimeTick:
+                return true
+            default:
+                return false
+            }
+        }
+
+        /// Main-thread stages belonging to the OUTPUT pipeline (bytes → screen),
+        /// as opposed to the input pipeline. Tracked cumulatively so we can ask
+        /// "did output processing run while this keystroke was being handled?"
+        var isOutputPipeline: Bool {
+            switch self {
+            case .routeIn, .drain, .paneFeed, .historyTrim, .runtimeTick:
                 return true
             default:
                 return false
@@ -175,6 +199,9 @@ public enum Prof {
         /// Breakdown of the single worst main-runloop turn seen so far.
         var worstTurnNs: UInt64 = 0
         var worstTurnAccum = [UInt64](repeating: 0, count: Stage.allCases.count)
+        /// Running total of main-thread OUTPUT-pipeline time. Diffing this across
+        /// a region says whether output processing ran inside that region.
+        var outputPipelineNs: UInt64 = 0
         /// Main-runloop turns that blew the one-frame budget.
         var hitches16: UInt64 = 0
         var hitches33: UInt64 = 0
@@ -221,9 +248,17 @@ public enum Prof {
 
     // MARK: - Recording
 
-    /// Record one sample for `stage`.
+    /// Nesting depth of main-thread spans. Only the OUTERMOST span is attributed
+    /// to the runloop turn — `keyDown` contains `keyEncode`/`hostWrite`, `drain`
+    /// contains `paneFeed`, and summing both levels would count the same
+    /// nanoseconds twice and inflate the breakdown past the turn's real length.
+    /// Main-thread only, so a plain var is safe.
+    private nonisolated(unsafe) static var mainSpanDepth = 0
+
+    /// Record one sample for `stage`. `topLevel` false = nested inside another
+    /// main-thread span, so it must not be added to the turn attribution.
     @inline(__always)
-    public static func mark(_ stage: Stage, ns: UInt64) {
+    public static func mark(_ stage: Stage, ns: UInt64, topLevel: Bool = true) {
         guard enabled else { return }
         let onMainNow = stage.onMain && pthread_main_np() != 0
         state.withLockUnchecked { s in
@@ -235,32 +270,47 @@ public enum Prof {
             s.stages[stage.rawValue] = st
             // Attribute main-thread work to the runloop turn it happened in, so a
             // hitch can be broken down by what actually ran during it.
-            if onMainNow { s.turnAccum[stage.rawValue] &+= ns }
+            if onMainNow && topLevel { s.turnAccum[stage.rawValue] &+= ns }
+            // Output-pipeline total is depth-independent: we want it to count even
+            // when the pipeline is re-entered from inside a keystroke.
+            if stage.isOutputPipeline { s.outputPipelineNs &+= ns }
             if s.startNs == 0 { s.startNs = now() }
         }
     }
 
     /// Record `stage` as the elapsed time since `t0`.
     @inline(__always)
-    public static func end(_ stage: Stage, since t0: UInt64) {
+    public static func end(_ stage: Stage, since t0: UInt64, topLevel: Bool = true) {
         guard enabled else { return }
-        mark(stage, ns: now() &- t0)
+        mark(stage, ns: now() &- t0, topLevel: topLevel)
+    }
+
+    /// Main-thread output-pipeline nanoseconds so far. Diff across a region to
+    /// find out whether output processing ran inside it (see `imeReentrant`).
+    @inline(__always)
+    public static func outputWorkSoFar() -> UInt64 {
+        guard enabled else { return 0 }
+        return state.withLockUnchecked { $0.outputPipelineNs }
     }
 
     /// Time `body` as `stage`.
     @inline(__always)
     public static func span<T>(_ stage: Stage, _ body: () throws -> T) rethrows -> T {
         guard enabled else { return try body() }
+        let onMainNow = pthread_main_np() != 0
+        let wasTopLevel = onMainNow && mainSpanDepth == 0
+        if onMainNow { mainSpanDepth += 1 }
+        defer { if onMainNow { mainSpanDepth -= 1 } }
         let t0 = now()
         if signpostsEnabled {
             let id = signposter.makeSignpostID()
             let interval = signposter.beginInterval("stage", id: id, "\(stage.label)")
             defer { signposter.endInterval("stage", interval) }
             let r = try body()
-            end(stage, since: t0)
+            end(stage, since: t0, topLevel: !onMainNow || wasTopLevel)
             return r
         }
-        defer { end(stage, since: t0) }
+        defer { end(stage, since: t0, topLevel: !onMainNow || wasTopLevel) }
         return try body()
     }
 
@@ -450,7 +500,9 @@ public enum Prof {
         var seen: UInt64 = 0
         for (i, c) in st.buckets.enumerated() where c > 0 {
             seen &+= UInt64(c)
-            if seen >= target { return bucketValue(i) }
+            // A bucket's midpoint can sit above the largest sample it holds, so
+            // clamp — a quantile printed above `max` reads as a bug.
+            if seen >= target { return min(bucketValue(i), st.maxNs) }
         }
         return st.maxNs
     }
@@ -505,10 +557,13 @@ public enum Prof {
         out += "\n(Q = queueing delay: time spent waiting to run, not working.)\n"
 
         // What was the main thread actually doing during its worst stall?
-        let breakdown = Stage.allCases
-            .filter { worstAccum[$0.rawValue] > 0 }
-            .sorted { worstAccum[$0.rawValue] > worstAccum[$1.rawValue] }
-        if !breakdown.isEmpty {
+        // Always printed, even when nothing is attributed: a long stall that maps
+        // to NO instrumented stage means the cost is outside the pipeline we
+        // measure, and that is a finding rather than an absence of one.
+        if worstNs > 0 {
+            let breakdown = Stage.allCases
+                .filter { worstAccum[$0.rawValue] > 0 }
+                .sorted { worstAccum[$0.rawValue] > worstAccum[$1.rawValue] }
             out += String(format: "\nworst main-turn (%.1fms) breakdown:\n", Double(worstNs) / 1e6)
             var attributed: UInt64 = 0
             for stage in breakdown {

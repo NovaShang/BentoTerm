@@ -681,7 +681,14 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
         // it ourselves via the engine.
         keyEventForIME = event
         defer { keyEventForIME = nil }
-        if inputContext?.handleEvent(event) != true {
+        // IMK's handleEvent is a synchronous IPC that spins the runloop, so the
+        // output pipeline can be re-entered from inside it. Measure the call and
+        // how much output work happened within it — the two together say whether
+        // the IME is slow or merely absorbing our own output processing.
+        let outputBefore = Prof.outputWorkSoFar()
+        let consumed = Prof.span(.imeHandleEvent) { inputContext?.handleEvent(event) == true }
+        Prof.mark(.imeReentrant, ns: Prof.outputWorkSoFar() &- outputBefore)
+        if !consumed {
             sendKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
         }
     }
