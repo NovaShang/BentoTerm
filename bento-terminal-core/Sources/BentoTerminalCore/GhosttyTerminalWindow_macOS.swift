@@ -171,7 +171,11 @@ public enum BentoTerminalWindow {
         let m = TerminalWindowManager(tab: tab)
         m.onEmpty = { [weak m] in
             managers.removeAll { $0 === m }
-            persistOpenSessions()
+            // Deliberately NOT persisting here. This fires as each window goes
+            // away, so the LAST one would write an empty list — and "reopen what
+            // I had" would reopen nothing, silently replacing the user's
+            // sessions with a fresh default on the next launch. Every open and
+            // every close-while-others-remain has already recorded the set.
             updateActivationPolicy()
         }
         // Join the frontmost existing window's group; ordering is AppKit's.
@@ -491,7 +495,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // left. That gives tmux's three levels three fixed places (session /
         // window / pane) instead of leaving the middle one homeless.
         toolbar.onSelectSegment = { [weak self] idx in self?.segmentPicked(idx) }
-        toolbar.onOpenSearch = { [weak self] in self?.activeTab?.paneHost?.presentCommandPalette() }
+        toolbar.onOpenSearch = { [weak self] in
+            guard let self else { return }
+            self.tab.paneHost?.presentCommandPalette(from: self.toolbar.searchAnchor)
+        }
         toolbar.onNewAgent = { BentoTerminalWindow.onNewAgentSession?() }
         toolbar.onNewTerminal = { BentoTerminalWindow.newSessionTab() }
         toolbar.onNewPlainShell = { BentoTerminalWindow.newWindowNoTmux() }
@@ -906,16 +913,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // tab's own title carries the status dot instead.
         updateTabTitle()
 
-        var tmuxWindows = activeTab.map { $0.isPlain ? [] : $0.viewModel.windows } ?? []
-        // In Focus the centre names what you are looking at rather than
-        // offering the switch: the sidebar (pinned open in that mode) is the
-        // switcher, and two switchers for the same thing would leave the user
-        // guessing which one is authoritative.
-        if activeTab?.viewModel.sessionMode == .list,
-           let currentID = activeTab?.viewModel.activeWindowID,
-           let current = tmuxWindows.first(where: { $0.id == currentID }) {
-            tmuxWindows = [current]
-        }
+        let tmuxWindows = tab.isPlain ? [] : tab.viewModel.windows
         let maxVisible = computeMaxVisible()
         var visible = Array(tmuxWindows.prefix(maxVisible))
         // Keep the current window visible even if it would land in the overflow.
@@ -940,11 +938,12 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         if hasOverflow {
             items.append(("", "more", NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More windows")))
         }
-        // The centre is shared with the search field: a switcher for ONE window
-        // says nothing, so that space goes to search instead. Focus always keeps
-        // the centre, because there it names the window you're looking at.
-        let isFocus = activeTab?.viewModel.sessionMode == .list
-        toolbar.setCenterShowsTabs(isFocus || tmuxWindows.count > 1)
+        // The centre is shared with the search field. A switcher for ONE window
+        // says nothing, and in Focus the sidebar is already the window list — so
+        // in both cases that space goes to search, which always has something to
+        // offer.
+        let isFocus = tab.viewModel.sessionMode == .list
+        toolbar.setCenterShowsTabs(!isFocus && tmuxWindows.count > 1)
 
         let activeIdx = activeWindowID.flatMap { id in visible.firstIndex { $0.id == id } } ?? -1
         toolbar.updateTabs(items, selected: activeIdx)

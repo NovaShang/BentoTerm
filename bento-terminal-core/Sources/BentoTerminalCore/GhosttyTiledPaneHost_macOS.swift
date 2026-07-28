@@ -1004,12 +1004,15 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// Open the command palette over this window's focused pane: its file
     /// context (source + cwd) drives the File section; the Command / New Pane /
     /// Recent sections are wired to this host.
-    func presentCommandPalette() {
+    /// `anchor` is the control that opened it (the toolbar's search field), so
+    /// the panel drops from there instead of the window's launcher position.
+    func presentCommandPalette(from anchor: NSView? = nil) {
         let ctx = activePaneID.flatMap { cells[$0]?.surface.pathPreviewContext }
         CommandPaletteController.shared.present(
             fileContext: ctx,
             hostLabel: ctx?.hostLabel ?? "This Mac",
-            staticSpecs: buildPaletteSpecs())
+            staticSpecs: buildPaletteSpecs(),
+            from: anchor)
     }
 
     @objc private func openCommandPalette(_ sender: Any?) { presentCommandPalette() }

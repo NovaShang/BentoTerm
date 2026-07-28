@@ -14,15 +14,24 @@ public final class CommandPaletteController {
 
     private var panel: PalettePanel?
     private var model: PaletteViewModel?
+    /// The control the palette was opened from, if any (see `present`).
+    private weak var anchorView: NSView?
 
     /// Open the palette over the focused pane. `fileContext` is that pane's
     /// file source + cwd (nil = no file access); the File section roots itself at
     /// that pane's cwd (resolved lazily so the panel opens instantly). `staticSpecs`
     /// are the caller-wired Commands / New Pane / Recent sections.
+    ///
+    /// `anchorView` is the control that opened it (the toolbar's search field).
+    /// The panel then drops from THAT control rather than the window's launcher
+    /// position — a panel appearing somewhere other than what you just clicked
+    /// reads as a different feature.
     public func present(fileContext: PathPreviewContext?,
-                        hostLabel: String, staticSpecs: [PaletteSectionSpec]) {
+                        hostLabel: String, staticSpecs: [PaletteSectionSpec],
+                        from anchorView: NSView? = nil) {
         // A second ⌘P while open just closes it (toggle).
         if panel != nil { dismiss(); return }
+        self.anchorView = anchorView
 
         let model = PaletteViewModel(
             fileContext: fileContext, hostLabel: hostLabel,
@@ -47,6 +56,7 @@ public final class CommandPaletteController {
         panel?.orderOut(nil)
         panel = nil
         model = nil
+        anchorView = nil
     }
 
     /// Keep the panel's top-center pinned as it grows/shrinks with the results.
@@ -54,9 +64,25 @@ public final class CommandPaletteController {
         guard let screen = (NSApp.keyWindow?.screen ?? NSScreen.main) else { return }
         let ref = NSApp.keyWindow?.frame ?? screen.visibleFrame
         let size = panel.frame.size
-        let x = ref.midX - size.width / 2
-        // ~18% down from the reference top — the classic launcher position.
-        let topY = ref.maxY - ref.height * 0.18
+
+        let x: CGFloat
+        let topY: CGFloat
+        if let field = anchorView, let fieldWindow = field.window {
+            // COVER the control rather than hang below it: top edges flush and
+            // centred on it, so the panel's own input row lands where the search
+            // field was and the field appears to become the palette. Dropping it
+            // underneath left the field visible above a separate panel, which
+            // reads as two things instead of one.
+            let inWindow = field.convert(field.bounds, to: nil)
+            let onScreen = fieldWindow.convertToScreen(inWindow)
+            x = onScreen.midX - size.width / 2
+            topY = onScreen.maxY
+        } else {
+            // ⌘P with no control behind it: the classic launcher position,
+            // ~18% down from the window's top.
+            x = ref.midX - size.width / 2
+            topY = ref.maxY - ref.height * 0.18
+        }
         var origin = NSPoint(x: x, y: topY - size.height)
         let vis = screen.visibleFrame
         origin.x = min(max(origin.x, vis.minX + 8), vis.maxX - size.width - 8)

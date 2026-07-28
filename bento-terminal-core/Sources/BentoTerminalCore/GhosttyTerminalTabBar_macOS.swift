@@ -185,6 +185,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     @objc private func searchTapped() { onOpenSearch?() }
 
+    /// Whichever search control is currently on screen — the panel hangs off it.
+    var searchAnchor: NSView { centerShowsTabs ? searchCompact : searchField }
+
     /// The centre of the toolbar is shared: the window strip when the session
     /// has more than one window, the search field when it doesn't.
     ///
