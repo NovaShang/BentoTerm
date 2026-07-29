@@ -69,6 +69,15 @@ public final class FilePreviewWebView: WKWebView, WKNavigationDelegate {
         self.imageBase = imageBase
         let payload = Payload(name: fileName, text: text, line: line, dark: dark)
         guard templateReady else { pending = payload; return }
+        send(payload)
+    }
+
+    /// Ship a payload to the page. Separate from `render` on purpose: the
+    /// deferred flush in `didFinish` must NOT touch `imageBase` — the very
+    /// first render of a fresh WebView always lands there (the panel makes one
+    /// view per opened file, so the template is still loading), and clearing
+    /// the base there meant markdown images never filled at all.
+    private func send(_ payload: Payload) {
         guard let data = try? JSONEncoder().encode(payload),
               var json = String(data: data, encoding: .utf8) else { return }
         // U+2028/2029 are valid JSON but not valid JS string literals.
@@ -158,7 +167,7 @@ public final class FilePreviewWebView: WKWebView, WKNavigationDelegate {
         templateReady = true
         if let p = pending {
             pending = nil
-            render(fileName: p.name, text: p.text, line: p.line, dark: p.dark)
+            send(p)
         }
     }
 

@@ -104,3 +104,42 @@ import Testing
         #expect(!html.contains("hljs-"))
     }
 }
+
+#if canImport(WebKit) && os(macOS)
+import WebKit
+
+/// End-to-end through a real `FilePreviewWebView`: the JSContext suite above
+/// proves the page asks for relative images, this proves the native side
+/// actually answers on the path every real preview takes.
+@Suite(.serialized) @MainActor struct FilePreviewImageFillTests {
+
+    /// The panel builds ONE WebView per opened file, so `render` always lands
+    /// before the template finished loading and gets flushed from `didFinish`.
+    /// That flush used to drop the image base, and markdown images never filled.
+    @Test func relativeImageFillsWhenRenderPrecedesTemplateLoad() async throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bento-md-img-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("figures"), withIntermediateDirectories: true)
+        let png = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))
+        try png.write(to: dir.appendingPathComponent("figures/shot.png"))
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let view = FilePreviewWebView.makePreview()
+        view.render(fileName: "doc.md", text: "![图1](figures/shot.png)", line: nil,
+                    dark: false,
+                    imageBase: .init(directory: dir.path, source: LocalFileSource()))
+
+        var src = ""
+        for _ in 0..<100 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            let js = "(function(){var e=document.querySelector('img.md-img');" +
+                     "return (e && e.getAttribute('src')) || '';})()"
+            src = (try? await view.evaluateJavaScript(js)) as? String ?? ""
+            if !src.isEmpty { break }
+        }
+        #expect(src.hasPrefix("data:image/png;base64,"))
+    }
+}
+#endif
