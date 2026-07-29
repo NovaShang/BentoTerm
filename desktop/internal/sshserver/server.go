@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/novashang/bento/desktop/internal/relay"
@@ -86,8 +87,39 @@ func (s *Server) serveOne(streamID uint32, c *streamConn) {
 		return
 	}
 	dev := sconn.Permissions.Extensions["device_id"]
+	started := time.Now()
 	s.log.Info("ssh session established", "stream", streamID, "device", dev, "user", sconn.User())
 	defer sconn.Close()
+
+	// The daemon logged every session's BIRTH and none of its deaths, so a
+	// client stuck in a reconnect loop showed up here as a healthy-looking
+	// column of "established" lines with no hint of what kept ending them —
+	// diagnosing it meant guessing from the phone's side alone. The lifetime
+	// is the diagnostic: sub-second means something tore the stream down
+	// immediately, minutes means an ordinary drop.
+	//
+	// `sconn.Wait()` carries WHY the connection ended — clean EOF (the client
+	// or tunnel went away) versus an SSH protocol error (corrupt or misordered
+	// packets), which are opposite bugs with opposite fixes. Ranging over
+	// `chans` and returning threw that away, so the daemon could only ever say
+	// "a session ended".
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- sconn.Wait() }()
+	defer func() {
+		var reason string
+		select {
+		case err := <-waitErr:
+			reason = "clean eof"
+			if err != nil && err != io.EOF {
+				reason = err.Error()
+			}
+		default:
+			reason = "channels closed"
+		}
+		s.log.Info("ssh session ended", "stream", streamID, "device", dev,
+			"lifetime", time.Since(started).Round(time.Millisecond).String(),
+			"reason", reason)
+	}()
 
 	go ssh.DiscardRequests(reqs)
 	for newCh := range chans {
