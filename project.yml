@@ -41,6 +41,10 @@ targets:
     settings:
       base:
         INFOPLIST_KEY_UILaunchScreen_Generation: true
+        # iPad multitasking (Split View / Stage Manager free-resize) requires an
+        # EXPLICIT all-four-orientation declaration — an absent key leaves the
+        # app locked to a fixed window. iPhone keeps the default (no upside-down).
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Bento needs microphone access for voice input to terminal."
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Bento uses speech recognition to convert voice to text and shell commands."
         INFOPLIST_KEY_NSFaceIDUsageDescription: "Bento uses Face ID to protect your SSH keys."
