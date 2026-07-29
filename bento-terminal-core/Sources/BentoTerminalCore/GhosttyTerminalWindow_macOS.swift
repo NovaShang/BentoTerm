@@ -470,7 +470,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     init(tab: SessionTab) {
         self.tab = tab
         super.init()
-        let win = NSWindow(
+        let win = TerminalSessionWindow(
             contentRect: NSRect(x: 0, y: 0, width: 980, height: 640),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false)
@@ -600,6 +600,9 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onRenameSession = { [weak self] in self?.presentRenameSheet() }
         toolbar.onWindowMenu = { [weak self] index in self?.windowMenuItems(forSegment: index) }
         toolbar.hostWindow = win
+        win.onRightClick = { [weak toolbar] point in
+            toolbar?.handleRightClick(atWindowPoint: point) ?? false
+        }
         win.toolbar = toolbar.makeToolbar()
         win.toolbarStyle = .unified
         // Restore size + position, but only for the window that opens into an
@@ -1416,6 +1419,24 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         window.toolbar = nil
         window.delegate = nil
         onEmpty?()
+    }
+}
+
+/// A session window that gives its toolbar first refusal on right-clicks.
+///
+/// The window strip is an `NSToolbarItemGroup` rendered by AppKit, and its
+/// control eats `rightMouseDown` without consulting the `menu` property — so a
+/// context menu on a window tab cannot be installed the normal way. `sendEvent`
+/// sees the event before dispatch, and `self` is by construction the window
+/// that received it: safe attribution without an event monitor, which is what
+/// made the previous title-bar menu act on the wrong session.
+final class TerminalSessionWindow: NSWindow {
+    /// Returns true when the click landed on the window strip and was handled.
+    var onRightClick: ((NSPoint) -> Bool)?
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .rightMouseDown, onRightClick?(event.locationInWindow) == true { return }
+        super.sendEvent(event)
     }
 }
 

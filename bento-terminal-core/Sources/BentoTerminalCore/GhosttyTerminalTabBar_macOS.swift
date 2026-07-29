@@ -69,11 +69,10 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// segment the pointer is actually over; returning nil means "nothing there".
     var onWindowMenu: ((Int) -> [NSMenuItem]?)?
 
-    /// The segmented control AppKit builds for the expanded item group, and the
-    /// menu we hang on it. Found by traversal because `NSToolbarItemGroup`
-    /// publishes no accessor — see `attachWindowMenu`.
+    /// The segmented control AppKit builds for the expanded item group. Found by
+    /// traversal because `NSToolbarItemGroup` publishes no accessor — see
+    /// `attachWindowMenu`.
     private weak var segmentedRef: NSSegmentedControl?
-    private let windowMenu = NSMenu()
     /// The window this toolbar belongs to. Load-bearing, not a convenience:
     /// sessions are native tabs, so several windows carry an identical toolbar
     /// at once and a search that could wander into another one would hand this
@@ -300,25 +299,53 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     // MARK: - Window segment context menu
 
-    /// Hang `windowMenu` on the segmented control AppKit renders for the
-    /// expanded item group, so a right-click on a window tab opens that
-    /// window's actions instead of the stock toolbar menu.
+    /// Cache the segmented control AppKit renders for the expanded item group.
     ///
-    /// The control has to be found by walking the title bar's views:
-    /// `NSToolbarItemGroup` has no accessor for the control it builds, and the
-    /// group is swapped wholesale on every title/dot change. Idempotent, and a
-    /// miss is harmless — no menu rather than a wrong one.
+    /// It has to be found by walking the title bar's views: `NSToolbarItemGroup`
+    /// has no accessor for the control it builds, and the group is swapped
+    /// wholesale on every title/dot change. Idempotent; a miss just means no
+    /// context menu until the next refresh.
     private func attachWindowMenu() {
         guard centerShowsTabs, let host = hostWindow else { return }
-        if let seg = segmentedRef, seg.window === host, seg.menu === windowMenu,
+        if let seg = segmentedRef, seg.window === host,
            seg.segmentCount == tabsGroup.subitems.count { return }
         // The theme frame, so the search covers the title bar as well as content.
         guard let root = host.contentView?.superview,
               let seg = Self.findSegmented(in: root, count: tabsGroup.subitems.count)
         else { return }
-        windowMenu.delegate = self
-        seg.menu = windowMenu
         segmentedRef = seg
+    }
+
+    /// Right-click at `point` (window coordinates) — show that window tab's menu
+    /// if the click landed on one. Returns true when handled, so the window can
+    /// swallow the event.
+    ///
+    /// This is driven from `NSWindow.sendEvent` rather than the view's `menu`
+    /// property, which looks like the obvious hook and does not work: the
+    /// expanded group's control is SwiftUI-backed internally and consumes
+    /// `rightMouseDown` without ever consulting `.menu` (measured — an
+    /// NSEvent posted into the app's own queue never reached the delegate).
+    /// `sendEvent` sees events before dispatch, and `self` is by construction
+    /// the window that received the click — so unlike the global monitor this
+    /// replaces, there is no way to attribute it to another window.
+    func handleRightClick(atWindowPoint point: NSPoint) -> Bool {
+        attachWindowMenu()
+        guard centerShowsTabs, let seg = segmentedRef, seg.window === hostWindow else { return false }
+        guard seg.convert(seg.bounds, to: nil).contains(point) else { return false }
+        guard let host = hostWindow else { return false }
+        guard let index = segmentIndex(in: seg, screenPoint: host.convertPoint(toScreen: point)),
+              let items = onWindowMenu?(index), !items.isEmpty
+        else {
+            // Landed on the strip but not on a window (the overflow "…", or a
+            // strip mid-rebuild). Swallow it: the stock toolbar menu is not
+            // something to fall back to, and acting on a neighbouring window
+            // would be worse than doing nothing.
+            return true
+        }
+        let menu = NSMenu()
+        for item in items { menu.addItem(item) }
+        menu.popUp(positioning: nil, at: seg.convert(point, from: nil), in: seg)
+        return true
     }
 
     private static func findSegmented(in view: NSView, count: Int) -> NSSegmentedControl? {
@@ -344,17 +371,13 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// This menu can close a window, and the last time something in the title
     /// bar acted on a target the user hadn't pointed at, it killed a live
     /// session — so guessing is not on the table.
-    private func segmentIndexUnderPointer() -> Int? {
-        // Re-fenced here too: a tab dragged out of the group re-homes its views,
-        // and a stale reference would report a segment from another window.
-        guard let seg = segmentedRef, seg.window === hostWindow, let cell = seg.cell
-        else { return nil }
+    private func segmentIndex(in seg: NSSegmentedControl, screenPoint: NSPoint) -> Int? {
+        guard let cell = seg.cell else { return nil }
         let kids = (cell as AnyObject).accessibilityChildren?() ?? []
         guard kids.count == seg.segmentCount else { return nil }
-        let point = NSEvent.mouseLocation
         for (i, kid) in kids.enumerated() {
             guard let frame = (kid as AnyObject).accessibilityFrame?() else { continue }
-            if frame.contains(point) { return i }
+            if frame.contains(screenPoint) { return i }
         }
         return nil
     }
@@ -733,27 +756,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func renameAction() { onRenameSession?() }
     @objc private func detachAction() { onDetach?() }
     @objc private func killAction() { onKillSession?() }
-}
-
-extension TerminalToolbarController: NSMenuDelegate {
-    /// Built at open time, for the segment the pointer is over. Rebuilt every
-    /// time rather than cached: which window a segment holds changes as tmux
-    /// windows come and go, and a stale menu would act on the wrong one.
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        guard menu === windowMenu else { return }
-        menu.removeAllItems()
-        guard let index = segmentIndexUnderPointer(),
-              let items = onWindowMenu?(index), !items.isEmpty
-        else {
-            // Deliberately NOT falling back to the active window: acting on a
-            // window the user didn't point at is worse than doing nothing.
-            let none = NSMenuItem(title: "No window here", action: nil, keyEquivalent: "")
-            none.isEnabled = false
-            menu.addItem(none)
-            return
-        }
-        for item in items { menu.addItem(item) }
-    }
 }
 
 #endif
