@@ -32,6 +32,9 @@ struct TerminalWrapperView: View {
     /// Kill Session is destructive AND irreversible (every window/pane dies), so
     /// it goes through a confirmation before it runs.
     @State private var pendingKillSession = false
+    /// iPad only: which split-view columns are up. Driven by the mode, never by
+    /// the user (see `syncSidebarVisibility`).
+    @State private var sidebarVisibility: NavigationSplitViewVisibility = .detailOnly
 
     private var host: Host { viewModel.host }
 
@@ -52,20 +55,8 @@ struct TerminalWrapperView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            content
-            if showsWindowTabs {
-                WindowTabBar(viewModel: viewModel)
-            }
-        }
-        // Without the tab bar the terminal reclaims the home-indicator strip
-        // (PRD §2.2 — the page runs to the very bottom edge). With the bar,
-        // the VStack respects the bottom inset and the bar owns it (its
-        // background extends under the home indicator itself). The keyboard is
-        // still ignored either way: it slides OVER the bar (hiding it) and
-        // never resizes the page (PRD §2.6).
-        .ignoresSafeArea(.container, edges: showsWindowTabs ? [] : .bottom)
-        .ignoresSafeArea(.keyboard)
+        chrome
+            .ignoresSafeArea(.keyboard)
         .overlay(alignment: .top) { reconnectingBanner }
         .overlay { voiceOverlay }
         // The managed input surface: an inline bar riding the keyboard's top
@@ -91,28 +82,6 @@ struct TerminalWrapperView: View {
             Button("Dismiss", role: .cancel) { dismiss() }
         } message: {
             Text(viewModel.errorMessage ?? "Unknown error")
-        }
-        // Standard system navigation bar (Liquid Glass on iOS 26, no override):
-        // back + session-switcher on the left, the mode switch centered, the ⋯
-        // menu on the right. HostSessionsView stops hiding the nav bar for this.
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button(action: backTapped) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
-                }
-                .accessibilityLabel("Sessions")
-            }
-            ToolbarItem(placement: .topBarLeading) {
-                sessionTitle
-            }
-            ToolbarItem(placement: .principal) {
-                if viewModel.isTmuxReady { modeToggle }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                sessionMenu
-            }
         }
         .sheet(isPresented: $showSplitSheet) {
             NewWindowSheet(title: "Split — Path & Command") { path, command in
@@ -295,22 +264,91 @@ struct TerminalWrapperView: View {
         }
     }
 
-    /// Terminal content. Tiled: the tiles (or a zoomed pane) fill the page.
-    /// List: the current window's single pane shows directly; iPad (regular
-    /// width) adds the shared window sidebar on the left, the phone uses the
-    /// bottom tab bar instead.
+    /// The session's chrome.
+    ///
+    /// iPad (regular width) uses the platform's split view, which is what makes
+    /// the sidebar a full-height floating panel and gives EACH COLUMN its own
+    /// toolbar — so the back button lands in the content region beside the
+    /// sidebar rather than in a banner stretched over both (Files, Notes and
+    /// Mail all read this way). The pushed navigation bar is hidden here for
+    /// exactly that reason: one full-width bar above two columns reads as a lid
+    /// over the UI, and it pushed the sidebar down out of the top.
+    ///
+    /// The phone has no sidebar, so it keeps the plain pushed bar. The branch is
+    /// on SIZE CLASS, not on mode — it never flips under a live session, so the
+    /// terminal is never remounted (and no PTY resized) by it.
     @ViewBuilder
-    private var content: some View {
-        if viewModel.isTmuxReady, viewModel.sessionMode == .list, isRegularWidth {
-            HStack(spacing: 0) {
+    private var chrome: some View {
+        if isRegularWidth {
+            NavigationSplitView(columnVisibility: $sidebarVisibility) {
                 WindowSidebar(viewModel: viewModel)
-                    .frame(width: 260)
-                Divider()
-                terminalSurface
+                    .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
+                    // The sidebar is mode-driven, never user-toggled (the same
+                    // rule the macOS window follows), so there's nothing for a
+                    // toggle button to mean.
+                    .toolbar(removing: .sidebarToggle)
+            } detail: {
+                terminalDetail
             }
+            .navigationSplitViewStyle(.balanced)
+            .toolbar(.hidden, for: .navigationBar)
+            .onAppear { syncSidebarVisibility() }
+            .onChange(of: showsWindowSidebar) { _, _ in syncSidebarVisibility() }
         } else {
-            terminalSurface
+            terminalDetail
         }
+    }
+
+    /// The terminal plus (on the phone) the window tab bar — the split view's
+    /// detail column, and the whole screen on a phone. Owns the session toolbar.
+    private var terminalDetail: some View {
+        VStack(spacing: 0) {
+            terminalSurface
+            if showsWindowTabs {
+                WindowTabBar(viewModel: viewModel)
+            }
+        }
+        // Without the tab bar the terminal reclaims the home-indicator strip
+        // (PRD §2.2 — the page runs to the very bottom edge). With the bar,
+        // the VStack respects the bottom inset and the bar owns it (its
+        // background extends under the home indicator itself). The keyboard is
+        // ignored on `body` either way: it slides OVER the bar (hiding it) and
+        // never resizes the page (PRD §2.6).
+        .ignoresSafeArea(.container, edges: showsWindowTabs ? [] : .bottom)
+        // Standard system navigation bar (Liquid Glass on iOS 26, no override):
+        // back + session-switcher on the left, the mode switch centered, the ⋯
+        // menu on the right. HostSessionsView stops hiding the nav bar for this.
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: backTapped) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                }
+                .accessibilityLabel("Sessions")
+            }
+            ToolbarItem(placement: .topBarLeading) {
+                sessionTitle
+            }
+            ToolbarItem(placement: .principal) {
+                if viewModel.isTmuxReady { modeToggle }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                sessionMenu
+            }
+        }
+    }
+
+    /// The sidebar is MODE-driven, never user-toggled (same rule as the macOS
+    /// window): it exists exactly when List mode has a wide enough screen.
+    private var showsWindowSidebar: Bool {
+        viewModel.isTmuxReady && viewModel.sessionMode == .list && isRegularWidth
+    }
+
+    private func syncSidebarVisibility() {
+        let want: NavigationSplitViewVisibility = showsWindowSidebar ? .all : .detailOnly
+        guard sidebarVisibility != want else { return }
+        withAnimation { sidebarVisibility = want }
     }
 
     private var terminalSurface: some View {
@@ -1202,10 +1240,16 @@ final class PaneContainerVC: UIViewController {
         // — reserving both double-counts and steals too much height, so we give up
         // only the toolbar's own band. Keyboard-INDEPENDENT (PRD §2.6) — a
         // constant layout reserve, not tied to the keyboard.
+        //
+        // Respect the TOP inset too: the split view hosts us edge to edge, so
+        // without it the title bar and the first rows of the grid sit under the
+        // navigation bar's glass. It reads 0 when nothing overlaps us, which is
+        // the phone's plain pushed-bar case.
         let insets = view.safeAreaInsets
-        return CGRect(x: insets.left, y: 0,
+        return CGRect(x: insets.left, y: insets.top,
                       width: max(0, view.bounds.width - insets.left - insets.right),
-                      height: max(0, view.bounds.height - FloatingQuickKeysToolbar.reservedBand))
+                      height: max(0, view.bounds.height - insets.top
+                                     - FloatingQuickKeysToolbar.reservedBand))
     }
 
     override func viewDidLayoutSubviews() {
