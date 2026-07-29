@@ -125,7 +125,15 @@ extension AgentRuleSet {
                        clause: .any([
                            .containsAny(["esc to interrupt", "ctrl+c to interrupt",
                                          "press esc to interrupt"]),
-                           .lineRegex(".*opencode.*esc (again to )?interrupt"),
+                           // No leading `.*`: `firstMatch` already searches the
+                           // whole line, but the wildcard makes ICU retry from
+                           // every offset with a backtracking `.*` — quadratic
+                           // in line length. `capture-pane -J` joins wrapped
+                           // lines, so one streamed paragraph is a single very
+                           // long line and a poll costs hundreds of ms on the
+                           // main thread. Anchoring on the literal lets ICU
+                           // skip straight to "opencode".
+                           .lineRegex("opencode.*esc (again to )?interrupt"),
                        ])),
             DetectRule(id: "progress_bar_working", status: .working, priority: 100,
                        region: .wholeSnapshot,

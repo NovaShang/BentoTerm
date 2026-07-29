@@ -246,4 +246,77 @@ final class AgentRulePresetsTests: XCTestCase {
         XCTAssertEqual(r?.ruleID, "model_picker")
         XCTAssertNil(r?.status)
     }
+
+    // MARK: - Cost guards
+    //
+    // Detection runs on the MAIN THREAD for every pane every poll, so a rule
+    // that is merely slow is a product bug: an idle opencode pane once cost
+    // ~500ms per poll and made the whole app unusable. Neither guard below
+    // asserts on detection *results* — they bound what a rule may cost.
+
+    /// Collect every regex pattern a clause evaluates, recursing into and/or/not.
+    private func patterns(_ clause: MatchClause) -> [String] {
+        switch clause {
+        case .contains, .containsAny:      return []
+        case .regex(let p), .lineRegex(let p): return [p]
+        case .all(let cs), .any(let cs):   return cs.flatMap(patterns)
+        case .not(let c):                  return patterns(c)
+        }
+    }
+
+    /// A leading unbounded wildcard is always redundant — `firstMatch` already
+    /// searches the whole string — and it forces ICU to retry from every offset
+    /// with a backtracking `.*`, which is quadratic in line length. Since
+    /// `capture-pane -J` joins wrapped lines, one streamed paragraph is a single
+    /// very long line, and the cost lands on the main thread.
+    func testNoRuleStartsWithAnUnboundedWildcard() {
+        for set in AgentRuleSet.builtIns {
+            for rule in set.rules {
+                for p in patterns(rule.clause) {
+                    let body = p.hasPrefix("(?i)") ? String(p.dropFirst(4)) : p
+                    XCTAssertFalse(body.hasPrefix(".*") || body.hasPrefix(".+"),
+                                   """
+                                   \(set.id)/\(rule.id): pattern \(p) starts with an \
+                                   unbounded wildcard. Drop it — it matches the same \
+                                   text and removes the quadratic backtracking.
+                                   """)
+                }
+            }
+        }
+    }
+
+    /// End-to-end budget. The snapshot is a real pane's worth of text (78x318
+    /// ≈ 25KB) reshaped the way `capture-pane -J` does it — same characters,
+    /// folded into few very long lines — and matches nothing, so every rule
+    /// runs to exhaustion. Only ONE rule set runs per pane in production; this
+    /// sweeps all of them, so it carries roughly 10x headroom on top of a
+    /// budget that is already ~6x the measured cost. It won't flake on a loaded
+    /// machine, and it fires on the quadratic-backtracking class of bug (which
+    /// put this single sweep at ~3s before the fix above).
+    func testWorstCaseSnapshotClassifiesWithinBudget() {
+        let body = String(repeating: "streaming a long wrapped markdown paragraph. ", count: 28)
+        let snapshot = Array(repeating: String(body.prefix(1240)), count: 20)
+            .joined(separator: "\n")
+        let start = Date()
+        for set in AgentRuleSet.builtIns {
+            _ = detector.classify(set, title: "working", snapshot: snapshot)
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 1.0,
+                          "classifying all built-ins over a joined snapshot took \(elapsed)s")
+    }
+
+    /// The fix above must not cost detection: opencode's footer wording that
+    /// only the regex catches ("esc again to interrupt" is not in the substring
+    /// list) still resolves to working.
+    func testOpencodeInterruptFooterStillDetected() {
+        let snapshot = """
+        > summarise the repo
+
+        opencode v0.3.1                                    esc again to interrupt
+        """
+        let r = detector.classify(set("opencode"), title: "x", snapshot: snapshot)
+        XCTAssertEqual(r?.ruleID, "interrupt_hint_working")
+        XCTAssertEqual(r?.status, .working)
+    }
 }
