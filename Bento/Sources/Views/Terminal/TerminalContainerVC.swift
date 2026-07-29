@@ -551,7 +551,9 @@ final class TerminalContainerVC: UIViewController {
         }
     }
 
-    private func presentPathPreviewSheet(path: String, line: Int?) {
+    /// Also the landing for a file tapped in the browsable tree, which is why
+    /// it isn't private.
+    func presentPathPreviewSheet(path: String, line: Int?) {
         guard let context = pathPreviewContext?() else { return }
         let model = FilePreviewSheetModel(path: path)
         model.load(path: path, line: line, context: context)

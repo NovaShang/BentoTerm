@@ -323,48 +323,9 @@ private struct PreviewDockTab: View {
 
 // MARK: - Directory tree (the permanent first tab)
 
-/// One node of the browsable tree, built from the flat bounded index
-/// (`listTree`: depth 4 / 2000 entries — same limits as tap-to-preview).
-private struct FileTreeNode: Identifiable {
-    let id: String        // relPath from the tree root
-    let name: String
-    let isDir: Bool
-    var children: [FileTreeNode]?   // nil = file (List's disclosure convention)
-
-    static func build(_ entries: [FileTreeEntry]) -> [FileTreeNode] {
-        final class Box { var isDir = false; var kids: [String: Box] = [:] }
-        let root = Box()
-        for e in entries {
-            var cur = root
-            let comps = e.relPath.split(separator: "/")
-            for (i, c) in comps.enumerated() {
-                let key = String(c)
-                let next: Box
-                if let existing = cur.kids[key] {
-                    next = existing
-                } else {
-                    next = Box()
-                    cur.kids[key] = next
-                }
-                if i < comps.count - 1 { next.isDir = true }
-                else if e.isDir { next.isDir = true }
-                cur = next
-            }
-        }
-        func convert(_ box: Box, prefix: String) -> [FileTreeNode] {
-            box.kids.map { name, b in
-                let rel = prefix.isEmpty ? name : prefix + "/" + name
-                return FileTreeNode(id: rel, name: name, isDir: b.isDir,
-                                    children: b.isDir ? convert(b, prefix: rel) : nil)
-            }
-            .sorted {
-                if $0.isDir != $1.isDir { return $0.isDir }
-                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-            }
-        }
-        return convert(root, prefix: "")
-    }
-}
+// FileTreeNode (the tree built from the flat bounded index) is shared with the
+// iOS browser — see FileTreeBrowserView. This file used to carry a private copy
+// of it, identical line for line.
 
 /// The dock's permanent first tab: the focused pane's working directory as a
 /// browsable tree. The context is resolved fresh on every load (provider), so

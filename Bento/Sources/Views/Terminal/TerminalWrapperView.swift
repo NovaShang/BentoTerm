@@ -34,6 +34,8 @@ struct TerminalWrapperView: View {
     /// iPad only: which split-view columns are up. Driven by the mode, never by
     /// the user (see `syncSidebarVisibility`).
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .detailOnly
+    /// Reaches the live pane container (see PaneContainerBridge).
+    @StateObject private var paneBridge = PaneContainerBridge()
 
     private var host: Host { viewModel.host }
 
@@ -325,6 +327,14 @@ struct TerminalWrapperView: View {
                     sessionTitle
                 }
             }
+            if viewModel.isTmuxReady {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { paneBridge.container?.presentFileBrowser() } label: {
+                        Image(systemName: "folder")
+                    }
+                    .accessibilityLabel("Files")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 sessionMenu
             }
@@ -348,7 +358,8 @@ struct TerminalWrapperView: View {
             viewModel: viewModel,
             voiceController: voiceController,
             sizingMode: viewModel.sizingMode,
-            sizingOwnerIsMe: viewModel.sizingOwnerIsMe
+            sizingOwnerIsMe: viewModel.sizingOwnerIsMe,
+            bridge: paneBridge
         )
     }
 
@@ -812,6 +823,13 @@ struct TerminalWrapperView: View {
 
 /// SwiftUI bridge for the UIKit container that hosts the live terminal panes
 /// (tiled, or one focused) plus the floating quick-keys toolbar.
+/// Lets the SwiftUI chrome reach the live pane container. Only the container
+/// knows which pane is focused and how to resolve its file context, so the
+/// Files button has to ask it rather than rebuild that itself.
+@MainActor final class PaneContainerBridge: ObservableObject {
+    weak var container: PaneContainerVC?
+}
+
 struct SinglePaneSurface: UIViewControllerRepresentable {
     @ObservedObject var viewModel: TerminalViewModel
     /// Deliberately NOT @ObservedObject: only read in makeUIViewController.
@@ -822,9 +840,13 @@ struct SinglePaneSurface: UIViewControllerRepresentable {
     /// Under `.thisDevice` only the owner may push a size, and only the owner's
     /// viewport matches the window — everyone else letterboxes.
     var sizingOwnerIsMe: Bool
+    /// Handed back to the SwiftUI chrome so the Files button can reach the
+    /// focused pane's file context.
+    let bridge: PaneContainerBridge
 
     func makeUIViewController(context: Context) -> PaneContainerVC {
         let vc = PaneContainerVC()
+        bridge.container = vc
         vc.viewModel = viewModel
         vc.voiceController = voiceController
         vc.sizingMode = sizingMode
@@ -850,6 +872,7 @@ struct SinglePaneSurface: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ vc: PaneContainerVC, context: Context) {
+        bridge.container = vc
         vc.sizingMode = sizingMode
         vc.sizingOwnerIsMe = sizingOwnerIsMe
         if viewModel.isTmuxReady {
@@ -1065,6 +1088,35 @@ final class PaneContainerVC: UIViewController {
         if let f = focusedPaneVC { return f }
         if let id = viewModel?.activePaneID, let vc = paneControllers[id] { return vc }
         return paneControllers.values.first
+    }
+
+    // MARK: - File browser
+
+    /// Browse the focused pane's working directory as a tree, and preview what
+    /// you tap. Presented from here rather than from the SwiftUI chrome because
+    /// the file context belongs to a pane's container — reusing the provider
+    /// tap-a-path already uses means the browser can never read a different
+    /// disk than the preview would.
+    func presentFileBrowser() {
+        guard let target = focusedOrActiveVC,
+              let provider = target.pathPreviewContext else { return }
+        let browser = FileTreeBrowserView(contextProvider: provider) { [weak self, weak target] path, _ in
+            // One sheet at a time: let the browser go, then preview.
+            self?.dismiss(animated: true) {
+                target?.presentPathPreviewSheet(path: path, line: nil)
+            }
+        }
+        let host = UIHostingController(rootView: NavigationStack {
+            browser
+                .navigationTitle("Files")
+                .navigationBarTitleDisplayMode(.inline)
+        })
+        if let sheet = host.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+            sheet.prefersEdgeAttachedInCompactHeight = true
+        }
+        present(host, animated: true)
     }
 
     // MARK: - Non-tmux single pane
