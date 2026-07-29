@@ -79,11 +79,15 @@ public enum SpeechError: LocalizedError {
 /// Assemble the Qwen context-biasing corpus from the user's manual vocabulary
 /// (`asr_vocab`) plus, when `asr_auto_context` is on, the given recent on-screen
 /// text. Manual vocab is kept in full at the front; the screen text is tail-
-/// trimmed so the most recent content wins, and the whole thing is capped well
-/// under DashScope's ~20k-char ceiling (over which the request is silently
-/// dropped). Shared by the realtime engine and the batch re-transcription so both
-/// bias identically. Empty = no biasing.
-public func assembleQwenCorpus(screenText: String?, maxChars: Int = 8000) -> String {
+/// trimmed so the most recent content wins. Kept SMALL on purpose: a large
+/// corpus doesn't just risk DashScope's ~20k-char drop ceiling (over which the
+/// request is silently dropped), it swamps the acoustic model — Qwen starts
+/// mis-recognizing and echoing the corpus back. That is worse here than
+/// anywhere: the screen text is raw terminal scrollback, so the "context" is
+/// build logs, paths and code, which is the least prose-like thing you could
+/// bias a speech model with. Shared by the realtime engine and the batch
+/// re-transcription so both bias identically. Empty = no biasing.
+public func assembleQwenCorpus(screenText: String?, maxChars: Int = 2000) -> String {
     let defaults = UserDefaults.standard
     let vocab = (defaults.string(forKey: "asr_vocab") ?? "")
         .trimmingCharacters(in: .whitespacesAndNewlines)
