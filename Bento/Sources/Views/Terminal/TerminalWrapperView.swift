@@ -1396,7 +1396,8 @@ extension PaneContainerVC {
                 vc.view.frame = CGRect(origin: .zero, size: page)
                 vc.titleBar.isActivePane = true
                 if let pvm = viewModel?.paneViewModels.first(where: { $0.paneID == focusID }) {
-                    vc.updatePaneState(pvm.paneState, active: true)
+                    vc.updatePaneState(pvm.paneState, doneUnseen: pvm.agentFinishedUnseen,
+                                       active: true)
                 }
             }
         }
@@ -1414,7 +1415,8 @@ extension PaneContainerVC {
         vc.surfaceInsetX = surfaceInsetX
         vc.fixedTerminalCellSize = fixedCellSize
         vc.view.frame = frame
-        vc.updatePaneState(pvm.paneState, active: pvm.paneID == activeID)
+        vc.updatePaneState(pvm.paneState, doneUnseen: pvm.agentFinishedUnseen,
+                           active: pvm.paneID == activeID)
     }
 
     /// Tile all panes by tmux cell geometry inside the content view. In Tracking

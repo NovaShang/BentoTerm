@@ -588,8 +588,9 @@ final class TerminalContainerVC: UIViewController {
         titleBar.titleLabel.text = title
     }
 
-    func updatePaneState(_ state: PaneState, active: Bool) {
+    func updatePaneState(_ state: PaneState, doneUnseen: Bool, active: Bool) {
         titleBar.paneState = state
+        titleBar.agentFinishedUnseen = doneUnseen
         titleBar.isActivePane = active
         applyPaneBorder(active: active)
 
@@ -1452,10 +1453,13 @@ extension TerminalContainerVC: @preconcurrency UIEditMenuInteractionDelegate {
 ///   • Single / focus: blends into the terminal background (no contrast band),
 ///     so a fullscreen pane reads as one continuous surface.
 ///
-/// Layout: [● state-dot] [title……………………………………………]
+/// Layout: [◉ state] [title……………………………………………] [mode]
 final class PaneTitleBar: UIView {
     let titleLabel = UILabel()
-    private let stateDot = UIView()
+    /// Leading semantic state glyph — the SAME symbol language as the macOS
+    /// pane chrome and the window sidebar rows, not a bare dot. A dot carries
+    /// only a color, which is why it had no way to say "done, unseen".
+    private let stateIcon = UIImageView()
     /// Trailing mode glyph. Separate from the state dot on purpose: state is what
     /// the PROGRAM is doing, a mode is something about the pane that changes how
     /// it answers you. Hidden unless a mode is on — "nothing unusual" gets no
@@ -1471,9 +1475,20 @@ final class PaneTitleBar: UIView {
         }
     }
 
-    /// Drives dot color, the title-bar band color, and (when active) text emphasis.
+    /// Drives the state glyph, the title-bar band color, and (when active) text
+    /// emphasis.
     var paneState: PaneState = .idle {
         didSet { updateStateVisuals(); updateChrome() }
+    }
+
+    /// An agent that finished while you were looking elsewhere → the green ✓, a
+    /// display state that sits beside `paneState` rather than inside it (the
+    /// same split the macOS chrome and the sidebar rows make).
+    var agentFinishedUnseen: Bool = false {
+        didSet {
+            guard oldValue != agentFinishedUnseen else { return }
+            updateStateVisuals(); updateChrome()
+        }
     }
 
     /// Active state drives the green chrome (tiled) / text emphasis (blend).
@@ -1500,9 +1515,9 @@ final class PaneTitleBar: UIView {
         // centered dot never spills onto the terminal surface below.
         clipsToBounds = true
 
-        stateDot.layer.cornerRadius = 4
-        stateDot.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stateDot)
+        stateIcon.contentMode = .scaleAspectFit
+        stateIcon.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stateIcon)
 
         titleLabel.font = UIFont.monospacedSystemFont(ofSize: 12, weight: .medium)
         titleLabel.textColor = .secondaryLabel
@@ -1518,12 +1533,13 @@ final class PaneTitleBar: UIView {
         addSubview(modeIcon)
 
         NSLayoutConstraint.activate([
-            stateDot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            stateDot.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stateDot.widthAnchor.constraint(equalToConstant: 8),
-            stateDot.heightAnchor.constraint(equalToConstant: 8),
+            // A fixed-width slot, so the title never shifts as the state changes.
+            stateIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            stateIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stateIcon.widthAnchor.constraint(equalToConstant: 14),
+            stateIcon.heightAnchor.constraint(equalToConstant: 14),
 
-            titleLabel.leadingAnchor.constraint(equalTo: stateDot.trailingAnchor, constant: 10),
+            titleLabel.leadingAnchor.constraint(equalTo: stateIcon.trailingAnchor, constant: 7),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: modeIcon.leadingAnchor, constant: -6),
 
@@ -1533,6 +1549,7 @@ final class PaneTitleBar: UIView {
             modeIcon.heightAnchor.constraint(equalToConstant: 12),
         ])
 
+        updateStateVisuals()
         updateChrome()
     }
 
@@ -1542,7 +1559,11 @@ final class PaneTitleBar: UIView {
     /// only when active.
     private func updateChrome() {
         if isTiled {
-            let accent = paneState.chromeAccentUIColor
+            // Done-unseen wins the band, otherwise the per-state color (nil for
+            // idle → neutral chrome) — the macOS chrome's precedence.
+            let accent = agentFinishedUnseen
+                ? PaneState.uiColor(hex: PaneState.doneUnseenHex)
+                : paneState.chromeAccentUIColor
             backgroundColor = STTheme.titleBand(accent: accent, active: isActivePane)
             titleLabel.textColor = STTheme.titleInk(accent: accent, active: isActivePane)
         } else {
@@ -1558,23 +1579,39 @@ final class PaneTitleBar: UIView {
     /// resolved at compute time, not trait-reactive UIColors).
     func recolor() { updateChrome() }
 
+    /// The leading glyph for the current state — identical mapping to the macOS
+    /// title bar and the window sidebar rows: working = play, awaiting =
+    /// question, done-unseen = check, idle = a quiet hollow gray ring (same
+    /// `.circle` family, empty = at rest).
     private func updateStateVisuals() {
-        let dotColor = STTheme.dotColor(for: paneState)
-        stateDot.backgroundColor = dotColor
+        let (symbol, hex): (String, UInt32) = {
+            if agentFinishedUnseen { return ("checkmark.circle.fill", PaneState.doneUnseenHex) }
+            switch paneState {
+            case .working:       return ("play.circle.fill", PaneState.workingHex)
+            case .awaitingInput: return ("questionmark.circle.fill", PaneState.awaitingHex)
+            case .idle:          return ("circle", PaneState.idleHex)
+            }
+        }()
+        let color = PaneState.uiColor(hex: hex)
+        stateIcon.image = UIImage(systemName: symbol, withConfiguration:
+            UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
+        stateIcon.tintColor = color
 
+        // A pending question / running program gets a soft glow so it reads from
+        // across the room; a settled pane doesn't.
         switch paneState {
         case .awaitingInput:
-            stateDot.layer.shadowColor = dotColor.cgColor
-            stateDot.layer.shadowRadius = 3
-            stateDot.layer.shadowOpacity = 0.8
-            stateDot.layer.shadowOffset = .zero
+            stateIcon.layer.shadowColor = color.cgColor
+            stateIcon.layer.shadowRadius = 3
+            stateIcon.layer.shadowOpacity = 0.8
+            stateIcon.layer.shadowOffset = .zero
         case .working:
-            stateDot.layer.shadowColor = dotColor.cgColor
-            stateDot.layer.shadowRadius = 2.5
-            stateDot.layer.shadowOpacity = 0.6
-            stateDot.layer.shadowOffset = .zero
+            stateIcon.layer.shadowColor = color.cgColor
+            stateIcon.layer.shadowRadius = 2.5
+            stateIcon.layer.shadowOpacity = 0.6
+            stateIcon.layer.shadowOffset = .zero
         case .idle:
-            stateDot.layer.shadowOpacity = 0
+            stateIcon.layer.shadowOpacity = 0
         }
     }
 
