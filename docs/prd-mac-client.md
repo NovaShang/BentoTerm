@@ -68,9 +68,9 @@
 - Mac 原生终端 = 本地 tmux 的一个 client;iOS 经 relay attach 同一 session = 另一个 client。
 - 两个 client **不能同屏看同一 window 的不同尺寸** → 采用 **handoff**(§7)。
 
-### 2.3 Mac 的 page/viewport:窗口即 page(默认 Tracking)
+### 2.3 Mac 的 page/viewport:窗口即 page(默认跟随活动设备)
 
-iOS 因设备尺寸固定 + 键盘弹出,引入了 Tracking/Pinned 粘性状态。**Mac 简化:原生终端窗口可自由缩放,窗口尺寸直接驱动 tmux client 尺寸(永远 Tracking)。**
+iOS 因设备尺寸固定 + 键盘弹出,引入了尺寸权威(prd.md 2.5)。**Mac 默认最简单的那一档:原生终端窗口可自由缩放,窗口尺寸直接驱动 tmux client 尺寸。** 三种策略在 Mac 上同样可选(Session Size 菜单),因为策略是会话级的服务器状态,不是设备偏好——iPad 上选的东西 Mac 必须能看见、能接管。
 
 | 关系 | Mac 行为 |
 |---|---|
@@ -78,7 +78,7 @@ iOS 因设备尺寸固定 + 键盘弹出,引入了 Tracking/Pinned 粘性状态�
 | 改字号(Settings) | 改 page 像素尺寸 → 触发一次 resize |
 | pane 平铺 | 每个 surface 按其 tmux cell 几何**精确**定尺(+1 cell 防 ghostty 少算一列,溢出裁剪),保证 TUI 不串行 |
 
-> **与 iOS 的 Pinned 对应**:当本地 tmux 被 iOS 远控接管(handoff)后,Mac 这边窗口若仍打开,处于"被动尺寸"——可视为临时 Pinned。MVP 不做复杂的 Mac 端 Pinned 开关。
+> **被 iOS 接管时**:iPad 选了"以此设备为准"后,Mac 这边窗口若仍打开,就处于被动尺寸——菜单里显示"由 Shang iPad Air 设定",一次点击即可接管回来;iPad 离开(`%client-detached`)时归属自动释放。
 
 ### 2.4 多 pane / 多会话导航:Tiles + 窗口/标签(决策:不做 List)
 
@@ -317,7 +317,7 @@ iOS 因设备尺寸固定 + 键盘弹出,引入了 Tracking/Pinned 粘性状态�
 
 - **两者并列**:菜单栏(控制面板)+ 原生终端(操作面),共享 `bento-terminal-core`
 - **原生终端仅连本机**(local pty + `tmux -CC`);远程是 iOS 经 relay 的职责
-- **多 pane = Tiles + 窗口/标签**,不做 List;Mac 永远 Tracking(窗口即 page)
+- **多 pane = Tiles + 窗口/标签**,不做 List;Mac 默认跟随活动设备(窗口即 page)
 - **同一套 tmux**:iOS 远控 = 本机同一 tmux + handoff(需补 daemon→tmux -CC)
 - **语音、List、画布手势**一律不做(Mac)
 

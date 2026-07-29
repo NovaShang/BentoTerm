@@ -31,6 +31,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     var onSetSizingMode: ((TerminalSizingMode) -> Void)?
     /// The active session's current sizing policy (drives the checkmark).
     var sizingMode: TerminalSizingMode = .tracking
+    /// Who owns the size under `.thisDevice`, and whether that's us — the menu
+    /// has to name the other device, since this window can't reflow the session
+    /// until that device hands it over (or leaves).
+    var sizingOwner: TmuxSizingOwner?
+    var sizingOwnerIsMe = false
     var onCloseTab: (() -> Void)?
     /// The Tiled|List mode switch picked a mode (the manager runs `setMode`,
     /// warning first when a mixed external structure must be flattened).
@@ -574,11 +579,16 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             sub.addItem(it)
         }
         sub.addItem(.separator())
-        let note = NSMenuItem(
-            title: sizingMode == .tracking
-                ? "This window's size drives the session."
-                : "Frozen — other clients can't reflow it either.",
-            action: nil, keyEquivalent: "")
+        // Under `manual` the interesting fact is WHO owns the size, not which
+        // mode is checked — a device that can't reflow the session needs to be
+        // told which other device to go touch.
+        let noteText: String
+        if sizingMode == .thisDevice, let owner = sizingOwner, !sizingOwnerIsMe {
+            noteText = "Sized by \(owner.displayName). Choose “\(TerminalSizingMode.thisDevice.title)” to take over."
+        } else {
+            noteText = sizingMode.explanation
+        }
+        let note = NSMenuItem(title: noteText, action: nil, keyEquivalent: "")
         note.isEnabled = false
         sub.addItem(note)
         root.submenu = sub

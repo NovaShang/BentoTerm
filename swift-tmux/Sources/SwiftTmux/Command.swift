@@ -101,6 +101,12 @@ public enum TmuxCommand: Sendable {
     case resizeWindow(window: TmuxWindowID? = nil, width: Int, height: Int)
     /// Read a session-scoped option's value (`-qv`: value only, silent when unset).
     case showSessionOption(target: String? = nil, name: String)
+    /// Read a WINDOW option's value (`show-options -wqv`), e.g. `window-size`.
+    /// The sizing policy lives on the server, so this is how a client that just
+    /// attached learns what another device already decided — reading it beats
+    /// re-asserting a local preference, which is what let each attach clobber
+    /// the other device's choice.
+    case showWindowOption(window: TmuxWindowID? = nil, name: String)
     case killPane(id: TmuxPaneID)
     /// Swap a pane with the previous/next pane in the window (`swap-pane -U/-D`).
     case swapPaneUp(id: TmuxPaneID)
@@ -267,6 +273,11 @@ public enum TmuxCommand: Sendable {
         case .showSessionOption(let target, let name):
             var cmd = "show-options -qv"
             if let target { cmd += " -t \(escapeArg(target))" }
+            return cmd + " \(name)"
+
+        case .showWindowOption(let window, let name):
+            var cmd = "show-options -wqv"
+            if let window { cmd += " -t \(window)" }
             return cmd + " \(name)"
 
         case .killPane(let id):

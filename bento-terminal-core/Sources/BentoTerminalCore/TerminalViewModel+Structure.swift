@@ -617,36 +617,190 @@ public extension TerminalViewModel {
         DIAG("[MODE] restore select-layout win=\(win) name=[\(step.name)] layout=[\(layout)] err=\(resp.isError) out=[\(resp.output.trimmingCharacters(in: .whitespacesAndNewlines))]")
     }
 
-    /// Put the session's sizing policy into tmux, so the choice survives this
-    /// client going away and holds against other attached clients.
+    // MARK: - Window sizing authority
+
+    static let sizeOwnerOption = "@bento_size_owner"
+
+    /// This client's tmux client name (its tty). Cached per attach — it changes
+    /// every time we re-attach, which is exactly why ownership has to be
+    /// re-claimed on attach rather than assumed.
+    func currentClientName() async -> String? {
+        if let cached = myTmuxClientName { return cached }
+        let resp = await tmuxService.send(.displayMessage(format: "#{client_name}", target: nil))
+        guard !resp.isError else { return nil }
+        let name = resp.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        myTmuxClientName = name
+        return name
+    }
+
+    private func attachedClientNames() async -> Set<String> {
+        let resp = await tmuxService.send(.listClients)
+        guard !resp.isError else { return [] }
+        // `#{client_name}:#{client_session}` — the name may itself contain no
+        // colon (it's a tty path), so split off the trailing session field.
+        return Set(resp.output
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                guard let cut = line.lastIndex(of: ":") else { return nil }
+                let name = String(line[line.startIndex..<cut])
+                return name.isEmpty ? nil : name
+            })
+    }
+
+    /// Adopt the sizing policy that is already on the server, and reconcile
+    /// ownership. Runs on every attach INSTEAD of writing a local preference:
+    /// re-asserting one is what let each device silently undo the other's
+    /// choice (an iPad reconnect issued `window-size latest` every ~50s and
+    /// wiped a pin made on the Mac).
     ///
-    /// `.tracking` leaves `window-size` on `latest` — the caller keeps pushing
-    /// `refresh-client -C`, and this window governs whenever it's the one being
-    /// used. `.pinned` switches to `manual` and freezes the current grid with a
-    /// single `resize-window`; under `manual` tmux stops deriving the size from
-    /// clients at all, which is the only way a pin actually holds.
+    /// Reconciliation has exactly three outcomes:
+    ///   - the recorded owner is still attached → adopt, and don't touch it;
+    ///   - the owner is gone but WE are the device that claimed it → re-claim
+    ///     under our new client name (our name changes on every re-attach);
+    ///   - the owner is gone and isn't us → release to `latest`, so a device
+    ///     that walked away can never hold the session hostage.
+    func adoptSizingPolicy() async {
+        guard usingTmux else { return }
+        myTmuxClientName = nil
+        let me = await currentClientName()
+
+        let raw = await readWindowOption("window-size") ?? ""
+        var mode = TerminalSizingMode.fromTmuxWindowSize(raw) ?? .tracking
+        var owner = TmuxSizingOwner(encoded: await readSessionOption(Self.sizeOwnerOption) ?? "")
+
+        if mode == .thisDevice {
+            let attached = await attachedClientNames()
+            let ownerPresent = owner.map { attached.contains($0.client) } ?? false
+            if !ownerPresent {
+                if claimedSizeOwnership, let me {
+                    let claim = TmuxSizingOwner(client: me, label: BentoDeviceLabel.current)
+                    owner = claim
+                    _ = await tmuxService.send(
+                        .setSessionOption(name: Self.sizeOwnerOption, value: claim.encoded))
+                    dlog("sizing: re-claimed ownership as \(me)")
+                } else {
+                    dlog("sizing: owner \(owner?.client ?? "none") is gone — releasing to latest")
+                    owner = nil
+                    mode = .tracking
+                    _ = await tmuxService.send(.setSessionOption(name: Self.sizeOwnerOption, value: ""))
+                    _ = await tmuxService.send(
+                        .setWindowOption(name: "window-size", value: TerminalSizingMode.tracking.tmuxWindowSize))
+                }
+            }
+        } else if claimedSizeOwnership {
+            // Someone moved the session off manual; our claim is stale.
+            claimedSizeOwnership = false
+        }
+
+        sizingMode = mode
+        sizingOwner = owner
+        if let session = activeTmuxSessionName { TerminalSizingMode.store(mode, for: session) }
+        // The owner re-asserts its grid on attach: it may have rotated or
+        // changed font size while detached, and under `manual` nothing else
+        // would ever correct the window.
+        if mode == .thisDevice, sizingOwnerIsMe {
+            await pushOwnedWindowSize()
+        }
+    }
+
+    /// Put the session's sizing policy into tmux, so the choice survives this
+    /// client going away and holds against other attached clients. All three
+    /// cases are just tmux's own `window-size`; `.thisDevice` additionally
+    /// records who claimed it, because `manual` alone says "nobody derives the
+    /// size from clients" without saying whose size it is.
     @discardableResult
     public func applySizingMode(_ mode: TerminalSizingMode) async -> Bool {
         guard usingTmux else { return false }
+        let resp = await tmuxService.send(
+            .setWindowOption(name: "window-size", value: mode.tmuxWindowSize))
+        if resp.isError {
+            dlog("applySizingMode \(mode.rawValue): \(resp.output)")
+            return false
+        }
         switch mode {
-        case .tracking:
-            let resp = await tmuxService.send(.setWindowOption(name: "window-size", value: "latest"))
-            if resp.isError { dlog("applySizingMode tracking: \(resp.output)") }
-            return !resp.isError
-        case .pinned:
-            // Freeze at what's on screen right now, so pinning never resizes
-            // anything by itself — it only stops future changes.
-            guard let window = windows.first(where: { $0.id == activeWindowID }) ?? windows.first,
-                  let size = await currentWindowSize(window.id) else {
-                dlog("applySizingMode pinned: no window size to pin")
+        case .tracking, .smallest:
+            claimedSizeOwnership = false
+            sizingOwner = nil
+            _ = await tmuxService.send(.setSessionOption(name: Self.sizeOwnerOption, value: ""))
+        case .thisDevice:
+            guard let me = await currentClientName() else {
+                dlog("applySizingMode thisDevice: no client name — cannot claim ownership")
                 return false
             }
-            _ = await tmuxService.send(.setWindowOption(name: "window-size", value: "manual"))
-            let resp = await tmuxService.send(
-                .resizeWindow(window: window.id, width: size.cols, height: size.rows))
-            if resp.isError { dlog("applySizingMode pinned: \(resp.output)") }
-            return !resp.isError
+            let claim = TmuxSizingOwner(client: me, label: BentoDeviceLabel.current)
+            claimedSizeOwnership = true
+            sizingOwner = claim
+            _ = await tmuxService.send(
+                .setSessionOption(name: Self.sizeOwnerOption, value: claim.encoded))
+            await pushOwnedWindowSize()
         }
+        return true
+    }
+
+    /// Resize the window to this device's grid. Only meaningful under `manual`
+    /// — under any client-derived policy tmux recomputes the size immediately
+    /// and this is a no-op (the original "Fit Session to This Window" bug).
+    func pushOwnedWindowSize() async {
+        guard let window = windows.first(where: { $0.id == activeWindowID }) ?? windows.first
+        else { return }
+        // Prefer the grid this device last measured; fall back to the window's
+        // current size so claiming ownership never resizes anything by itself
+        // (that is what a plain freeze should do).
+        var size = lastTmuxClientSize
+        if size == nil { size = await currentWindowSize(window.id) }
+        guard let size else {
+            dlog("pushOwnedWindowSize: no size to apply")
+            return
+        }
+        let resp = await tmuxService.send(
+            .resizeWindow(window: window.id, width: size.cols, height: size.rows))
+        if resp.isError { dlog("pushOwnedWindowSize: \(resp.output)") }
+    }
+
+    /// tmux told us a client detached (`%client-detached`). If it was the one
+    /// owning the size, release the session back to `latest` so the remaining
+    /// devices are not left clamped to a device that is no longer here. This is
+    /// the whole reason ownership is keyed by tmux client name: no heartbeat,
+    /// no polling, and no way to leak an owner.
+    func handleClientDetached(_ client: String) {
+        guard sizingMode == .thisDevice, let owner = sizingOwner, owner.client == client else { return }
+        // It can be OUR OWN previous client: a reconnect gets a new tty, and
+        // tmux may only reap the old one after we're back. That is this device
+        // still owning the size, not the owner walking away — re-claim under
+        // the new name instead of handing the session to whoever is left.
+        if claimedSizeOwnership {
+            dlog("sizing: our previous client \(client) detached — re-claiming")
+            Task { [weak self] in
+                guard let self, let me = await self.currentClientName() else { return }
+                let claim = TmuxSizingOwner(client: me, label: BentoDeviceLabel.current)
+                self.sizingOwner = claim
+                _ = await self.tmuxService.send(
+                    .setSessionOption(name: Self.sizeOwnerOption, value: claim.encoded))
+            }
+            return
+        }
+        dlog("sizing: owner \(client) detached — releasing to latest")
+        sizingOwner = nil
+        claimedSizeOwnership = false
+        sizingMode = .tracking
+        if let session = activeTmuxSessionName {
+            TerminalSizingMode.store(.tracking, for: session)
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.tmuxService.send(.setSessionOption(name: Self.sizeOwnerOption, value: ""))
+            _ = await self.tmuxService.send(
+                .setWindowOption(name: "window-size", value: TerminalSizingMode.tracking.tmuxWindowSize))
+            self.resetTmuxClientToDeviceSize()
+        }
+    }
+
+    private func readWindowOption(_ name: String) async -> String? {
+        let resp = await tmuxService.send(.showWindowOption(name: name))
+        guard !resp.isError else { return nil }
+        let value = resp.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 
     private func currentWindowSize(_ windowID: TmuxWindowID) async -> (cols: Int, rows: Int)? {

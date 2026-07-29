@@ -218,6 +218,105 @@ struct LiveTmuxRoundTripTests {
             .trimmingCharacters(in: .whitespacesAndNewlines) == "latest")
     }
 
+    /// Two devices on one session, which is where every sizing decision
+    /// actually gets tested. Both clients here are real control-mode clients
+    /// (the same `-CC` attach the app makes) at DIFFERENT sizes, because the
+    /// whole question is what tmux does when they disagree.
+    ///
+    /// The three claims the Session Size menu makes, in order:
+    ///   - `smallest` → the window is the minimum over attached clients, so
+    ///     neither device is clipped and no keystroke can flip it;
+    ///   - `manual` → one recorded owner governs and the OTHER client's
+    ///     `refresh-client` can no longer move the window (this is the only
+    ///     policy where "exactly one device decides" is literally true);
+    ///   - leaving `manual` hands the session back to the clients.
+    @Test(.enabled(if: LiveTmux.canAttachRealClients))
+    func sizingPolicyDecidesWhichClientGoverns() throws {
+        let tmux = try LiveTmux()
+        defer { tmux.shutdown() }
+
+        try tmux.run(["new-session", "-d", "-s", "work", "-x", "200", "-y", "50"])
+        let window = try #require(try tmux.windows().first)
+
+        let big = try tmux.attachControlClient(cols: 140, rows: 40)
+        let small = try tmux.attachControlClient(cols: 100, rows: 30)
+        defer { big.terminate(); small.terminate() }
+        try tmux.waitForClients(2)
+
+        // --- smallest: the minimum, regardless of who was used last ---
+        try tmux.runScript([
+            TmuxCommand.setWindowOption(name: "window-size", value: "smallest").commandString
+        ])
+        var settled = try tmux.waitForSize(window.id, "100x30")
+        var actual = try tmux.size(of: window.id)
+        #expect(settled, "smallest must clamp to the smaller client; got \(actual)")
+
+        // --- manual + resize-window: one owner, and only that owner ---
+        try tmux.runScript([
+            TmuxCommand.setWindowOption(name: "window-size", value: "manual").commandString,
+            TmuxCommand.resizeWindow(window: window.id, width: 140, height: 40).commandString,
+        ])
+        #expect(try tmux.size(of: window.id) == "140x40")
+
+        // The other client re-announcing itself must NOT move the window — this
+        // is what makes an iPad's attach stop reflowing the Mac.
+        try tmux.send(small, TmuxCommand.refreshClient(width: 100, height: 30).commandString)
+        let held = try tmux.holdsSize(window.id, "140x40")
+        actual = try tmux.size(of: window.id)
+        #expect(held, "under manual no client may resize the window; got \(actual)")
+
+        // The policy is server state, so the OTHER device can read back both
+        // the policy and who owns it — that read is what replaced each device
+        // re-asserting its own local preference on every attach.
+        try tmux.runScript([
+            TmuxCommand.setSessionOption(name: "@bento_size_owner", value: "/dev/ttys012|Shang iPad Air").commandString
+        ])
+        #expect(try tmux.capture(LiveTmux.splitTmuxArgs(
+            TmuxCommand.showWindowOption(window: window.id, name: "window-size").commandString))
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "manual")
+        #expect(try tmux.capture(LiveTmux.splitTmuxArgs(
+            TmuxCommand.showSessionOption(name: "@bento_size_owner").commandString))
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "/dev/ttys012|Shang iPad Air")
+
+        // --- release: the clients govern again ---
+        try tmux.runScript([
+            TmuxCommand.setWindowOption(name: "window-size", value: "smallest").commandString
+        ])
+        settled = try tmux.waitForSize(window.id, "100x30")
+        #expect(settled, "leaving manual must hand the size back to the clients")
+    }
+
+    /// Ownership is keyed on the tmux client name, and released when that name
+    /// stops appearing in `list-clients`. Both halves have to line up or an
+    /// owner that walked away would clamp the session forever: the name a
+    /// client reports for itself (`#{client_name}`) must be the same string
+    /// `list-clients` prints, and it must disappear when the client does.
+    @Test(.enabled(if: LiveTmux.canAttachRealClients))
+    func clientNameIsTheOwnershipKeyAndDisappearsOnDetach() throws {
+        let tmux = try LiveTmux()
+        defer { tmux.shutdown() }
+
+        try tmux.run(["new-session", "-d", "-s", "work", "-x", "200", "-y", "50"])
+        let client = try tmux.attachControlClient(cols: 120, rows: 40)
+        try tmux.waitForClients(1)
+
+        let names = try tmux.clientNames()
+        #expect(names.count == 1)
+        let name = try #require(names.first)
+        // `#{client_name}` — what the owning device records — is that same name.
+        let reported = try tmux.capture(["display-message", "-p", "-t", name, "#{client_name}"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(reported == name, "ownership key must round-trip: \(reported) vs \(name)")
+
+        client.terminate()
+        var gone = false
+        for _ in 0..<30 where !gone {
+            gone = try !tmux.clientNames().contains(name)
+            if !gone { usleep(100_000) }
+        }
+        #expect(gone, "a detached client must leave list-clients, or its claim never releases")
+    }
+
     /// The snapshot is stored in a tmux session option and read back through
     /// tmux's parser. This is where the brace hazard bit before.
     @Test func snapshotSurvivesStorageInATmuxOption() throws {
@@ -328,6 +427,87 @@ struct LiveTmux {
     func size(of window: TmuxWindowID) throws -> String {
         try capture(["display-message", "-p", "-t", "\(window)", "#{window_width}x#{window_height}"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Real control-mode clients
+    //
+    // Sizing is the one behaviour that cannot be tested without clients: every
+    // policy is a rule about how tmux combines them. These attach the same way
+    // the app does (`-CC` over pipes, then `refresh-client -C` to declare a
+    // size), so the test exercises tmux's real arbitration rather than a model
+    // of it.
+
+    /// `tmux -CC` still calls `tcgetattr`, so a client needs a REAL pty — over
+    /// plain pipes it exits with "Inappropriate ioctl for device" and never
+    /// attaches. `script` is the portable way to hand it one (the app gets its
+    /// pty from SSH instead).
+    static var canAttachRealClients: Bool {
+        isAvailable && FileManager.default.isExecutableFile(atPath: "/usr/bin/script")
+    }
+
+    func attachControlClient(cols: Int, rows: Int) throws -> Process {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+        p.arguments = ["-q", "/dev/null", try LiveTmux.which(),
+                       "-L", socket, "-f", "/dev/null", "-CC", "attach", "-t", "work"]
+        p.standardInput = Pipe()
+        p.standardOutput = Pipe()
+        p.standardError = Pipe()
+        try p.run()
+        // Drain stdout or the client blocks once the pipe buffer fills.
+        let out = (p.standardOutput as! Pipe).fileHandleForReading
+        out.readabilityHandler = { _ = $0.availableData }
+        try send(p, TmuxCommand.refreshClient(width: cols, height: rows).commandString)
+        return p
+    }
+
+    /// Write a command line to a control-mode client's stdin — exactly how the
+    /// app talks to tmux.
+    func send(_ client: Process, _ command: String) throws {
+        guard let pipe = client.standardInput as? Pipe else { return }
+        try pipe.fileHandleForWriting.write(contentsOf: Data((command + "\n").utf8))
+    }
+
+    func clientNames() throws -> [String] {
+        let out = try capture(LiveTmux.splitTmuxArgs(TmuxCommand.listClients.commandString))
+        // Same split the app uses: the name is a tty path, so cut at the LAST
+        // colon to leave the session field behind.
+        return out.split(separator: "\n").compactMap { line in
+            guard let cut = line.lastIndex(of: ":") else { return nil }
+            let name = String(line[line.startIndex..<cut])
+            return name.isEmpty ? nil : name
+        }
+    }
+
+    func waitForClients(_ count: Int, timeout: TimeInterval = 5) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if try clientNames().count >= count { return }
+            usleep(50_000)
+        }
+        throw Failure("only \(try clientNames().count) of \(count) clients attached in time")
+    }
+
+    /// Poll until the window reaches `expected` — tmux applies a policy change
+    /// on its own event loop, so an immediate read races it.
+    func waitForSize(_ window: TmuxWindowID, _ expected: String, timeout: TimeInterval = 5) throws -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if try size(of: window) == expected { return true }
+            usleep(50_000)
+        }
+        return false
+    }
+
+    /// The inverse assertion: the size must STAY put for a while. Used where
+    /// the claim is that something can no longer move the window.
+    func holdsSize(_ window: TmuxWindowID, _ expected: String, for seconds: TimeInterval = 0.6) throws -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if try size(of: window) != expected { return false }
+            usleep(50_000)
+        }
+        return true
     }
 
     func panes() throws -> [TmuxPaneID] {

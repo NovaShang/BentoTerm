@@ -3,7 +3,7 @@
 > 第三次整理。相较 v0.2 的**重大架构反转**:
 > - **废弃可缩放/可平移的画布(canvas)** → 改为浏览器式的 **page/viewport** 模型(user-scalable = false)
 > - **废弃语音/键盘"模式系统"(🎤/⌨️ 切换)** → 改为统一手势,键盘由双击召唤
-> - **废弃 grouped session** → 多 client 直接共享同一 window,用 **Tracking/Pinned 尺寸跟随**管理(不强制断联其它 client)
+> - **废弃 grouped session** → 多 client 直接共享同一 window,用 **尺寸权威(2.5)**管理(不强制断联其它 client)
 > - **引入 Tiles / List 两种视图**,都能下钻到单 pane focus
 > - **快捷键栏简化为浮动 ↑↓↵Esc**,专为响应 agent prompt
 >
@@ -76,7 +76,7 @@
 
 必须写进 PRD 的硬约束:**一个 tmux window 的几何被所有 client 共享。** 一个 PTY 跑的 TUI(vim/claude)只渲染到一个 cols×rows,绝对定位的 cell 网格**无法 reflow 成两种宽度**。所以做不到"PC 看完整布局、手机同时看适配尺寸"。
 
-这是 PTY/TUI 的物理事实,不是 tmux 的缺陷,**换自建 daemon 也逃不掉**(见附录 A)。我们的所有设计都在这个约束下展开——不试图绕过它,而是用 Tracking/Pinned + 两种视图把它变成 feature。
+这是 PTY/TUI 的物理事实,不是 tmux 的缺陷,**换自建 daemon 也逃不掉**(见附录 A)。我们的所有设计都在这个约束下展开——不试图绕过它,而是用尺寸权威(2.5)+ 两种视图把它变成 feature。
 
 ### 2.4 两种视图:Tiles 与 List
 
@@ -86,41 +86,44 @@
 - 按 tmux 真实布局 1:1 镜像所有 pane,page = window
 - 绝大多数时候 viewport == page(严格相等);不等时走 2.2 渲染规则
 - 切 pane = `select-pane`(高亮移动,布局不变);tap 某个 pane 可下钻 focus
-- 受 **Tracking/Pinned**(见 2.5)约束
+- 受 **尺寸权威**(见 2.5)约束
 - 适合大屏(iPad 横屏 / 桌面)。手机上技术可选,但会是很小的、要平移的网格,**允许但不优化**
 
 **List(列表,扁平视图)**
 - 第一层 = pane 列表:状态点 + 名字/当前命令 + 最近活动
 - **MVP 不做缩略图**(是否加待定——手机原生 session 的 pane 没有空间关系,列表足够)
-- tap 进入 → 该 pane 全屏,**适配当前设备尺寸**(即始终 Tracking)
+- tap 进入 → 该 pane 全屏,**适配当前设备尺寸**(除非别的设备拥有尺寸)
 - 适合手机(扁平 agent 集的心智:不是"左/右那个",就是一串 agent)
 
 **默认:** 手机默认 List,iPad/桌面默认 Tiles。**切换控件直接放在顶部栏上**(见 3.8),不藏在菜单里——视图切换是高频动作,值得一个常驻入口。
 
-### 2.5 尺寸跟随:Tracking / Pinned(粘性状态)
+### 2.5 尺寸权威:三种策略(会话状态,存在服务器上)
 
-**这是一个状态,不是一次操作**。它只在 **Tiles** 里有意义(List 的 focus 永远适配设备 = 天然 Tracking)。
+**这是一个状态,不是一次操作**,而且**它属于会话,不属于设备**。三种策略各自就是 tmux 自己的 `window-size` 值——我们不发明第二套仲裁,只是把它做成可选、可见、可归属:
 
-| 状态 | 含义 | 谁触发 resize |
-|---|---|---|
-| **Tracking(跟随设备)** | 我们拥有尺寸 = 设备 | connect 选择 / 菜单触发 / 旋转 / Split View / 改字号 |
-| **Pinned(尊重窗口)** | 尊重 window 的原生(外来)尺寸 | **永不自动 resize**(旋转、Split View 也不动) |
+| 策略 | `window-size` | 谁定尺寸 | 代价 |
+|---|---|---|---|
+| **跟随活动设备**(默认) | `latest` | 最后被使用的客户端 | 每次换设备翻一次尺寸 |
+| **适配所有设备** | `smallest` | 所有 attach 客户端的最小值 | 大屏被小屏钳住,只有小屏那台能松开 |
+| **以此设备为准** | `manual` + `resize-window` | 明确记录的那一台 | 交接是显式动作,不是敲键盘的副作用 |
 
-**关键:它是 sticky 的,不靠"每次比尺寸"判断**(否则"转过去再转回来"会被卡住)。
+**为什么必须存在服务器上**:早期版本把它存在每台设备的 `UserDefaults`,并在**每次 attach 时重新写回服务器**——于是两台设备互相覆盖对方的选择(iPad 在重连循环里每 ~50 秒发一次 `window-size latest`,把 Mac 上的钉选悄悄抹掉)。现在:
 
-- **connect 弹框** = 第一次选状态("适配我的设备 / 保持原始尺寸"),**不是**"执行一次调整"
-- **菜单开关** = 随时切换状态
-- 切换语义:Pinned → Tracking 会 resize 一次到设备;Tracking → Pinned **不 resize**(已经=设备,只是停止跟随)
-- **记住选择**(按 session 或 host),重连不再反复弹
+- 策略的唯一副本 = tmux 的 `window-size`;attach 时**只读不写**(`adoptSizingPolicy`),本地存储降级为读到之前的显示缓存
+- 归属写在会话选项 `@bento_size_owner` = `<拥有者的 tmux client name>|<设备标签>`
+- **身份用 tmux 的 client name(tty),不自造设备 id**:`list-clients` 天然回答"拥有者还在不在",不需要心跳;`%client-detached` 到达时若正是拥有者,立刻释放回 `latest`——**离开的设备不可能长期扣着会话**
+- 拥有者自己重连后 client name 会变,所以它在 attach 时按本地"我曾认领"的记录**重新认领**;别的设备在拥有者不在时才接管
+
+**非拥有者一律不推尺寸**(`manual` 下 tmux 本来就会忽略 `refresh-client`,我们连发都不发);`latest` 和 `smallest` 下**每台都必须持续声明自己的真实网格**,因为那正是 tmux 计算窗口的输入。
 
 ### 2.6 resize 触发规则(严格白名单)
 
 **只有**以下事件触发对 tmux 的 resize:
 
-1. Connect —— 按所选状态(Tracking 适配 / Pinned 不动)
-2. 菜单里手动"适配到当前设备"
-3. 旋转 —— **仅 Tracking 时**
-4. Split View / app 窗口尺寸变化 —— **仅 Tracking 时**
+1. Connect —— 按会话上已有的策略(见 2.5;attach 只读策略,不写)
+2. 菜单里手动"以此设备为准"/"适配到当前设备"
+3. 旋转 —— **非"别的设备拥有"时**
+4. Split View / app 窗口尺寸变化 —— **非"别的设备拥有"时**
 5. Settings 改字号
 
 **绝不触发** resize 的事件:键盘弹出/收起、滚动、双指平移、切换 pane、任何 UI 覆盖层(语音面板、菜单、设置)。
@@ -129,10 +132,11 @@
 
 ### 2.7 多 client:共享同一 window(不强制断联)
 
-因 2.3 的墙,多 client 同时 attach 同一 tmux window 会共享同一份几何。我们**不强制断联**——接入时只 `attach`,**不** `attach -d` 去踢掉其它 client(如 PC)。冲突由 **Tracking/Pinned(2.5)** 化解,而不是靠断开别人:
+因 2.3 的墙,多 client 同时 attach 同一 tmux window 会共享同一份几何。我们**不强制断联**——接入时只 `attach`,**不** `attach -d` 去踢掉其它 client(如 PC)。冲突由 **尺寸权威(2.5)** 化解,而不是靠断开别人:
 
-- 手机选 **Pinned** → 永不改尺寸 → PC 的布局不受影响,两端可同时连着(手机端 page>viewport 就平移看)
-- 手机选 **Tracking** → 把 window resize 到手机尺寸(此时确实会影响 PC 的视图,是用户的明确选择)
+- 手机选 **以此设备为准** → 手机是唯一尺寸来源,PC 无法(也不会尝试)改动;手机离开时归属自动释放,PC 拿回自己的尺寸
+- 手机选 **适配所有设备** → 取最小值,两端都不被裁切,代价是 PC 被钳住
+- 默认 **跟随活动设备** → 谁在用谁说了算(此时确实会影响 PC 的视图,是用户的明确操作)
 - **"换设备续接"靠 tmux 持久化 + page/viewport**:在哪台设备 attach 都看到同一 session,scrollback 不丢——不需要先把别的设备踢下线
 - "真要同屏镜像看"(demo/教学/结对)= spectator 模式,放 v2
 
@@ -242,9 +246,9 @@ v0.2 基于 profile 的浮现式 quick keys([Y][N]…)在 MVP 简化掉;profile 
 - **返回按钮**:回到 session 列表
 - **session 名称**:**宽度不够时隐藏**;**点击 = 切换 session 的快捷入口**(弹出当前 host 的 session 列表直接切,不必返回上一层)
 - **Tiles / List 切换**:常驻的分段控件(segmented),一键切视图,**不在菜单里**
-- **⋯ 菜单**(session/全局作用域):新建 window / window 列表 / Tracking↔Pinned 切换 / 适配到当前设备 / Settings / kill session 等
+- **⋯ 菜单**(session/全局作用域):新建 window / window 列表 / Session Size 三选一(别的设备拥有时显示"由 X 设定") / 适配到当前设备 / Settings / kill session 等
 
-> 注意:有**两个** ⋯ 菜单,作用域不同——顶部栏的是 session/全局级,pane 标题栏的是 pane 级。Tracking/Pinned 这种会话级状态切换放顶部栏菜单,关闭/分屏这种 pane 级操作放 pane 菜单。
+> 注意:有**两个** ⋯ 菜单,作用域不同——顶部栏的是 session/全局级,pane 标题栏的是 pane 级。Session Size 这种会话级状态切换放顶部栏菜单,关闭/分屏这种 pane 级操作放 pane 菜单。
 
 ### 3.7 滚动(保留为硬约束)
 
@@ -273,7 +277,7 @@ MVP 默认 SSH,可选 mosh。手动重连,不自动重连(tmux 持久化已覆�
 ### 4.4 tmux 集成
 
 - 用 tmux control mode(`tmux -CC`),客户端 UI 直接对应 tmux 真实状态
-- **多 client 共享 window**(2.7):接入即 attach,**不强制断联**其它 client;尺寸冲突由 Tracking/Pinned 化解;**不默认 grouped session**
+- **多 client 共享 window**(2.7):接入即 attach,**不强制断联**其它 client;尺寸冲突由尺寸权威(2.5)化解;**不默认 grouped session**
 - 首次连接检测远端 tmux,无则提示安装
 - 对用户透明(不需要知道 "tmux" 这个词)
 - 未来可能用自建 daemon 替换/补充(附录 A),client 模型设计上不绑死 tmux 细节
@@ -342,10 +346,10 @@ awaiting pane 在锁屏/灵动岛显示,合并多 pane("X 个 pane 等待输入"
 **显示与交互核心(本版重写):**
 - page/viewport 模型 + 三条渲染规则(< / == / >)
 - Tiles / List 两种视图,均可下钻 focus
-- Tracking / Pinned 粘性尺寸状态 + connect 弹框选择 + 菜单切换 + 记住选择
+- 尺寸权威三策略(跟随活动设备 / 适配所有设备 / 以此设备为准)+ 菜单切换 + 服务器端归属
 - 严格 resize 触发白名单(键盘/滚动/平移/切 pane 绝不触发)
 - 统一手势(无模式系统),双击弹键盘
-- 多 client 共享 window(不强制断联),冲突由 Tracking/Pinned 化解
+- 多 client 共享 window(不强制断联),冲突由尺寸权威化解
 
 **三大卖点:**
 - Voice input(微信式):按住录音 + 四方向结束 + LLM 转 shell
@@ -390,7 +394,7 @@ awaiting pane 在锁屏/灵动岛显示,合并多 pane("X 个 pane 等待输入"
 
 - ❌ **画布模型(可缩放可平移)** → ✅ page/viewport(user-scalable=false)。理由:终端离散网格无稳定缩放态,是 resize storm 根因
 - ❌ **语音/键盘模式系统(🎤/⌨️)** → ✅ 统一手势,双击弹键盘
-- ❌ **grouped session 默认** → ✅ 多 client 共享 window + Tracking/Pinned(2.7),不强制断联
+- ❌ **grouped session 默认** → ✅ 多 client 共享 window + 尺寸权威(2.5/2.7),不强制断联
 - ❌ **状态感知浮现 Quick Keys** → ✅ 固定浮动 ↑↓↵Esc(三状态机改为驱动 List/通知)
 - ❌ **活跃/非活跃 pane 视觉 scale 字号差** → 不再适用(无缩放)
 - ❌ **5 张 onboarding 卡片** → ✅ 一次性两手势引导覆盖层
@@ -399,10 +403,10 @@ awaiting pane 在锁屏/灵动岛显示,合并多 pane("X 个 pane 等待输入"
 
 - **page 尺寸唯一事实 = tmux**(Tiles 里=window,Focus 里=pane)
 - **那堵墙**:一个 window 一份共享几何,PTY/TUI 物理约束,daemon 也逃不掉
-- **Tracking/Pinned 是粘性状态**,由 connect 弹框 + 菜单设定,不靠每次比尺寸
+- **尺寸权威是会话级粘性状态**,存在 tmux 服务器上(`window-size` + `@bento_size_owner`),attach 只读不写
 - **resize 严格白名单**:connect/手动/旋转(Tracking)/Split View(Tracking)/字号;键盘等绝不触发
-- **Tiles/List 两视图**,Tracking/Pinned 只在 Tiles 有意义,List 永远适配设备
-- **多 client 共享 window,不强制断联;尺寸冲突由 Tracking/Pinned 决定**
+- **Tiles/List 两视图**,尺寸权威只在 Tiles 有意义,List 永远适配设备(除非别的设备拥有尺寸)
+- **多 client 共享 window,不强制断联;尺寸冲突由尺寸权威决定**
 - **检测优先押 Awaiting 状态**
 
 ---

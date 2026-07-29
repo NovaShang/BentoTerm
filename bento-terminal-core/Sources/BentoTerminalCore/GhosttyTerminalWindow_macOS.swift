@@ -1063,6 +1063,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             toolbar.setSessionTitle(name)
             toolbar.activeTabIsPlain = active.isPlain
             toolbar.sizingMode = active.viewModel.sizingMode
+            toolbar.sizingOwner = active.viewModel.sizingOwner
+            toolbar.sizingOwnerIsMe = active.viewModel.sizingOwnerIsMe
         }
     }
 

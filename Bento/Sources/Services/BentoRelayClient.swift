@@ -34,6 +34,20 @@ final class BentoRelayClient {
     let daemon: RelayDaemon
     private(set) var state: State = .idle
 
+    /// Per-connection identity for the log. Several clients are alive at once
+    /// (one per session, plus the short-lived `TmuxLister`), and every one of
+    /// them logs "[relay] …" — which made a real failure indistinguishable from
+    /// a discarded client's corpse when reading `debug.log` after the fact.
+    private static var nextConnectionID = 0
+    private let connID: Int
+    private var tag: String { "[relay#\(connID)]" }
+    /// Connect wall-clock and inbound byte total, reported when a connection
+    /// dies. The iPad's failures all landed inside the post-attach seed burst,
+    /// so "died 0.9s in after 1.2 MB" vs "died idle after 40 KB" is the single
+    /// most useful fact the next reproduction can hand us.
+    private var connectedAt: Date = .distantPast
+    private var inboundBytes = 0
+
     /// Called with bytes received from the SSH shell channel.
     var onDataReceived: (@MainActor (Data) -> Void)?
     /// Called when the connection enters `.failed` or `.closed`.
@@ -77,13 +91,15 @@ final class BentoRelayClient {
 
     init(daemon: RelayDaemon) {
         self.daemon = daemon
+        Self.nextConnectionID += 1
+        self.connID = Self.nextConnectionID
     }
 
     // MARK: - Connect
 
     func connect() async throws {
         state = .connecting
-        dlog("[relay] connect: daemon=\(daemon.daemonID.prefix(8))…")
+        dlog("\(tag) connect: daemon=\(daemon.daemonID.prefix(8))…")
 
         // 1. Load the device private key bytes from Keychain. NIOSSHPrivateKey
         // validates the 32-byte raw form on init, so no separate decode step
@@ -118,7 +134,7 @@ final class BentoRelayClient {
             try? await Task.sleep(for: .seconds(12))
             guard let self, !Task.isCancelled else { return }
             if case .connected = self.state { return }
-            dlog("[relay] handshake timed out after 12s — forcing socket down")
+            dlog("\(self.tag) handshake timed out after 12s — forcing socket down")
             self.disconnect()
         }
         defer { watchdog.cancel() }
@@ -167,8 +183,9 @@ final class BentoRelayClient {
         sessionChannel = try await createSessionChannel()
 
         state = .connected
+        connectedAt = Date()
         startPingLoop()
-        dlog("[relay] connected (daemon=\(daemon.daemonID.prefix(8))…)")
+        dlog("\(tag) connected (daemon=\(daemon.daemonID.prefix(8))…)")
     }
 
     // MARK: - Shell
@@ -318,7 +335,7 @@ final class BentoRelayClient {
                         continue
                     }
                 } catch {
-                    await self?.fail(error)
+                    await self?.fail(error, at: "read-pump")
                     return
                 }
             }
@@ -331,6 +348,7 @@ final class BentoRelayClient {
         // the ping watchdog can distinguish "slow pong on a live link" from a
         // genuinely half-open socket.
         lastInboundAt = Date()
+        inboundBytes += data.count
         do {
             try withChannelLock {
                 var buf = channel.allocator.buffer(capacity: data.count)
@@ -339,7 +357,7 @@ final class BentoRelayClient {
             }
             try await flushOutbound()
         } catch {
-            await fail(error)
+            await fail(error, at: "feed-inbound")
         }
     }
 
@@ -389,9 +407,9 @@ final class BentoRelayClient {
                     continue
                 }
                 missedPongs += 1
-                dlog("[relay] ping miss \(missedPongs)/2 (no pong, no inbound)")
+                dlog("\(await self.tag) ping miss \(missedPongs)/2 (no pong, no inbound)")
                 if missedPongs >= 2 {
-                    await self.fail(RelayError.handshakeFailed("ping timeout"))
+                    await self.fail(RelayError.handshakeFailed("ping timeout"), at: "ping")
                     return
                 }
             }
@@ -513,17 +531,24 @@ final class BentoRelayClient {
     /// a fresh shell.
     private func sessionChannelEnded() {
         guard case .connected = state else { return }
-        dlog("[relay] session channel ended — remote shell/PTY died")
-        Task { await self.fail(RelayError.sessionEnded) }
+        dlog("\(tag) session channel ended — remote shell/PTY died")
+        Task { await self.fail(RelayError.sessionEnded, at: "session-channel") }
     }
 
-    private func fail(_ error: Error) async {
+    /// `site` names the hop that observed the death (read pump, inbound feed,
+    /// ping watchdog, session channel). Every one of them produced the same
+    /// bare "[relay] terminated: …" line before, which is why the iPad log
+    /// could not say whether the socket was dropped by the peer or torn down
+    /// from inside — and the age/byte counters say whether it died under the
+    /// post-attach seed burst or while idle.
+    private func fail(_ error: Error, at site: String) async {
         if case .failed = state { return }
         if case .closed = state { return }
         state = .failed(error)
+        let age = connectedAt == .distantPast ? -1 : Date().timeIntervalSince(connectedAt)
         disconnect()
         onTerminated?(error)
-        dlog("[relay] terminated: \(error.localizedDescription)")
+        dlog("\(tag) terminated at \(site) after \(String(format: "%.1f", age))s / \(inboundBytes / 1024) KiB in: \(error.localizedDescription)")
     }
 }
 

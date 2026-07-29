@@ -53,6 +53,11 @@ public enum TmuxNotification: Sendable {
     case sessionChanged(session: TmuxSessionID, name: String)
     case sessionRenamed(name: String)
     case paneModeChanged(pane: TmuxPaneID, mode: String)
+    /// A client detached from the server (tmux ≥ 3.2). The payload is the
+    /// client name — the same identity `#{client_name}` and `list-clients`
+    /// use — which is how a session learns that the device owning its size
+    /// went away, with no polling and no state of our own to keep in sync.
+    case clientDetached(client: String)
     case exit(reason: String?)
 }
 

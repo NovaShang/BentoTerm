@@ -342,7 +342,7 @@ public final class TmuxControlMode: @unchecked Sendable {
         "%window-renamed ", "%window-pane-changed", "%unlinked-window-add",
         "%unlinked-window-close", "%session-changed ", "%session-renamed ",
         "%sessions-changed", "%pane-mode-changed ", "%client-session-changed",
-        "%config-error", "%exit",
+        "%client-detached ", "%config-error", "%exit",
     ]
 
     /// Recognised `%` markers used to realign a line that arrives with
@@ -366,7 +366,8 @@ public final class TmuxControlMode: @unchecked Sendable {
         "%window-add @", "%window-close @", "%window-renamed @",
         "%window-pane-changed @", "%unlinked-window-add @", "%unlinked-window-close @",
         "%session-changed $", "%session-renamed $", "%sessions-changed",
-        "%pane-mode-changed %", "%client-session-changed ", "%config-error ", "%exit",
+        "%pane-mode-changed %", "%client-session-changed ", "%client-detached ",
+        "%config-error ", "%exit",
     ]
 
     /// If `line` begins with a NON-PRINTABLE escape/control byte — stray DCS/CSI
@@ -591,6 +592,10 @@ public final class TmuxControlMode: @unchecked Sendable {
             parseSessionRenamed(line)
         } else if line.hasPrefix("%pane-mode-changed ") {
             parsePaneModeChanged(line)
+        } else if line.hasPrefix("%client-detached ") {
+            let client = String(line.dropFirst("%client-detached ".count))
+                .trimmingCharacters(in: .whitespaces)
+            if !client.isEmpty { onNotification?(.clientDetached(client: client)) }
         } else if line.hasPrefix("%exit") {
             let reason = line.count > 5 ? String(line.dropFirst(6)) : nil
             onNotification?(.exit(reason: reason))

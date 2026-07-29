@@ -93,9 +93,46 @@ public final class TerminalViewModel: ObservableObject {
     var modePreferenceLoaded = false
     /// The session's current window (drives the active tab highlight).
     @Published public var activeWindowID: TmuxWindowID?
-    /// Who governs the tmux window's size (see `TerminalSizingMode`). Sticky
-    /// per session; restored on attach by `restoreSizingMode`.
+    /// Who governs the tmux window's size (see `TerminalSizingMode`). Held on
+    /// the SERVER (`window-size`) and adopted on attach by `adoptSizingPolicy`,
+    /// so two devices sharing a session agree instead of overwriting each other.
     @Published public var sizingMode: TerminalSizingMode = .tracking
+    /// The device owning a `.thisDevice` session's size, nil under the
+    /// client-derived policies. Non-nil and not us = this device must not push
+    /// a size at all.
+    @Published public var sizingOwner: TmuxSizingOwner?
+    /// This client's tmux client name (its tty), re-read on every attach — tmux
+    /// hands out a new one each time, which is why ownership is re-claimed
+    /// rather than remembered.
+    var myTmuxClientName: String?
+    /// The last grid this device measured for itself, recorded even when the
+    /// policy forbids pushing it. Claiming ownership later has to resize the
+    /// window to OUR size, and on macOS `idealTerminalSize` is a placeholder —
+    /// the real grid only ever arrives through `resizeTmuxClient`.
+    var lastTmuxClientSize: (cols: Int, rows: Int)?
+
+    /// Whether THIS device is the one that claimed the size. Survives app
+    /// restarts (per session) so the owner can re-claim under its new client
+    /// name after a reconnect instead of losing the session to whoever
+    /// attaches next.
+    var claimedSizeOwnership: Bool {
+        get {
+            guard let session = activeTmuxSessionName else { return false }
+            return UserDefaults.standard.bool(forKey: "sizingOwner.\(session)")
+        }
+        set {
+            guard let session = activeTmuxSessionName else { return }
+            UserDefaults.standard.set(newValue, forKey: "sizingOwner.\(session)")
+        }
+    }
+
+    /// True when this device is the size owner. Under `.thisDevice` every other
+    /// device is a passenger: tmux's `manual` already ignores their
+    /// `refresh-client`, and we don't even send it.
+    public var sizingOwnerIsMe: Bool {
+        guard let owner = sizingOwner, let me = myTmuxClientName else { return false }
+        return owner.client == me
+    }
     @Published public var isTmuxReady = false
 
     /// Where we are in the session lifecycle.
@@ -228,6 +265,15 @@ public final class TerminalViewModel: ObservableObject {
     /// screen sits frozen and "connected". Two straight timeouts (~25s) is
     /// the universal tripwire — it works over any transport.
     private var commandTimeoutStreak = 0
+    /// Set when the transport reports `.failed` DURING a reconnect attempt.
+    /// `handleUnexpectedFailure` can't act on those (a reconnect already owns
+    /// recovery), but silently dropping them let a dead attempt report success:
+    /// the seed burst at the end of `reattachExistingSession` is where the
+    /// relay socket actually died on the iPad, and because `isReconnecting` was
+    /// still true nobody noticed until the poll watchdog fired ~48s later — then
+    /// the next attempt died the same way, forever. The attempt now reads this
+    /// flag and retries instead.
+    private var failedDuringReattach = false
 
     private var layoutChangeDebounce: Task<Void, Never>?
     /// Retry for a raced `list-windows` parse (see `refreshWindows`).
@@ -792,6 +838,9 @@ public final class TerminalViewModel: ObservableObject {
             // would wait for the 2s poll, which is long enough for the pane to
             // look broken (scrolling does nothing, no explanation).
             Task { await refreshPanes() }
+
+        case .clientDetached(let client):
+            handleClientDetached(client)
 
         case .exit:
             usingTmux = false
@@ -1382,13 +1431,30 @@ public final class TerminalViewModel: ObservableObject {
     /// area changes for a single-pane / zoomed / focused session so the active
     /// pane fills exactly the area above the keyboard — same UX as non-tmux.
     ///
-    /// Gated on the sizing mode HERE rather than at each call site: a pin has to
-    /// hold against every path that could push a size (live resize, zoom, font
-    /// change, keyboard avoidance), and one of them being missed is what a
-    /// half-applied pin looks like.
+    /// Gated on the sizing mode HERE rather than at each call site: a policy has
+    /// to hold against every path that could push a size (live resize, zoom,
+    /// font change, keyboard avoidance), and one of them being missed is what a
+    /// half-applied policy looks like.
+    ///
+    /// Under `latest` and `smallest` every client SHOULD keep declaring its own
+    /// grid — that is the input tmux computes from, and `smallest` needs all of
+    /// them to be current. Under `manual` only the owner speaks, via
+    /// `resize-window`; `refresh-client -C` is ignored by tmux there, which is
+    /// what made the old one-shot "fit" silently do nothing.
     public func resizeTmuxClient(cols: Int, rows: Int) {
-        guard usingTmux, sizingMode == .tracking else { return }
-        tmuxService.sendFireAndForget(.refreshClient(width: cols, height: rows))
+        guard cols > 0, rows > 0 else { return }
+        lastTmuxClientSize = (cols, rows)
+        guard usingTmux else { return }
+        switch sizingMode {
+        case .tracking, .smallest:
+            tmuxService.sendFireAndForget(.refreshClient(width: cols, height: rows))
+        case .thisDevice:
+            guard sizingOwnerIsMe else { return }
+            // Keep our client viewport honest too, so `#{client_width}` and any
+            // later switch back to a client-derived policy start from the truth.
+            tmuxService.sendFireAndForget(.refreshClient(width: cols, height: rows))
+            Task { [weak self] in await self?.pushOwnedWindowSize() }
+        }
     }
 
     /// Change who governs the window size, persist it, and put the matching
@@ -1399,29 +1465,41 @@ public final class TerminalViewModel: ObservableObject {
             TerminalSizingMode.store(mode, for: session)
         }
         Task { [weak self] in
-            await self?.applySizingMode(mode)
-            // Returning to tracking must re-assert this client immediately;
-            // otherwise the window keeps whatever the pin froze it at until
-            // something else happens to resize.
-            if mode == .tracking { self?.resetTmuxClientToDeviceSize() }
+            guard let self else { return }
+            await self.applySizingMode(mode)
+            // Leaving `manual` must re-assert this client immediately, or the
+            // window keeps whatever the owner froze it at until something else
+            // happens to resize.
+            if mode != .thisDevice { self.resetTmuxClientToDeviceSize() }
         }
     }
 
-    /// Load the stored policy for a session and re-assert it on tmux — the
-    /// choice is server-affecting, so reconnecting has to restore it.
+    /// Adopt the session's server-side sizing policy on attach. Named for what
+    /// it does NOT do: the old `restoreSizingMode` re-asserted this device's
+    /// local preference onto the server, so whichever device attached last won
+    /// — and an iPad in a reconnect loop overwrote the Mac's choice every ~50s.
     func restoreSizingMode(for session: String) {
-        let mode = TerminalSizingMode.stored(for: session) ?? .tracking
-        sizingMode = mode
-        Task { [weak self] in await self?.applySizingMode(mode) }
+        // Show the last mode we saw immediately; the server read replaces it.
+        sizingMode = TerminalSizingMode.stored(for: session) ?? .tracking
+        Task { [weak self] in await self?.adoptSizingPolicy() }
     }
 
-    /// User-triggered: resize the tmux client to fit the current device
-    /// viewport at the native cell size. Useful after attaching to a session
-    /// that was sized for a different client (e.g. desktop).
+    /// User-triggered: make the session fit THIS device. Under a client-derived
+    /// policy that is a `refresh-client` re-announcement (needed because our
+    /// automatic pushes are deduplicated, so a shrink by another client would
+    /// otherwise never be answered). Under `manual` it means "take the size
+    /// over", since a `refresh-client` there is ignored by tmux.
     public func resetTmuxClientToDeviceSize() {
         guard usingTmux else { return }
-        let (cols, rows) = idealTerminalSize()
+        if sizingMode == .thisDevice, !sizingOwnerIsMe {
+            setSizingMode(.thisDevice)
+            return
+        }
+        let (cols, rows) = lastTmuxClientSize ?? idealTerminalSize()
         tmuxService.sendFireAndForget(.refreshClient(width: cols, height: rows))
+        if sizingMode == .thisDevice {
+            Task { [weak self] in await self?.pushOwnedWindowSize() }
+        }
     }
 
     public func killSession() {
@@ -1548,6 +1626,7 @@ public final class TerminalViewModel: ObservableObject {
         // disconnect()'s deferred Task instead raced the fresh client.
         usingTmux = false
         isTmuxReady = false
+        failedDuringReattach = false
         // Stop the pollers FIRST. The reconnect path (unlike disconnect/
         // suspend) used to leave state polling running, so list-panes kept
         // firing into the half-built connection — typed into the raw shell
@@ -1574,7 +1653,7 @@ public final class TerminalViewModel: ObservableObject {
             // Raw-shell session: the fresh shell already streams to the
             // surface once the phase is live again.
             phase = .shellReady
-            return true
+            return !failedDuringReattach
         }
         // Skip session discovery entirely — we know the session name, and
         // `tmux -CC new-session -A` attaches-or-creates in one step.
@@ -1582,6 +1661,16 @@ public final class TerminalViewModel: ObservableObject {
         await launchTmux(sessionName: name, groupWith: nil, resizeToScreen: false)
         if isTmuxReady {
             await reseedAllPanes()
+        }
+        // `isTmuxReady` only says the attach handshake worked. The seed above
+        // is the heaviest burst this connection ever carries, and on the iPad
+        // it is exactly where the relay socket kept dying — leaving a session
+        // that looks ready but never receives another byte. Treat a failure
+        // anywhere in this attempt as a failed attempt so the loop retries now
+        // rather than after the poll watchdog eventually notices.
+        if failedDuringReattach {
+            dlog("reattach: transport failed mid-attempt (likely during seed) — not reporting success")
+            return false
         }
         return isTmuxReady
     }
@@ -1626,8 +1715,13 @@ public final class TerminalViewModel: ObservableObject {
         guard !userInitiatedDisconnect else { return }
         // A reconnect loop is already running and owns recovery — its own
         // attempts surface transient `.failed` states we must not treat as
-        // fresh failures (they'd spawn a duplicate error alert).
-        guard !isReconnecting else { return }
+        // fresh failures (they'd spawn a duplicate error alert). Record it
+        // though: an attempt that brought tmux up and THEN lost the socket
+        // (mid-seed) must not be reported as a success.
+        guard !isReconnecting else {
+            failedDuringReattach = true
+            return
+        }
         // If the app is backgrounded (lock screen, app switcher) the WS is
         // expected to die. Absorb the failure silently and let
         // `resumeFromBackground` retry on unlock.
@@ -1701,8 +1795,12 @@ public final class TerminalViewModel: ObservableObject {
     private func noteCommandTimeout() {
         commandTimeoutStreak += 1
         guard commandTimeoutStreak >= 2 else { return }
-        commandTimeoutStreak = 0
+        // Only spend the streak on an attempt that can actually run. Resetting
+        // before the guard threw the tripwire away whenever we happened to be
+        // mid-reconnect or not yet `.tmuxReady`, so a wedged session needed
+        // FOUR timeouts (~48s on the iPad log) instead of two to be noticed.
         guard phase == .tmuxReady, !isReconnecting, !isInBackground, !userInitiatedDisconnect else { return }
+        commandTimeoutStreak = 0
         dlog("tmux stopped answering (2 consecutive command timeouts) — forcing reconnect")
         scheduleReconnect()
     }

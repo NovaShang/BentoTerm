@@ -15,7 +15,6 @@ struct TerminalWrapperView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showSettings = false
     @State private var showOnboarding: Bool = GestureOnboardingOverlay.shouldShow
-    @State private var sizingMode: TerminalSizingMode = .tracking
     @State private var sizingResolved = false
     @State private var showMixedFlattenAlert = false
     /// One-shot notices driven by TipCenter (design doc §6): a transient toast
@@ -155,35 +154,22 @@ struct TerminalWrapperView: View {
         }
     }
 
-    /// Resolve the sticky sizing state once tmux is ready — with defaults, not
-    /// dialogs (design doc §5.4 "zero-modal first connect"): use the stored
-    /// choice if there is one, otherwise fit to this device. "Pin to Original
-    /// Size" stays one tap away in the Session Size menu for the case the old
-    /// dialog asked about (a window deliberately sized for another screen).
+    /// Everything sizing-related now comes from the server (the view model
+    /// adopts `window-size` + `@bento_size_owner` on attach), so first connect
+    /// has nothing to resolve and — critically — nothing to WRITE. Writing a
+    /// local default here is what let this device silently overrule a policy
+    /// another device had chosen for the shared session.
     private func resolveSizing() {
         guard !sizingResolved, viewModel.isTmuxReady else { return }
         sizingResolved = true
-        if let stored = TerminalSizingMode.stored(for: sessionKey) {
-            sizingMode = stored
-        } else if viewModel.paneViewModels.count <= 1 {
-            // Single pane: tracking without an explicit resize claim, same as
-            // the old silent default.
-            sizingMode = .tracking
-            TerminalSizingMode.store(.tracking, for: sessionKey)
-        } else {
-            setSizing(.tracking)
-        }
         applyPhoneFocusDefault()
     }
 
     private func setSizing(_ mode: TerminalSizingMode) {
-        sizingMode = mode
-        // Route through the view model so the choice also lands on the tmux
-        // server (`window-size`). Storing it locally only ever suppressed OUR
-        // pushes — another attached client could still reflow the session, so a
-        // "pin" didn't actually pin anything.
+        // The view model owns the write: it puts `window-size` on the server and
+        // records/clears ownership. Nothing is stored here — a per-device copy
+        // of a shared decision is exactly the bug this replaced.
         viewModel.setSizingMode(mode)
-        if mode == .tracking { viewModel.resetTmuxClientToDeviceSize() }
     }
 
     /// Phones open a multi-pane tiling in Focus by default — an act-and-inform
@@ -361,7 +347,8 @@ struct TerminalWrapperView: View {
         SinglePaneSurface(
             viewModel: viewModel,
             voiceController: voiceController,
-            sizingMode: sizingMode
+            sizingMode: viewModel.sizingMode,
+            sizingOwnerIsMe: viewModel.sizingOwnerIsMe
         )
     }
 
@@ -737,22 +724,35 @@ struct TerminalWrapperView: View {
     /// from its clients and a one-shot push is undone by the next client.
     @ViewBuilder
     private var sessionSizeSection: some View {
-        Section("Session Size") {
+        Section {
             ForEach(TerminalSizingMode.allCases, id: \.rawValue) { mode in
                 Button { setSizing(mode) } label: {
-                    if mode == sizingMode {
+                    if mode == viewModel.sizingMode {
                         Label(iosTitle(mode), systemImage: "checkmark")
                     } else {
                         Label(iosTitle(mode), systemImage: mode.symbol)
                     }
                 }
             }
+        } header: {
+            // Naming the owner is the whole point on a second device: without it
+            // the menu shows a checked mode that this device cannot act on.
+            if viewModel.sizingMode == .thisDevice, let owner = viewModel.sizingOwner,
+               !viewModel.sizingOwnerIsMe {
+                Text("Session Size — set by \(owner.displayName)")
+            } else {
+                Text("Session Size")
+            }
         }
     }
 
     /// Same states as the Mac, said in this device's words.
     private func iosTitle(_ mode: TerminalSizingMode) -> String {
-        mode == .tracking ? "Track This Device" : "Pin to Current Size"
+        switch mode {
+        case .tracking:   return "Follow the Active Device"
+        case .smallest:   return "Fit Every Device"
+        case .thisDevice: return "Size to This Device"
+        }
     }
 
     /// Window ops: switch + close. Parallel(Tiled) ONLY, and it sits at the very
@@ -819,12 +819,16 @@ struct SinglePaneSurface: UIViewControllerRepresentable {
     /// layout pass) on every keystroke/touch the controller published.
     let voiceController: VoiceInputController
     var sizingMode: TerminalSizingMode
+    /// Under `.thisDevice` only the owner may push a size, and only the owner's
+    /// viewport matches the window — everyone else letterboxes.
+    var sizingOwnerIsMe: Bool
 
     func makeUIViewController(context: Context) -> PaneContainerVC {
         let vc = PaneContainerVC()
         vc.viewModel = viewModel
         vc.voiceController = voiceController
         vc.sizingMode = sizingMode
+        vc.sizingOwnerIsMe = sizingOwnerIsMe
 
         if viewModel.isTmuxReady {
             vc.setupTmuxPanes()
@@ -847,6 +851,7 @@ struct SinglePaneSurface: UIViewControllerRepresentable {
 
     func updateUIViewController(_ vc: PaneContainerVC, context: Context) {
         vc.sizingMode = sizingMode
+        vc.sizingOwnerIsMe = sizingOwnerIsMe
         if viewModel.isTmuxReady {
             if vc.singlePaneVC != nil {
                 vc.setupTmuxPanes()
@@ -930,6 +935,24 @@ final class PaneContainerVC: UIViewController {
 
     var sizingMode: TerminalSizingMode = .tracking {
         didSet { if oldValue != sizingMode { view.setNeedsLayout() } }
+    }
+    var sizingOwnerIsMe = false {
+        didSet { if oldValue != sizingOwnerIsMe { view.setNeedsLayout() } }
+    }
+
+    /// May this device declare its grid to tmux? Only a foreign `manual` owner
+    /// silences us — under `latest` AND `smallest` every client must keep its
+    /// size current, because that is the input tmux computes the window from
+    /// (`smallest` with a stale client is just a wrong minimum).
+    private var canPushClientSize: Bool {
+        !(sizingMode == .thisDevice && !sizingOwnerIsMe)
+    }
+
+    /// Is the window's size decided somewhere other than this viewport? Then
+    /// the page is the window's natural cell size and we letterbox/pan, rather
+    /// than stretching the surface to a grid tmux will not honour.
+    private var windowSizeIsForeign: Bool {
+        sizingMode != .tracking
     }
 
     /// Holds the pane VCs. When the page (tmux size) is larger than the viewport
@@ -1226,9 +1249,10 @@ final class PaneContainerVC: UIViewController {
 
     private func pushClientSize(cols: Int, rows: Int) {
         guard cols > 0, rows > 0 else { return }
-        // PRD §2.6 resize whitelist: only Tracking lets the client own the tmux
-        // geometry. Pinned respects the window's native size — never push.
-        guard sizingMode == .tracking else { return }
+        // PRD §2.6 resize whitelist: a session owned by ANOTHER device is the
+        // only case where we stay quiet — tmux ignores `refresh-client` under
+        // `manual` anyway, and under `smallest` our size is half the answer.
+        guard canPushClientSize else { return }
         guard lastClient?.cols != cols || lastClient?.rows != rows else { return }
         lastClient = (cols, rows)
         clientResizeWork?.cancel()
@@ -1549,7 +1573,7 @@ extension PaneContainerVC {
                                      width: CGFloat(p.width) * ppc.width + 2 * halfGap,
                                      height: titleBar + CGFloat(p.height) * ppc.height))
         }
-        if sizingMode == .tracking {
+        if canPushClientSize {
             recomputeTilesClientSize()
         }
         // Refresh the drag-to-resize divider hot zones for the new geometry.
@@ -1559,24 +1583,26 @@ extension PaneContainerVC {
         contentView.bringSubviewToFront(dividerOverlay)
     }
 
-    /// Page size for a focused/single pane. Tracking → viewport; Pinned → the
-    /// pane's natural cell size (+ title bar), which may exceed the viewport.
+    /// Page size for a focused/single pane. We drive the size → viewport;
+    /// someone else does → the pane's natural cell size (+ title bar), which may
+    /// exceed the viewport.
     private func pageSizeForFocus(cols: (Int, Int)?) -> CGSize {
         let rect = pageRect
-        guard sizingMode == .pinned, let ppc = pointsPerCell, let (c, r) = cols else {
+        guard windowSizeIsForeign, let ppc = pointsPerCell, let (c, r) = cols else {
             return rect.size
         }
         return CGSize(width: CGFloat(c) * ppc.width,
                       height: CGFloat(r) * ppc.height + titleBarH)
     }
 
-    /// Page size for Tiles. Tracking → viewport; Pinned → natural window size.
+    /// Page size for Tiles. We drive the size → viewport; someone else does →
+    /// the window's natural size.
     /// Cell-exact: width maps cells 1:1; height is the grid plus exactly ONE
     /// title bar (one cell) — stacked panes' title bars reuse tmux's divider
     /// rows, so only the top bar adds height (see `layoutTiles`).
     private func pageSizeForTiles(totalCols: CGFloat, totalRows: CGFloat) -> CGSize {
         let rect = pageRect
-        guard sizingMode == .pinned, let ppc = pointsPerCell else { return rect.size }
+        guard windowSizeIsForeign, let ppc = pointsPerCell else { return rect.size }
         return CGSize(width: totalCols * ppc.width,
                       height: (totalRows + 1) * ppc.height)
     }
