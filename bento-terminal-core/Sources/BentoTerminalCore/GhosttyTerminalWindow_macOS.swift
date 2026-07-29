@@ -598,6 +598,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // A plain tab vanishes with its window — there's nothing to reconnect.
         toolbar.onCloseTab = { [weak self] in self?.window.close() }
         toolbar.onRenameSession = { [weak self] in self?.presentRenameSheet() }
+        toolbar.onWindowMenu = { [weak self] index in self?.windowMenuItems(forSegment: index) }
+        toolbar.hostWindow = win
         win.toolbar = toolbar.makeToolbar()
         win.toolbarStyle = .unified
         // Restore size + position, but only for the window that opens into an
@@ -1259,6 +1261,127 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         }
     }
 
+    // MARK: - Window strip context menu
+
+    /// The actions for the tmux window under the pointer in the toolbar strip —
+    /// the same set the Focus sidebar's rows carry, because it is the same
+    /// thing in a different place. nil when that segment holds no window (the
+    /// overflow "…" segment, a plain tab, or a strip mid-rebuild).
+    private func windowMenuItems(forSegment index: Int) -> [NSMenuItem]? {
+        guard !tab.isPlain, visibleWindows.indices.contains(index) else { return nil }
+        let id = visibleWindows[index]
+        let vm = tab.viewModel
+        // Name the target at the top. A segment is a small thing to have aimed
+        // at, and every item below it acts on a live window.
+        let header = NSMenuItem(title: vm.windowDisplayName(id), action: nil, keyEquivalent: "")
+        header.isEnabled = false
+
+        let move = NSMenuItem(title: "Move to Session", action: nil, keyEquivalent: "")
+        move.submenu = moveToSessionSubmenu(for: id)
+
+        return [
+            header,
+            .separator(),
+            ClosureMenuItem("Rename Window…") { [weak self] in self?.promptRenameWindow(id) },
+            move,
+            .separator(),
+            ClosureMenuItem("Close Window") { [weak self] in self?.confirmCloseWindow(id) },
+        ]
+    }
+
+    private func moveToSessionSubmenu(for id: TmuxWindowID) -> NSMenu {
+        let menu = NSMenu()
+        let vm = tab.viewModel
+        for name in vm.availableTmuxSessions where name != vm.activeTmuxSessionName {
+            menu.addItem(ClosureMenuItem(name) { [weak self] in self?.moveWindow(id, to: name) })
+        }
+        if menu.items.count > 0 { menu.addItem(.separator()) }
+        menu.addItem(ClosureMenuItem("New Session…") { [weak self] in
+            self?.promptMoveToNewSession(id)
+        })
+        // The list is only as fresh as the last poll; refresh for the next open.
+        Task { await vm.refreshTmuxSessions() }
+        return menu
+    }
+
+    private func promptRenameWindow(_ id: TmuxWindowID) {
+        let vm = tab.viewModel
+        let alert = NSAlert()
+        alert.messageText = "Rename Window"
+        alert.informativeText = "tmux stops auto-naming this window from what's running in it."
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = vm.windowBodyName(id)
+        field.placeholderString = "window name"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            vm.renameWindow(id, to: field.stringValue)
+        }
+    }
+
+    private func confirmCloseWindow(_ id: TmuxWindowID) {
+        let vm = tab.viewModel
+        let alert = NSAlert()
+        alert.messageText = "Close “\(vm.windowDisplayName(id))”?"
+        alert.informativeText = "Everything running in its panes stops."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Window")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            vm.closeWindow(id)
+        }
+    }
+
+    private func promptMoveToNewSession(_ id: TmuxWindowID) {
+        let alert = NSAlert()
+        alert.messageText = "Move to New Session"
+        alert.informativeText = "The window keeps running — it moves to the new session."
+        alert.addButton(withTitle: "Move")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "session name"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            // A typed name may match an EXISTING session, so this goes through
+            // the same landing pipeline as a menu pick rather than assuming new.
+            self?.moveWindow(id, to: field.stringValue)
+        }
+    }
+
+    /// Run the move; a target session that hasn't settled into Parallel or Focus
+    /// bounces back and asks where the window should land (same pipeline the
+    /// sidebar uses — see `TerminalViewModel.moveWindow`).
+    private func moveWindow(_ id: TmuxWindowID, to session: String,
+                            landing: MoveLanding = .auto) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard await self.tab.viewModel.moveWindow(id, toSession: session, landing: landing)
+                == .needsLandingChoice else { return }
+            let alert = NSAlert()
+            alert.messageText = "Move to “\(session)”"
+            alert.informativeText =
+                "That session isn't settled into Parallel or Focus yet. Where should this land?"
+            alert.addButton(withTitle: "Into Current Window (Parallel)")
+            alert.addButton(withTitle: "As New Window (Focus)")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: self.window) { [weak self] response in
+                switch response {
+                case .alertFirstButtonReturn:
+                    self?.moveWindow(id, to: session, landing: .joinCurrentWindow)
+                case .alertSecondButtonReturn:
+                    self?.moveWindow(id, to: session, landing: .newWindow)
+                default: break
+                }
+            }
+        }
+    }
+
     // MARK: NSWindowDelegate
 
     func window(_ window: NSWindow,
@@ -1294,6 +1417,25 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         window.delegate = nil
         onEmpty?()
     }
+}
+
+/// An `NSMenuItem` that runs a closure. AppKit menu items are target/action
+/// only, and these are built per right-click against a specific tmux window —
+/// a shared selector would have to look that window up again from somewhere,
+/// which is exactly the indirection that gets the target wrong.
+final class ClosureMenuItem: NSMenuItem {
+    private let run: () -> Void
+
+    init(_ title: String, _ run: @escaping () -> Void) {
+        self.run = run
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    @objc private func fire() { run() }
 }
 
 /// A plain view that reports layout passes — the content column uses it to

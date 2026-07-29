@@ -65,6 +65,20 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// the real pill-selected segmented look) whenever the session set changes.
     private(set) var tabsGroup = NSToolbarItemGroup(itemIdentifier: TerminalToolbarController.centerID)
     var onSelectSegment: ((Int) -> Void)?
+    /// Right-click on a window segment → that window's actions. The index is the
+    /// segment the pointer is actually over; returning nil means "nothing there".
+    var onWindowMenu: ((Int) -> [NSMenuItem]?)?
+
+    /// The segmented control AppKit builds for the expanded item group, and the
+    /// menu we hang on it. Found by traversal because `NSToolbarItemGroup`
+    /// publishes no accessor — see `attachWindowMenu`.
+    private weak var segmentedRef: NSSegmentedControl?
+    private let windowMenu = NSMenu()
+    /// The window this toolbar belongs to. Load-bearing, not a convenience:
+    /// sessions are native tabs, so several windows carry an identical toolbar
+    /// at once and a search that could wander into another one would hand this
+    /// window's menu that window's tmux windows. Every lookup is fenced by it.
+    weak var hostWindow: NSWindow?
     /// The toolbar that owns `tabsGroup` — so we can swap the group in place.
     private weak var toolbarRef: NSToolbar?
     /// Signature (title + dot) of the current segments. A group swap is needed
@@ -279,6 +293,70 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             if sub.image !== items[i].image { sub.image = items[i].image }
         }
         if tabsGroup.subitems.indices.contains(selected) { tabsGroup.selectedIndex = selected }
+        // The control is rebuilt with the group, so re-find it after AppKit has
+        // laid the new one out. Cheap and idempotent (see attachWindowMenu).
+        DispatchQueue.main.async { [weak self] in self?.attachWindowMenu() }
+    }
+
+    // MARK: - Window segment context menu
+
+    /// Hang `windowMenu` on the segmented control AppKit renders for the
+    /// expanded item group, so a right-click on a window tab opens that
+    /// window's actions instead of the stock toolbar menu.
+    ///
+    /// The control has to be found by walking the title bar's views:
+    /// `NSToolbarItemGroup` has no accessor for the control it builds, and the
+    /// group is swapped wholesale on every title/dot change. Idempotent, and a
+    /// miss is harmless — no menu rather than a wrong one.
+    private func attachWindowMenu() {
+        guard centerShowsTabs, let host = hostWindow else { return }
+        if let seg = segmentedRef, seg.window === host, seg.menu === windowMenu,
+           seg.segmentCount == tabsGroup.subitems.count { return }
+        // The theme frame, so the search covers the title bar as well as content.
+        guard let root = host.contentView?.superview,
+              let seg = Self.findSegmented(in: root, count: tabsGroup.subitems.count)
+        else { return }
+        windowMenu.delegate = self
+        seg.menu = windowMenu
+        segmentedRef = seg
+    }
+
+    private static func findSegmented(in view: NSView, count: Int) -> NSSegmentedControl? {
+        if let s = view as? NSSegmentedControl, s.segmentCount == count, count > 1 { return s }
+        for sub in view.subviews {
+            if let found = findSegmented(in: sub, count: count) { return found }
+        }
+        return nil
+    }
+
+    /// Which segment the pointer is over, in screen coordinates.
+    ///
+    /// `NSSegmentedControl` publishes no point→segment API, and the three
+    /// obvious substitutes are all dead ends here (measured, not assumed):
+    /// `width(forSegment:)` reports 0 because the control is SwiftUI-backed
+    /// internally, the view's `accessibilityChildren` is just its cell, and
+    /// there is no `rectForSegment:`. The CELL, though, publishes one
+    /// `NSAccessibilitySegment` per segment carrying a real screen frame, in
+    /// order and non-overlapping — AppKit's own geometry rather than a
+    /// reconstruction of it.
+    ///
+    /// Every assumption is rechecked on each call and any mismatch returns nil.
+    /// This menu can close a window, and the last time something in the title
+    /// bar acted on a target the user hadn't pointed at, it killed a live
+    /// session — so guessing is not on the table.
+    private func segmentIndexUnderPointer() -> Int? {
+        // Re-fenced here too: a tab dragged out of the group re-homes its views,
+        // and a stale reference would report a segment from another window.
+        guard let seg = segmentedRef, seg.window === hostWindow, let cell = seg.cell
+        else { return nil }
+        let kids = (cell as AnyObject).accessibilityChildren?() ?? []
+        guard kids.count == seg.segmentCount else { return nil }
+        let point = NSEvent.mouseLocation
+        for (i, kid) in kids.enumerated() {
+            guard let frame = (kid as AnyObject).accessibilityFrame?() else { continue }
+            if frame.contains(point) { return i }
+        }
+        return nil
     }
 
     /// Rebuild the group with the convenience initializer and re-insert it into
@@ -309,6 +387,12 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         tb.delegate = self
         tb.displayMode = .iconOnly
         tb.allowsUserCustomization = false
+        // Kill the stock title-bar context menu. `allowsUserCustomization = false`
+        // only drops "Customize Toolbar…"; the Icon Only / Icon and Text display
+        // options are governed separately and kept showing up on right-click.
+        // They are meaningless here — every item is deliberately icon-only, and a
+        // toolbar this small has no display mode worth choosing.
+        if #available(macOS 15.0, *) { tb.allowsDisplayModeCustomization = false }
         // Pin the session strip to the WINDOW's center, independent of the side
         // items' widths — so the session-name button can size to its text without
         // ever nudging the tabs (the native alternative to hardcoding widths).
@@ -649,6 +733,27 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func renameAction() { onRenameSession?() }
     @objc private func detachAction() { onDetach?() }
     @objc private func killAction() { onKillSession?() }
+}
+
+extension TerminalToolbarController: NSMenuDelegate {
+    /// Built at open time, for the segment the pointer is over. Rebuilt every
+    /// time rather than cached: which window a segment holds changes as tmux
+    /// windows come and go, and a stale menu would act on the wrong one.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === windowMenu else { return }
+        menu.removeAllItems()
+        guard let index = segmentIndexUnderPointer(),
+              let items = onWindowMenu?(index), !items.isEmpty
+        else {
+            // Deliberately NOT falling back to the active window: acting on a
+            // window the user didn't point at is worse than doing nothing.
+            let none = NSMenuItem(title: "No window here", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+            return
+        }
+        for item in items { menu.addItem(item) }
+    }
 }
 
 #endif
