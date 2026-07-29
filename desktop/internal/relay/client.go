@@ -97,6 +97,15 @@ type Client struct {
 	// tell "probe starved behind bulk data on a busy link" apart from "link
 	// is dead" — see livenessGate.
 	lastWriteOK atomic.Int64
+
+	// epoch identifies the live session. Bumped on every dial and on every
+	// abandonment, so a stale serve loop can tell it has been superseded.
+	epoch uint64
+
+	// reconnectRequested is the UnixNano at which a liveness loop gave up on
+	// this session (0 = nobody has). Run's watchdog reads it: if the serve
+	// loop hasn't returned a while after that, it is wedged and gets dropped.
+	reconnectRequested atomic.Int64
 }
 
 // New constructs a Client. streams may be nil if the caller only needs the
@@ -142,7 +151,7 @@ func (c *Client) Run(ctx context.Context) {
 	backoff := c.opts.MinBackoff
 	for ctx.Err() == nil {
 		start := time.Now()
-		err := c.connectAndServe(ctx)
+		err := c.serveWithWatchdog(ctx)
 		if ctx.Err() != nil {
 			return
 		}
@@ -168,6 +177,57 @@ func (c *Client) Run(ctx context.Context) {
 	}
 }
 
+const (
+	// dialTimeout bounds one WSS dial.
+	dialTimeout = 20 * time.Second
+	// wedgeGrace is how long we let connectAndServe unwind after a liveness
+	// loop has already given up on the session. Past it we assume the serve
+	// goroutine is stuck somewhere that neither the session-context cancel
+	// nor the socket close can reach, and dial a replacement without it.
+	wedgeGrace = 20 * time.Second
+	// wedgeCheckEvery is the watchdog's polling period.
+	wedgeCheckEvery = 2 * time.Second
+)
+
+// serveWithWatchdog runs one session and guarantees Run gets control back.
+//
+// connectAndServe is supposed to return once a liveness loop cancels the
+// session context and closes the socket, but its read loop dispatches inbound
+// frames INLINE — so a handler that blocks (a stalled stream write, say)
+// parks the whole thing somewhere no cancel can reach. That happened in
+// production: the daemon logged "forcing reconnect" and then went quiet for
+// hours, still advertising relay_connected=true because the deferred cleanup
+// never ran, while the relay had long since dropped it and every iOS attach
+// got 503. Whatever blocks next, this bounds the damage to wedgeGrace.
+func (c *Client) serveWithWatchdog(ctx context.Context) error {
+	done := make(chan error, 1)
+	go func() { done <- c.connectAndServe(ctx) }()
+
+	tick := time.NewTicker(wedgeCheckEvery)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+			req := c.reconnectRequested.Load()
+			if req == 0 || time.Since(time.Unix(0, req)) < wedgeGrace {
+				continue
+			}
+			c.opts.Logger.Error(
+				"relay: serve loop did not unwind after a forced reconnect; abandoning the session",
+				"grace", wedgeGrace.String())
+			// The goroutine stays parked (it holds no reconnect-critical
+			// state once disowned); epoch guarding keeps its eventual
+			// cleanup from touching the replacement session.
+			c.abandonSession()
+			return errors.New("relay: serve loop wedged after forced reconnect")
+		}
+	}
+}
+
 func (c *Client) connectAndServe(ctx context.Context) error {
 	if c.opts.HostSigner == nil {
 		return errors.New("relay: HostSigner is required for daemon auth")
@@ -183,9 +243,15 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 	if err := c.register(ctx); err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
-	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+	// Bound the dial for the same reason register() is bounded: ctx is
+	// daemon-lifetime, and a middlebox that completes the TCP handshake but
+	// never answers the HTTP upgrade would park the reconnect loop here
+	// forever — silently, since "relay connected" only logs on success.
+	dialCtx, cancelDial := context.WithTimeout(ctx, dialTimeout)
+	conn, _, err := websocket.Dial(dialCtx, wsURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"x-bento-daemon-id": []string{c.opts.DaemonID}},
 	})
+	cancelDial()
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", wsURL, err)
 	}
@@ -193,8 +259,8 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 	// don't want to clip them at the relay layer.
 	conn.SetReadLimit(8 * 1024 * 1024)
 
-	c.setConnected(true, conn)
-	defer c.setConnected(false, nil)
+	epoch := c.beginSession(conn)
+	defer c.endSession(epoch)
 	defer conn.Close(websocket.StatusNormalClosure, "shutdown")
 
 	// Session-scoped context. pingLoop cancels this on pong timeout to
@@ -454,6 +520,7 @@ func (c *Client) pingLoop(ctx context.Context, conn *websocket.Conn, cancelSessi
 					continue
 				}
 				c.opts.Logger.Warn("relay ping failed; forcing reconnect", "err", err)
+				c.noteReconnectRequested()
 				cancelSession()
 				_ = conn.Close(websocket.StatusGoingAway, "ping timeout")
 				return
@@ -488,6 +555,7 @@ func (c *Client) appPingLoop(ctx context.Context, conn *websocket.Conn, cancelSe
 					continue
 				}
 				c.opts.Logger.Warn("relay app ping failed; forcing reconnect", "err", err)
+				c.noteReconnectRequested()
 				cancelSession()
 				_ = conn.Close(websocket.StatusGoingAway, "app ping timeout")
 				return
@@ -561,7 +629,15 @@ func (c *Client) ForceReconnect(reason string) {
 		return
 	}
 	c.opts.Logger.Warn("relay: force reconnect", "reason", reason)
+	c.noteReconnectRequested()
 	_ = conn.Close(websocket.StatusGoingAway, reason)
+}
+
+// noteReconnectRequested arms Run's wedge watchdog: from here the serve loop
+// is expected to unwind promptly, and failing to is a bug worth recovering
+// from. First writer wins, so the grace runs from the earliest giving-up.
+func (c *Client) noteReconnectRequested() {
+	c.reconnectRequested.CompareAndSwap(0, time.Now().UnixNano())
 }
 
 func (c *Client) register(ctx context.Context) error {
@@ -592,17 +668,43 @@ func (c *Client) register(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) setConnected(ok bool, conn *websocket.Conn) {
+// beginSession publishes a freshly dialed socket and returns its epoch.
+func (c *Client) beginSession(conn *websocket.Conn) uint64 {
 	c.mu.Lock()
-	c.connected = ok
+	defer c.mu.Unlock()
+	c.epoch++
+	c.connected = true
 	c.conn = conn
-	if ok {
-		c.lastError = ""
-		// Fresh session: a write that succeeded on the previous socket must
-		// not grace a probe failure on this one.
-		c.lastWriteOK.Store(0)
+	c.lastError = ""
+	// Fresh session: a write that succeeded on the previous socket must not
+	// grace a probe failure on this one.
+	c.lastWriteOK.Store(0)
+	c.reconnectRequested.Store(0)
+	return c.epoch
+}
+
+// endSession clears the live socket, but only if `epoch` is still current.
+// A session Run gave up on (see the wedge watchdog) may unwind minutes later;
+// its deferred cleanup must not mark the session that replaced it as dead.
+func (c *Client) endSession(epoch uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.epoch != epoch {
+		return
 	}
-	c.mu.Unlock()
+	c.connected = false
+	c.conn = nil
+}
+
+// abandonSession disowns the current socket without waiting for its serve
+// loop to return: the epoch bump makes that goroutine's endSession a no-op,
+// so Run is free to dial a replacement immediately.
+func (c *Client) abandonSession() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.epoch++
+	c.connected = false
+	c.conn = nil
 }
 
 func (c *Client) setError(msg string) {
