@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -100,6 +101,8 @@ func runDaemon(ctx context.Context, relayOverride string) error {
 
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	go dumpGoroutinesOnSignal(ctx, logger)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -215,5 +218,49 @@ func writePidfile() error {
 func removePidfile() {
 	if p, err := state.PidPath(); err == nil {
 		_ = os.Remove(p)
+	}
+}
+
+// dumpGoroutinesOnSignal writes every goroutine's stack to the log on SIGUSR1
+// and keeps the daemon running.
+//
+// WHY: the daemon holds every attached tmux session, so the usual way to get
+// stacks out of a hung Go process — SIGQUIT — costs the user all of them, and
+// the restart destroys the very state the dump was taken from. A wedged daemon
+// can now be inspected in place, without dropping a single session:
+//
+//	pkill -USR1 -f bento-daemon
+//	tail -n 400 ~/.bento/daemon.log
+func dumpGoroutinesOnSignal(ctx context.Context, logger *slog.Logger) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGUSR1)
+	defer signal.Stop(ch)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ch:
+			logger.Warn("goroutine dump requested (SIGUSR1)",
+				"goroutines", runtime.NumGoroutine())
+			// Straight to stderr — which the daemon log captures. Going through
+			// slog would escape every newline and leave the stacks unreadable,
+			// which defeats the point.
+			fmt.Fprintf(os.Stderr,
+				"\n=== bento-daemon goroutine dump ===\n%s\n=== end goroutine dump ===\n",
+				goroutineStacks())
+		}
+	}
+}
+
+// goroutineStacks renders all goroutine stacks, growing the buffer until the
+// dump fits (runtime.Stack silently truncates to what it is given).
+func goroutineStacks() []byte {
+	const maxDump = 64 << 20
+	for size := 1 << 20; ; size *= 2 {
+		buf := make([]byte, size)
+		n := runtime.Stack(buf, true)
+		if n < size || size >= maxDump {
+			return buf[:n]
+		}
 	}
 }
