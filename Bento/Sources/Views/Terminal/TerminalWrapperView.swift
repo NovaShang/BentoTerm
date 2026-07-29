@@ -327,11 +327,17 @@ struct TerminalWrapperView: View {
                 }
                 .accessibilityLabel("Sessions")
             }
-            ToolbarItem(placement: .topBarLeading) {
-                sessionTitle
-            }
-            ToolbarItem(placement: .principal) {
-                if viewModel.isTmuxReady { modeToggle }
+            if isRegularWidth {
+                ToolbarItem(placement: .topBarLeading) {
+                    sessionTitle
+                }
+                ToolbarItem(placement: .principal) {
+                    if viewModel.isTmuxReady { modeToggle }
+                }
+            } else {
+                ToolbarItem(placement: .principal) {
+                    sessionTitle
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 sessionMenu
@@ -582,29 +588,47 @@ struct TerminalWrapperView: View {
         }
     }
 
-    /// Tiled | List segmented control — the mode switch itself (a structure
-    /// transformation shared by every attached device, not a view preference).
-    /// The one confirmation: flattening a mixed external structure into List.
+    /// The mode switch itself (a structure transformation shared by every
+    /// attached device, not a view preference). The one confirmation:
+    /// flattening a mixed external structure into List.
+    private func selectMode(_ newMode: TmuxSessionMode) {
+        // First interaction retires the intro dot — the user has found the switch.
+        if tips.shouldShow(.modeToggleIntro) {
+            tips.markShown(.modeToggleIntro)
+        }
+        guard newMode != viewModel.sessionMode else { return }
+        // Leaving a focused (zoomed) pane before transforming keeps the result
+        // visible.
+        if let z = viewModel.zoomedPaneID {
+            viewModel.toggleZoom(z)
+        }
+        Task {
+            let ok = await viewModel.setMode(newMode)
+            if !ok { showMixedFlattenAlert = true }
+        }
+    }
+
+    /// Layout switch inside the ⋯ menu — the phone's home for it. An inline
+    /// picker renders as a checkmark list; Focus leads, since a phone shows one
+    /// pane anyway.
+    private var modeSection: some View {
+        Section("Layout") {
+            Picker("Layout", selection: Binding(
+                get: { viewModel.sessionMode },
+                set: { selectMode($0) }
+            )) {
+                Label("Focus", systemImage: "rectangle").tag(TmuxSessionMode.list)
+                Label("Parallel", systemImage: "square.split.2x2").tag(TmuxSessionMode.tiled)
+            }
+            .pickerStyle(.inline)
+        }
+    }
+
+    /// iPad segmented control for the layout switch.
     private var modeToggle: some View {
         Picker("Mode", selection: Binding(
             get: { viewModel.sessionMode },
-            set: { newMode in
-                // First interaction retires the intro dot — the user has
-                // found the switch.
-                if tips.shouldShow(.modeToggleIntro) {
-                    tips.markShown(.modeToggleIntro)
-                }
-                guard newMode != viewModel.sessionMode else { return }
-                // Leaving a focused (zoomed) pane before transforming keeps
-                // the result visible.
-                if let z = viewModel.zoomedPaneID {
-                    viewModel.toggleZoom(z)
-                }
-                Task {
-                    let ok = await viewModel.setMode(newMode)
-                    if !ok { showMixedFlattenAlert = true }
-                }
-            }
+            set: { selectMode($0) }
         )) {
             Text("Parallel").tag(TmuxSessionMode.tiled)
             Text("Focus").tag(TmuxSessionMode.list)
@@ -644,6 +668,9 @@ struct TerminalWrapperView: View {
             // session-wide policy — so the two platforms can be described with
             // one sentence instead of two.
             if viewModel.isTmuxReady {
+                // The phone has no room for the segmented switch in the bar,
+                // so the layout choice lives here instead (see modeSection).
+                if !isRegularWidth { modeSection }
                 splitSection
                 layoutSection
                 sessionSizeSection
