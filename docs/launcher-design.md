@@ -128,6 +128,23 @@ level 1   dev › 选择会话…
 - **主机 = "去个新地方"**：`~/.ssh/config` 里可能有几十条，单条意图密度很低 → **压成一行菜单**。此前是一行 chip + "10 ▸" 展开器；chip 行的问题是它同时是页面上最宽的东西，栏一窄就第一个崩，而一个菜单在任何宽度下都只占一行、说的还是同一件事。
 - **最近仍然折叠**：第四新的那条本来就很少被点 → 先给三条。
 
+### Recent Launches 里的东西是从哪来的（2026-07-31 补写）
+
+本文此前只说这一分区**长什么样**，从没说过它**由谁写入**——于是它在真机上空了很久都没人发现：`defaults read com.bento.term.mac palette_recent_launches` 报的是"这个 key 不存在"，一条都没写进去过。所以现在把来源写进设计里。
+
+**记录发生在"你决定要在某处开工"的那一刻，一共两个：**
+
+1. **attach**——`.createOrAttach` 走通、控制模式真的建起来之后（`TerminalViewModel.applyTmuxChoice`，紧跟在 `launchTmux` 后面）。**这是最常发生的一次"启动"**，比三个"新建"动词加起来都常见，而在此之前它一次都不记。记在这里而不是点击处：点的时候没有东西可问，目录和程序属于那个会话，只有连上的控制通道能报出来。
+2. **split**——⌘D / Split Right / Split Down（`TerminalViewModel.splitPane(horizontal:)`）。此前以为 `resolveSeed(.duplicateCurrent)` 已经覆盖了它，其实没有：普通分屏根本不经过 `resolveSeed`（tmux 的 `split-window` 默认就是 `-c '#{pane_current_path}'`，没什么可解析的），`.duplicateCurrent` 只在 *Duplicate* 那个菜单项上。
+
+加上原有的三处（"at a path…" 面板、`resolveSeed(.custom)`、Agent 向导），这就是全部写入点。
+
+**不做的事：不轮询活着的 pane。**定时扫描会把"我现在在哪"和"我待过哪"混成一件事，而这份列表要的是后者。
+
+**噪声规则**（`RecentLaunchPolicy`）**照旧**：只有当这次启动说出了默认值说不出的东西才记——要么有真正的程序，要么目录不是 `$HOME`。`$HOME` 里一个光秃秃的登录 shell 正是"新建窗口"本来就会做的事，二十条这样的行会把唯一有用的那条挤出去。attach 到一个待在 `$HOME`、什么都没跑的会话，同样被丢掉。命令一律取 `#{pane_current_command}`（`isShellName` 过滤掉 shell 自己），**绝不取 `#{pane_start_command}`**：后者带着 tmux 自己的引号、只能原样拼接，而回放一条 recents 要过一遍 shell 引用，来回一趟引号就嵌套了。
+
+**已知的重叠，暂不处理**：记录 attach 意味着一个**正开着**的会话既贡献一条 Recent，又出现在 Sessions 里——同一个目录以两种含义出现两次。目前接受：Recent 是"我在哪儿干活"，Sessions 是"有哪些跑着的、有名字的东西"，它的价值在会话结束、那一行还留着的时候才兑现。不要为此发明去重规则，除非真的看见它碍事。
+
 ### 内容块的尺寸：上限、断点、以及窗口小到极限时
 
 居中就必须有天花板，否则 2500pt 宽的窗口会把两栏拉到相隔一米，读起来是两份互不相干的列表而不是一个块。数字定在 `LauncherLayout`：

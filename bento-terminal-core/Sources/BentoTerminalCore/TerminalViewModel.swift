@@ -703,6 +703,19 @@ public final class TerminalViewModel: ObservableObject {
                 groupWith: nil,
                 resizeToScreen: !isAttachToExisting
             )
+            // Attaching IS a launch, and it's the most common one there is —
+            // far more common than any of the three "new …" verbs the launcher
+            // offers. Recorded here rather than where the user clicked, because
+            // at click time there is nothing to ask: the directory and the
+            // program belong to the session, and only the established control
+            // -mode connection can name them. `launchTmux` has by now seen the
+            // greeting and refreshed panes, so the active pane is real.
+            //
+            // A brand-new empty session comes through here too, which is
+            // correct and costs nothing: `new-session -A -s <name>` carries no
+            // `-c`, so it lands in `$HOME` with a bare shell, and the noise
+            // rule drops exactly that.
+            await recordActivePaneLaunch()
         case .shareWithDesktop(let target):
             await launchTmux(sessionName: "\(target)-mobile", groupWith: target, resizeToScreen: false)
         case .createAgent(let spec):
@@ -1273,12 +1286,24 @@ public final class TerminalViewModel: ObservableObject {
         Task { await refreshPanes() }
     }
 
+    /// The plain split — ⌘D and the toolbar's Split Right / Split Down.
+    ///
+    /// Note it does NOT go through `resolveSeed`: tmux's own `split-window`
+    /// default (`-c '#{pane_current_path}'`, no command) is already what this
+    /// wants, so there is nothing to resolve before sending it. That is also
+    /// why recents stayed empty on the split path even though `resolveSeed`
+    /// records — `.duplicateCurrent` is only reached from the *Duplicate*
+    /// menu item, not from the split every user actually presses. So ask for
+    /// the pair here, purely to remember it.
     public func splitPane(horizontal: Bool) {
         if let activePaneID {
             tmuxService.sendFireAndForget(.selectPane(id: activePaneID))
         }
         tmuxService.sendFireAndForget(.splitWindow(target: activePaneID, horizontal: horizontal))
         Task {
+            // Before the sleep: the source pane's directory is what we mean,
+            // and after a split the active pane is the NEW one.
+            await recordActivePaneLaunch()
             try? await Task.sleep(for: .milliseconds(500))
             await refreshPanes()
         }

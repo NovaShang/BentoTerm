@@ -311,8 +311,8 @@ public extension TerminalViewModel {
             return (blankToNil(path), blankToNil(command).map(SpawnCommand.shell))
         case .duplicateCurrent:
             guard let pane = activePaneID else { return (nil, nil) }
-            let path = await displayValue("#{pane_current_path}", pane: pane)
             if let start = await displayValue("#{pane_start_command}", pane: pane) {
+                let path = await displayValue("#{pane_current_path}", pane: pane)
                 DIAG("[DUP] resolveSeed src=\(pane) start_command=[\(start)] path=[\(path ?? "nil")]")
                 // Deliberately NOT recorded: `start_command` comes back in
                 // tmux's own quoting and is only safe spliced verbatim, while a
@@ -321,15 +321,44 @@ public extension TerminalViewModel {
                 // start command was created by a path that already recorded it.
                 return (path, .tmuxSyntax(start))
             }
-            let current = await displayValue("#{pane_current_command}", pane: pane)
-            let cmd = current.flatMap { Self.isShellName($0) ? nil : $0 }
-            DIAG("[DUP] resolveSeed src=\(pane) start=nil current=[\(current ?? "nil")] → cmd=[\(cmd ?? "nil→shell")] path=[\(path ?? "nil")]")
+            let (path, cmd) = await recordableLaunch(of: pane)
+            DIAG("[DUP] resolveSeed src=\(pane) start=nil → cmd=[\(cmd ?? "nil→shell")] path=[\(path ?? "nil")]")
             // The fallback is a bare program name with no arguments, so it
             // survives the round trip — and duplicating a running agent is
             // exactly the launch worth offering back.
             PaletteRecents.shared.recordLaunchIfUseful(dir: path, command: cmd)
             return (path, cmd.map(SpawnCommand.shell))
         }
+    }
+
+    /// What a pane looks like as a *recents row*: its live directory, and the
+    /// program running in it (nil for a bare shell).
+    ///
+    /// One resolution, shared by everything that remembers a launch — the
+    /// duplicate-current seed above, a plain split, and attaching to a session.
+    /// It reads `#{pane_current_command}` and never `#{pane_start_command}`:
+    /// see the seed's comment — a start command is tmux-quoted and only safe
+    /// spliced verbatim, whereas a recents row is replayed through shell
+    /// quoting, so round-tripping one nests its quotes. `pane_current_command`
+    /// is a bare program name with no arguments, which survives the trip.
+    internal func recordableLaunch(of pane: TmuxPaneID) async -> (String?, String?) {
+        let path = await displayValue("#{pane_current_path}", pane: pane)
+        let current = await displayValue("#{pane_current_command}", pane: pane)
+        return (path, current.flatMap { Self.isShellName($0) ? nil : $0 })
+    }
+
+    /// Remember where the active pane is working, if it says anything the
+    /// default doesn't (`RecentLaunchPolicy` drops a plain shell in `$HOME`).
+    ///
+    /// Called at the two moments the user COMMITS to working somewhere:
+    /// attaching to a session, and splitting a pane. Deliberately not polled
+    /// off live panes — the list is "places I have worked", and a timer would
+    /// turn it into "where I happen to be sitting", which the Sessions list
+    /// already says.
+    internal func recordActivePaneLaunch() async {
+        guard usingTmux, let pane = activePaneID else { return }
+        let (dir, cmd) = await recordableLaunch(of: pane)
+        PaletteRecents.shared.recordLaunchIfUseful(dir: dir, command: cmd)
     }
 
     /// Whether a `#{pane_current_command}` value is just a login/interactive

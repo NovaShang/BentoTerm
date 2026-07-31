@@ -150,6 +150,18 @@ public enum BentoTerminalWindow {
         frontmostManager()?.killActiveSessionWithoutConfirmation()
     }
 
+    /// Split the frontmost window's active pane — the ⌘D path, reached without
+    /// the responder chain. See `BENTO_TEST_SPLIT_AFTER`.
+    ///
+    /// The menu item goes through `NSApp.sendAction(…, to: nil)`, which needs a
+    /// KEY window to find a target; a test launch that never came to the front
+    /// has none, so the dispatch quietly hits nobody. `frontmostManager()`
+    /// falls back to the last window instead, which is what a headless run
+    /// means by "frontmost". Same call the menu makes.
+    public static func splitFrontmostPane() {
+        frontmostManager()?.tab.viewModel.splitPane(horizontal: true)
+    }
+
     /// Menu-bar command: hand sizing back to this window. A one-shot re-fit
     /// used to live here and looked broken — tmux recomputes a window's size
     /// from its clients, so the push was undone as soon as any other client was

@@ -112,6 +112,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         BentoTerminalWindow.killFrontmostSessionSkippingConfirmation()
                     }
                 }
+                // Test hook: N seconds later, split the frontmost window's
+                // active pane — the ⌘D path, into the same `splitPane` the
+                // menu item calls. Splitting is one of the two moments that
+                // records a recent launch, and the other one (attach) is
+                // already reachable by opening a session; without this the
+                // split half can only be driven by a synthesized ⌘D, which
+                // needs the Accessibility privileges CI and a sandboxed agent
+                // don't have — the same reason BENTO_TEST_AGENT_SESSION exists.
+                // DEBUG-only for the company it keeps, not for its blast
+                // radius: it can only reach a session named above.
+                if let after = ProcessInfo.processInfo.environment["BENTO_TEST_SPLIT_AFTER"],
+                   let seconds = Double(after) {
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(seconds))
+                        BentoTerminalWindow.splitFrontmostPane()
+                    }
+                }
                 #endif
                 return
             }
