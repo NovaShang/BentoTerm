@@ -324,7 +324,14 @@ struct CommandPaletteView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PaletteSearchField(model: model)
+            KeyDrivenSearchField(
+                text: model.query,
+                placeholder: "Search files and commands…",
+                onChange: { model.query = $0; model.recompute() },
+                onMove: { model.moveSelection($0) },
+                onActivate: { model.activateSelected() },
+                onCancel: { model.escapeOrPop() },
+                onBackspaceOnEmpty: { model.backspaceOnEmpty() })
                 .padding(.horizontal, 14)
                 .padding(.top, 12)
                 .padding(.bottom, 10)
@@ -353,20 +360,16 @@ struct CommandPaletteView: View {
                         ForEach(model.sections) { section in
                             Section {
                                 ForEach(section.items) { item in
-                                    PaletteRow(item: item, selected: item.id == model.selectedID)
+                                    PaletteRowView(title: item.title, subtitle: item.subtitle,
+                                                   systemImage: item.systemImage,
+                                                   selected: item.id == model.selectedID)
                                         .id(item.id)
                                         .contentShape(Rectangle())
                                         .onTapGesture { model.activate(item) }
                                         .onHover { if $0 { model.hoverSelect(item.id) } }
                                 }
                             } header: {
-                                Text(section.title.uppercased())
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.horizontal, 16)
-                                    .padding(.top, 8)
-                                    .padding(.bottom, 3)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                PaletteSectionHeader(title: section.title)
                                     .background(.regularMaterial)
                             }
                         }
@@ -386,23 +389,52 @@ struct CommandPaletteView: View {
     }
 }
 
-private struct PaletteRow: View {
-    let item: PaletteItem
+/// A section label ("SESSIONS"). Shared with the launcher for the same reason
+/// the row is: one list, two sizes. The caller supplies the background, since
+/// the palette pins its headers over a material and the page does not.
+struct PaletteSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One row of a launcher list: symbol, title, dimmed second line, selection
+/// fill. Shared verbatim by the ⌘P palette and the empty-state launcher — those
+/// two are the same list rendered at different sizes (docs/launcher-design.md
+/// §2), and a row that looked different in one of them would say they were
+/// different features.
+///
+/// `accessory` is the only thing the launcher adds: the host row's trailing
+/// [ssh] [tmux] buttons (§6). Nothing else about the row is parameterised,
+/// because nothing else is allowed to diverge.
+struct PaletteRowView<Accessory: View>: View {
+    let title: String
+    let subtitle: String?
+    let systemImage: String
     let selected: Bool
+    @ViewBuilder var accessory: () -> Accessory
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: item.systemImage)
+            Image(systemName: systemImage)
                 .font(.system(size: 14))
                 .foregroundStyle(selected ? Color.white : .secondary)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 1) {
-                Text(item.title)
+                Text(title)
                     .font(.system(size: 13))
                     .foregroundStyle(selected ? Color.white : .primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let sub = item.subtitle, !sub.isEmpty {
+                if let sub = subtitle, !sub.isEmpty {
                     Text(sub)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(selected ? Color.white.opacity(0.75) : .secondary)
@@ -411,6 +443,7 @@ private struct PaletteRow: View {
                 }
             }
             Spacer(minLength: 0)
+            accessory()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -421,16 +454,41 @@ private struct PaletteRow: View {
     }
 }
 
+extension PaletteRowView where Accessory == EmptyView {
+    init(title: String, subtitle: String?, systemImage: String, selected: Bool) {
+        self.init(title: title, subtitle: subtitle, systemImage: systemImage,
+                  selected: selected, accessory: { EmptyView() })
+    }
+}
+
 // MARK: - Search field (AppKit, for reliable ↑↓/⏎/Esc handling)
 
-/// An `NSTextField` whose field-editor commands drive the model: typing filters,
-/// ↑↓ moves the selection, ⏎ activates, Esc pops/closes, and ⌫ on an empty
-/// query pops a browse level. SwiftUI's `TextField` can't intercept these while
-/// focused, so the input is AppKit.
-private struct PaletteSearchField: NSViewRepresentable {
-    @ObservedObject var model: PaletteViewModel
+/// An `NSTextField` whose field-editor commands drive a list: typing filters,
+/// ↑↓ moves the selection, ⏎ activates, Esc closes (or pops a level), and ⌫ on
+/// an empty query pops a level. SwiftUI's `TextField` can't intercept these
+/// while focused, so the input is AppKit.
+///
+/// Closures rather than a concrete model, because both launcher surfaces need
+/// exactly these keys and they must feel identical: the empty state IS the
+/// palette (docs/launcher-design.md §2), and "the arrow keys work differently
+/// over there" is precisely how two renderings of one list stop reading as one
+/// list. It also focuses itself on appear — the field is the page's first
+/// responder, so you can type without clicking.
+struct KeyDrivenSearchField: NSViewRepresentable {
+    let text: String
+    var placeholder: String
+    var fontSize: CGFloat = 18
+    var onChange: (String) -> Void
+    var onMove: (Int) -> Void
+    var onActivate: () -> Void
+    var onCancel: () -> Void
+    /// Return true to swallow ⌫ (a level was popped); false to let it edit.
+    var onBackspaceOnEmpty: () -> Bool = { false }
+    /// Bump to demand focus. ⌘P over the empty state focuses the field rather
+    /// than opening a panel over it (§2: the muscle memory must not miss).
+    var focusToken: Int = 0
 
-    func makeCoordinator() -> Coordinator { Coordinator(model: model) }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField()
@@ -438,8 +496,8 @@ private struct PaletteSearchField: NSViewRepresentable {
         field.isBezeled = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.font = .systemFont(ofSize: 18, weight: .regular)
-        field.placeholderString = "Search files and commands…"
+        field.font = .systemFont(ofSize: fontSize, weight: .regular)
+        field.placeholderString = placeholder
         field.cell?.usesSingleLineMode = true
         field.cell?.wraps = false
         field.cell?.isScrollable = true
@@ -448,33 +506,41 @@ private struct PaletteSearchField: NSViewRepresentable {
     }
 
     func updateNSView(_ field: NSTextField, context: Context) {
-        context.coordinator.model = model
-        if field.stringValue != model.query { field.stringValue = model.query }
+        context.coordinator.owner = self
+        field.placeholderString = placeholder
+        if field.stringValue != text { field.stringValue = text }
+        if context.coordinator.lastFocusToken != focusToken {
+            context.coordinator.lastFocusToken = focusToken
+            DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+        }
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
-        var model: PaletteViewModel
-        init(model: PaletteViewModel) { self.model = model }
+        var owner: KeyDrivenSearchField
+        var lastFocusToken: Int
+        init(_ owner: KeyDrivenSearchField) {
+            self.owner = owner
+            self.lastFocusToken = owner.focusToken
+        }
 
         func controlTextDidChange(_ obj: Notification) {
             guard let field = obj.object as? NSTextField else { return }
-            model.query = field.stringValue
-            model.recompute()
+            owner.onChange(field.stringValue)
         }
 
         func control(_ control: NSControl, textView: NSTextView,
                      doCommandBy selector: Selector) -> Bool {
             switch selector {
             case #selector(NSResponder.moveDown(_:)):
-                model.moveSelection(1); return true
+                owner.onMove(1); return true
             case #selector(NSResponder.moveUp(_:)):
-                model.moveSelection(-1); return true
+                owner.onMove(-1); return true
             case #selector(NSResponder.insertNewline(_:)):
-                model.activateSelected(); return true
+                owner.onActivate(); return true
             case #selector(NSResponder.cancelOperation(_:)):
-                model.escapeOrPop(); return true
+                owner.onCancel(); return true
             case #selector(NSResponder.deleteBackward(_:)):
-                return model.backspaceOnEmpty()
+                return owner.onBackspaceOnEmpty()
             default:
                 return false
             }

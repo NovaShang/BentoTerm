@@ -120,6 +120,58 @@ public enum TmuxSessionNaming {
     }
 }
 
+// MARK: - Session metadata
+
+/// What the local `tmux ls` poll knows about a session beyond its name.
+///
+/// A bare session name answers "what is it called" and nothing else, and the
+/// launcher's whole job is to help you pick between several of them — "2
+/// windows · 5 minutes ago" is what turns a name into a place. The poll that
+/// feeds the session list already runs `list-windows` per session for the
+/// toolbar, so this costs no extra tmux round trips; it is only the numbers
+/// travelling the same path the names already travel (app → core, see
+/// `BentoTerminalWindow.setLocalServerSessions`).
+public struct LocalSessionInfo: Equatable, Sendable {
+    public let name: String
+    public let windowCount: Int
+    /// Last output/keystroke/attach, as tmux reports it. nil = unknown.
+    public let lastActivity: Date?
+
+    public init(name: String, windowCount: Int, lastActivity: Date?) {
+        self.name = name
+        self.windowCount = windowCount
+        self.lastActivity = lastActivity
+    }
+
+    /// "2 windows · 5 minutes ago" — the one phrasing every launcher surface
+    /// uses. tmux's own noun ("window"), and a relative time because the
+    /// question is always "how stale is this", never "what o'clock was it".
+    public func subtitle(now: Date = Date()) -> String? {
+        var parts: [String] = []
+        if windowCount > 0 {
+            parts.append(windowCount == 1 ? "1 window" : "\(windowCount) windows")
+        }
+        if let lastActivity, lastActivity > .distantPast {
+            parts.append(Self.relative(lastActivity, now: now))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "  ·  ")
+    }
+
+    /// Deliberately hand-rolled and coarse. `RelativeDateTimeFormatter` would
+    /// say "in 0 seconds" for a session touched a moment ago (the poll's clock
+    /// and tmux's can disagree by a hair), and the launcher is read at a
+    /// glance: minute buckets are all the precision the decision needs.
+    static func relative(_ date: Date, now: Date) -> String {
+        let seconds = Int(now.timeIntervalSince(date))
+        if seconds < 60 { return "just now" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m ago" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h ago" }
+        return "\(hours / 24)d ago"
+    }
+}
+
 // MARK: - The target model
 
 /// One openable thing. `id` is stable across rebuilds so a menu, a palette row,
@@ -197,18 +249,27 @@ public final class OpenTargetProvider {
     private let sessionSource: @MainActor () -> [String]
     private let sshHostSource: @MainActor () -> [String]
     private let launchSource: @MainActor () -> [LaunchRecord]
+    private let sessionInfoSource: @MainActor () -> [String: LocalSessionInfo]
 
     public init(sessions: @escaping @MainActor () -> [String] = { BentoTerminalWindow.serverSessions },
                 sshHosts: @escaping @MainActor () -> [String] = { SSHConfigHosts.hosts() },
-                launches: @escaping @MainActor () -> [LaunchRecord] = { PaletteRecents.shared.launches }) {
+                launches: @escaping @MainActor () -> [LaunchRecord] = { PaletteRecents.shared.launches },
+                sessionInfo: @escaping @MainActor () -> [String: LocalSessionInfo] = { BentoTerminalWindow.serverSessionInfo }) {
         self.sessionSource = sessions
         self.sshHostSource = sshHosts
         self.launchSource = launches
+        self.sessionInfoSource = sessionInfo
     }
 
     public func sessionTargets() -> [OpenTarget] {
-        sessionSource().map { name in
-            OpenTarget(kind: .tmuxSession(name: name), title: name, subtitle: nil,
+        // The name list stays the authority on WHICH sessions exist; the info
+        // map only decorates. A session the poll hasn't described yet (created
+        // a second ago) is therefore a row with no subtitle, never a missing
+        // row — which is the same rule `serverSessions` already follows.
+        let info = sessionInfoSource()
+        return sessionSource().map { name in
+            OpenTarget(kind: .tmuxSession(name: name), title: name,
+                       subtitle: info[name]?.subtitle(),
                        systemImage: "macwindow", matchText: "session \(name)")
         }
     }
@@ -239,14 +300,29 @@ public final class OpenTargetProvider {
         sessionTargets() + recentTargets() + sshTargets()
     }
 
-    /// Do the thing.
-    public func open(_ target: OpenTarget) {
+    /// WHAT opening a target means, with no opinion about WHERE it lands.
+    ///
+    /// Two surfaces open targets into two different places — the palette and
+    /// the Dock menu into a new window, the launcher into the window it is
+    /// already occupying — and the one thing they must never disagree about is
+    /// what a row does. So the decision is made once, here, and the
+    /// destination is chosen by the caller.
+    enum Route {
+        /// Attach (or create) a session on the LOCAL server.
+        case localSession(String)
+        /// A plain no-tmux shell running `ssh <alias>`.
+        case sshShell(alias: String)
+        /// Build a session for a remembered launch.
+        case agent(AgentSpec)
+    }
+
+    func route(for target: OpenTarget) -> Route? {
         switch target.kind {
         case .tmuxSession(let name):
             // `.local` explicitly: every source behind `sessionTargets` is the
             // local server's list, and a bare name would be ambiguous now that
             // a session can live on an ssh host.
-            BentoTerminalWindow.focusOrOpen(.local(name))
+            return .localSession(name)
 
         case .sshHost(let alias):
             // Plain `ssh <alias>` in a no-tmux tab. The reason this used to be
@@ -254,14 +330,13 @@ public final class OpenTargetProvider {
             // and every `TmuxCLI` call site ran against the local server — no
             // longer holds: keys are `TmuxSessionID`s now and the local-only
             // operations take a `LocalTmuxSessionName` that a remote session
-            // cannot produce. A "connect with tmux" row is therefore just
-            // `BentoTerminalWindow.newTmuxWindow(host: alias)`, and belongs to
-            // whoever adds the second row and decides what names it offers.
-            BentoTerminalWindow.newSSHWindow(host: alias)
+            // cannot produce. The launcher's host row now carries the second
+            // action (`tmux`) beside this one; see `LauncherView`.
+            return .sshShell(alias: alias)
 
         case .recentLaunch(let record):
             // Local only for now (`host` is reserved, never written).
-            guard record.host == nil else { return }
+            guard record.host == nil else { return nil }
             let name = TmuxSessionNaming.sessionName(
                 forDirectory: record.dir, existing: Set(sessionSource()))
             // A new tmux SESSION, not a pane in whatever window happens to be
@@ -269,11 +344,39 @@ public final class OpenTargetProvider {
             // shouldn't graft itself onto an unrelated session. The launch line
             // is `new-session -A`, so a stale session list (the poll runs every
             // 5s) attaches instead of failing.
-            BentoTerminalWindow.newWindow(agent: AgentSpec(
-                sessionName: name,
-                workingDir: record.dir,
-                agentCommand: record.command,
-                layout: .solo))
+            return .agent(AgentSpec(sessionName: name,
+                                    workingDir: record.dir,
+                                    agentCommand: record.command,
+                                    layout: .solo))
+        }
+    }
+
+    /// Do the thing, in a window of its own (palette, Dock menu, Shortcuts).
+    public func open(_ target: OpenTarget) {
+        switch route(for: target) {
+        case .localSession(let name): BentoTerminalWindow.focusOrOpen(.local(name))
+        case .sshShell(let alias):    BentoTerminalWindow.newSSHWindow(host: alias)
+        case .agent(let spec):        BentoTerminalWindow.newWindow(agent: spec)
+        case nil:                     break
+        }
+    }
+
+    /// Do the same thing, but INTO `shell` — a window that is currently showing
+    /// the launcher and has no session yet. Returns false when the shell was
+    /// not consumed (the session was already open elsewhere and got fronted
+    /// instead), which is the caller's cue to close the launcher window itself.
+    @discardableResult
+    func open(_ target: OpenTarget, into shell: TerminalSessionWindow) -> Bool {
+        switch route(for: target) {
+        case .localSession(let name):
+            return BentoTerminalWindow.fill(shell, localSession: name)
+        case .sshShell(let alias):
+            BentoTerminalWindow.fill(shell, plainTitle: alias, command: ["ssh", alias])
+            return true
+        case .agent(let spec):
+            return BentoTerminalWindow.fill(shell, agent: spec)
+        case nil:
+            return false
         }
     }
 }

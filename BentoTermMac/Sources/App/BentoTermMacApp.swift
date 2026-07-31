@@ -29,8 +29,9 @@ struct BentoTermMacApp: App {
 struct TerminalCommands: Commands {
     var body: some Commands {
         // ⌘N is the reflex key for "give me one more of these" in every Mac
-        // app, so it always makes a new standalone window with a new session —
-        // never a no-op when a window is already up, and never a tab.
+        // app, so it always makes a new standalone window — never a no-op when
+        // a window is already up, and never a tab. What lands in that window is
+        // the launcher: ⌘N asks, ⌘⇧T (New Session, below) doesn't.
         // Reopen-the-last-session is a RESTORE gesture and lives where restore
         // gestures belong: the Dock icon and launch (`openMainWindow`).
         CommandGroup(replacing: .newItem) {

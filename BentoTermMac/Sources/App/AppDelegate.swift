@@ -297,8 +297,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func refresh() async {
         let sessions = await TmuxCLI.listSessions()
         tmuxSessions = sessions
-        // Drive the terminal window's tab strip with the full session list.
-        BentoTerminalWindow.setLocalServerSessions(sessions.map(\.name))
         // Fan-out the per-session window queries concurrently. Each call
         // is a single `tmux list-windows` shell-out (a few ms), so even
         // with many sessions this finishes well under the 5s poll period.
@@ -312,6 +310,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
         }
         tmuxWindows = fresh
+        // Describe the sessions before announcing them: pushing the names is
+        // what wakes the launcher up, and it should redraw with the counts
+        // already in hand rather than a frame later.
+        BentoTerminalWindow.setLocalServerSessionInfo(sessions.map { s in
+            LocalSessionInfo(name: s.name.rawValue,
+                             windowCount: fresh[s.name]?.count ?? 0,
+                             lastActivity: s.lastActivity)
+        })
+        // Drive the terminal window's tab strip with the full session list.
+        BentoTerminalWindow.setLocalServerSessions(sessions.map(\.name))
     }
 
 }
