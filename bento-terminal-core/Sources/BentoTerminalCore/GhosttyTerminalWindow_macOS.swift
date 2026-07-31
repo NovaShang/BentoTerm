@@ -66,6 +66,20 @@ public enum BentoTerminalWindow {
     /// the managers) because the reopen path runs when there are none.
     private static var knownServerSessions: [String] = []
 
+    /// Every session on the local server, as far as this process knows: the
+    /// last `tmux ls` the app pushed in, plus anything we have open (the poll
+    /// runs every 5s, so a just-created session isn't in it yet). Read by
+    /// `OpenTargetProvider` — which is how the launcher reaches the session
+    /// list without core having to know the Mac app exists.
+    public static var serverSessions: [String] {
+        var seen = Set<String>()
+        // Plain (no-tmux) tabs keep a sessionKey too, but there's no session
+        // behind it — attaching to one would create an empty session by that
+        // name, so they stay out.
+        return (knownServerSessions + managers.map(\.tab).filter { !$0.isPlain }.map(\.sessionKey))
+            .filter { seen.insert($0).inserted }
+    }
+
     nonisolated static let lastSessionsKey = "mac_last_terminal_sessions"
     /// The strip's stable left-to-right tab order, persisted so it survives
     /// relaunches instead of re-alphabetizing on every cold start.
@@ -187,6 +201,8 @@ public enum BentoTerminalWindow {
     private static var forceStandaloneWindow = false
 
     public static func newWindow(agent spec: AgentSpec) {
+        // The launch is recorded where the session is actually built
+        // (`applyTmuxChoice`), so iPad's wizard gets it too.
         open(choice: .createAgent(spec: spec), title: titleFor(spec.sessionName))
     }
 

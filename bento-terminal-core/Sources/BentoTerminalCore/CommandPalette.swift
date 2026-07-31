@@ -180,10 +180,10 @@ public final class PaletteRecents {
         public let path: String
         public let host: String
     }
-    public struct LaunchEntry: Codable, Equatable {
-        public let dir: String
-        public let command: String        // "" = plain shell
-    }
+    /// The launch entry's shape lives in `OpenTargets.swift` — it's the store's
+    /// row AND the launcher-wide value, and only one of those two is allowed to
+    /// own the definition. This name stays for the call sites that predate it.
+    public typealias LaunchEntry = LaunchRecord
 
     private let filesKey = "palette_recent_files"
     private let launchesKey = "palette_recent_launches"
@@ -209,9 +209,26 @@ public final class PaletteRecents {
         persist(files, key: filesKey)
     }
 
-    /// Most-recent-first, deduped on (dir, command).
+    /// Remember a launch IF it's worth remembering (see `RecentLaunchPolicy` —
+    /// a plain shell in `$HOME` is the default and carries no information).
+    /// This is what the creation paths call; `recordLaunch` below is the
+    /// unconditional store.
+    ///
+    /// Recording lives on the paths that CREATE something. It used to happen
+    /// only when the palette replayed a row it already had, which meant the
+    /// list could never gain a first entry and was empty for everyone, always.
+    public func recordLaunchIfUseful(dir: String?, command: String?, host: String? = nil) {
+        guard let record = RecentLaunchPolicy.record(dir: dir, command: command, host: host)
+        else { return }
+        recordLaunch(record)
+    }
+
+    /// Most-recent-first, deduped on (dir, command, host).
     public func recordLaunch(dir: String, command: String) {
-        let entry = LaunchEntry(dir: dir, command: command)
+        recordLaunch(LaunchEntry(dir: dir, command: command))
+    }
+
+    public func recordLaunch(_ entry: LaunchEntry) {
         launches.removeAll { $0 == entry }
         launches.insert(entry, at: 0)
         if launches.count > cap { launches.removeLast(launches.count - cap) }

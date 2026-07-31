@@ -74,6 +74,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 }
                 return
             }
+            // Test hook: create a session exactly the way the Agent wizard does
+            // (BENTO_TEST_AGENT_SESSION="name|dir|command", command optional),
+            // so a CREATION path — and what it records into the recent-launches
+            // list — can be checked end to end. The wizard's own Launch button
+            // needs synthesized keystrokes, which require Accessibility
+            // privileges that CI and a sandboxed agent don't have. Like the hook
+            // above it suppresses the normal restore, so a test run can't attach
+            // to, resize, or otherwise disturb the user's real sessions.
+            if let spec = ProcessInfo.processInfo.environment["BENTO_TEST_AGENT_SESSION"] {
+                let parts = spec.split(separator: "|", omittingEmptySubsequences: false)
+                    .map(String.init)
+                if parts.count >= 2, !parts[0].isEmpty, !parts[1].isEmpty {
+                    BentoTerminalWindow.newWindow(agent: BentoTerminalCore.AgentSpec(
+                        sessionName: parts[0],
+                        workingDir: parts[1],
+                        agentCommand: parts.count > 2 ? parts[2] : "",
+                        layout: BentoTerminalCore.TmuxLayout.solo))
+                }
+                return
+            }
             // Always open the terminal window on launch — including a launch at
             // login. An app with a Dock icon that starts with zero windows just
             // looks broken; there is no menu-bar item to explain where it went.

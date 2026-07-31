@@ -304,17 +304,30 @@ public extension TerminalViewModel {
     private func resolveSeed(_ seed: WindowSeed) async -> (String?, SpawnCommand?) {
         switch seed {
         case .custom(let path, let command):
+            // A creation the user spelled out. Remember it (the policy drops
+            // the uninteresting ones) — this is a chokepoint for BOTH splits
+            // and new windows, on the Mac panel and on iPad's typed form.
+            PaletteRecents.shared.recordLaunchIfUseful(dir: path, command: command)
             return (blankToNil(path), blankToNil(command).map(SpawnCommand.shell))
         case .duplicateCurrent:
             guard let pane = activePaneID else { return (nil, nil) }
             let path = await displayValue("#{pane_current_path}", pane: pane)
             if let start = await displayValue("#{pane_start_command}", pane: pane) {
                 DIAG("[DUP] resolveSeed src=\(pane) start_command=[\(start)] path=[\(path ?? "nil")]")
+                // Deliberately NOT recorded: `start_command` comes back in
+                // tmux's own quoting and is only safe spliced verbatim, while a
+                // recents row is replayed through shell quoting — round-tripping
+                // it would nest the quotes. Nothing is lost: a pane that HAS a
+                // start command was created by a path that already recorded it.
                 return (path, .tmuxSyntax(start))
             }
             let current = await displayValue("#{pane_current_command}", pane: pane)
             let cmd = current.flatMap { Self.isShellName($0) ? nil : $0 }
             DIAG("[DUP] resolveSeed src=\(pane) start=nil current=[\(current ?? "nil")] → cmd=[\(cmd ?? "nil→shell")] path=[\(path ?? "nil")]")
+            // The fallback is a bare program name with no arguments, so it
+            // survives the round trip — and duplicating a running agent is
+            // exactly the launch worth offering back.
+            PaletteRecents.shared.recordLaunchIfUseful(dir: path, command: cmd)
             return (path, cmd.map(SpawnCommand.shell))
         }
     }

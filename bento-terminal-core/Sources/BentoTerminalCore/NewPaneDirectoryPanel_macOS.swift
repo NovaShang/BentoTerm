@@ -99,6 +99,11 @@ func presentNewPaneDirectoryPanel(
         panel.directoryURL = URL(fileURLWithPath: (initialDirectory as NSString).expandingTildeInPath)
     }
     guard panel.runModal() == .OK, let url = panel.url else { return }
+    // Every caller of this panel (Split, New Window from the sidebar, New
+    // Window from the toolbar) is CREATING something at a directory the user
+    // just picked by hand — the strongest possible signal that they'll want it
+    // again. Recording here covers all of them at once.
+    PaletteRecents.shared.recordLaunchIfUseful(dir: url.path, command: accessory.chosenCommand)
     onCreate(url.path, accessory.chosenCommand)
 }
 #endif

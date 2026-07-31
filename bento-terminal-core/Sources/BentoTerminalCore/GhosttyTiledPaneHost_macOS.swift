@@ -1057,8 +1057,30 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         activePaneID.flatMap { cells[$0]?.surface.pathPreviewContext }
     }
 
+    /// The launcher's three kinds (sessions / recent launches / SSH hosts), as
+    /// this window sees them. The session source unions the app-wide list with
+    /// THIS view model's `tmux ls` so the palette can't list fewer sessions
+    /// than it did before the provider existed.
+    private func openTargets() -> OpenTargetProvider {
+        OpenTargetProvider(sessions: { [weak self] in
+            var seen = Set<String>()
+            let mine = self?.viewModel.availableTmuxSessions ?? []
+            return (BentoTerminalWindow.serverSessions + mine)
+                .filter { seen.insert($0).inserted }
+        })
+    }
+
     private func buildPaletteSpecs() -> [PaletteSectionSpec] {
         var specs: [PaletteSectionSpec] = []
+        let targets = openTargets()
+
+        /// Every launcher row does the same thing: hand the target back to the
+        /// provider. Only the section it lands in differs.
+        func row(_ target: OpenTarget) -> PaletteItem {
+            PaletteItem(id: target.id, title: target.title, subtitle: target.subtitle,
+                        systemImage: target.systemImage, matchText: target.matchText,
+                        action: .run { targets.open(target) })
+        }
 
         // Recent files — empty-state suggestions (once you type, the live File
         // section covers them).
@@ -1075,17 +1097,14 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                                             items: recentFiles, emptyStateOnly: true, limit: 5))
         }
 
-        // New pane: recent (directory + command) launches → spawn a pane there.
-        let launches = PaletteRecents.shared.launches.map { l -> PaletteItem in
-            let name = l.command.isEmpty ? "shell" : l.command
-            return PaletteItem(id: "launch:\(l.dir)::\(l.command)",
-                               title: "\(name)  ·  \(paletteAbbrev(l.dir))",
-                               systemImage: "plus.rectangle.on.rectangle",
-                               matchText: "\(name) \(l.dir)",
-                               action: .run { [weak self] in self?.launchPane(dir: l.dir, command: l.command) })
-        }
+        // Recent (directory + command) launches → open that session again.
+        // These used to spawn a pane in whatever window was front; a remembered
+        // launch is a place you go back to WORK, so it gets its own session
+        // rather than grafting itself onto an unrelated one.
+        let launches = targets.recentTargets().map(row)
         if !launches.isEmpty {
-            specs.append(PaletteSectionSpec(id: "launches", title: "New Pane", items: launches, limit: 6))
+            specs.append(PaletteSectionSpec(id: "launches", title: "Recent Launches",
+                                            items: launches, limit: 6))
         }
 
         // Navigation across all three tmux levels. The palette is the one place
@@ -1121,15 +1140,21 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         }
 
         let current = viewModel.activeTmuxSessionName
-        let sessions = viewModel.availableTmuxSessions.filter { $0 != current }.map { name in
-            PaletteItem(id: "session:" + name,
-                        title: name,
-                        systemImage: "macwindow",
-                        matchText: "session \(name)",
-                        action: .run { BentoTerminalWindow.focusOrOpen(session: name) })
-        }
+        let sessions = targets.sessionTargets()
+            .filter { $0.kind != .tmuxSession(name: current ?? "") }
+            .map(row)
         if !sessions.isEmpty {
             specs.append(PaletteSectionSpec(id: "sessions", title: "Sessions", items: sessions, limit: 8))
+        }
+
+        // SSH hosts from ~/.ssh/config → a plain `ssh <host>` tab. There is
+        // deliberately no "connect with tmux" variant here: remote tmux needs
+        // session-key namespacing and fixes to the `TmuxCLI` call sites that
+        // all target the LOCAL server, so the option would look right and drive
+        // the wrong machine.
+        let hosts = targets.sshTargets().map(row)
+        if !hosts.isEmpty {
+            specs.append(PaletteSectionSpec(id: "sshHosts", title: "SSH Hosts", items: hosts, limit: 8))
         }
 
         specs.append(PaletteSectionSpec(id: "commands", title: "Commands",
@@ -1175,23 +1200,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         ]
     }
 
-    /// Spawn a pane in `dir` running `command` (empty = plain shell), over the
-    /// already-attached control channel (no pty typed-ahead race), and remember
-    /// it for the palette's New Pane suggestions.
-    private func launchPane(dir: String, command: String) {
-        let cmd = command.isEmpty ? nil : command
-        Task { [viewModel] in
-            await viewModel.splitPane(horizontal: true, seed: .custom(path: dir, command: cmd))
-        }
-        PaletteRecents.shared.recordLaunch(dir: dir, command: command)
-    }
-
-    private func paletteAbbrev(_ path: String) -> String {
-        let home = NSHomeDirectory()
-        if path == home { return "~" }
-        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
-        return path
-    }
+    private func paletteAbbrev(_ path: String) -> String { tildeAbbreviated(path) }
 
     /// Pane menu → Move to Session → <name>. The menu already selected the
     /// pane, so activePaneID is the one to move (same convention as the other

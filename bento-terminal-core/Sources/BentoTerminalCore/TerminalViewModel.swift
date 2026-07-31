@@ -677,6 +677,12 @@ public final class TerminalViewModel: ObservableObject {
             // here. Everything below is either a write we had to make anyway or a
             // control-mode command with a response we can log.
             dlog("Creating agent session \(spec.sessionName) (\(spec.layout.paneCount) panes)")
+            // An explicit directory AND command, chosen deliberately in the
+            // wizard — the most reusable launch there is, and the reason the
+            // recents list exists. Recorded here rather than at the macOS
+            // window so the iPad wizard feeds the same list.
+            PaletteRecents.shared.recordLaunchIfUseful(
+                dir: spec.workingDir, command: spec.agentCommand)
             await launchTmux(
                 sessionName: spec.sessionName,
                 groupWith: nil,
