@@ -15,15 +15,13 @@ import SwiftUI
 /// fix is to let the window exist *before* the session without pretending a
 /// session is there.
 ///
-/// **It is small, and filling it resizes it.** The first version inherited
-/// whatever frame the session windows were using, so that filling it changed
-/// only the content. That bought a seamless swap at the price of a mostly-empty
-/// page: ⌘N over a full-screen-ish terminal produced a 2500pt window holding a
-/// search field and nine rows. The page is now 660×520 — the palette's width,
-/// so the same list read in a panel and read as a page measures the same — and
-/// `TerminalWindowManager.init(adopting:)` applies the session windows' normal
-/// remembered geometry as it fills. The transition therefore visibly resizes,
-/// which is the honest picture: a small question became a terminal.
+/// **Filling it does not move or resize it.** It wears the frame the session
+/// windows use, so picking something changes the content and nothing else. A
+/// small fixed page was tried and rejected: it made ⌘N over a large terminal
+/// pleasant to read, but every pick then jumped the window to the terminal's
+/// remembered geometry, and a window that resizes as you choose reads as "a new
+/// window appeared" — precisely what the in-place transition exists to avoid.
+/// The empty page at a large size is the cheaper of the two costs.
 ///
 /// The one case where the shell is not consumed is picking a session that is
 /// already open in another window: there is nothing to fill, that window comes
@@ -74,13 +72,9 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
 
     /// The page's own size, not a session window's.
     ///
-    /// 660 wide is the command palette's width to the point: the launcher IS
-    /// that list rendered as a page, and two readings of one list that measure
-    /// differently read as two features. 520 tall is what the content asks for
-    /// — the three create rows, three or four sessions, three recents and the
-    /// host chips land just inside it, so the common case does not scroll while
-    /// a machine with twenty sessions still can.
-    static let contentSize = NSSize(width: 660, height: 520)
+    /// Only used when session windows are already open, so their saved frame
+    /// belongs to one of them and this page cannot borrow it.
+    static let contentSize = NSSize(width: 820, height: 560)
 
     private override init() {
         model = LauncherModel()
@@ -100,14 +94,16 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         // resizes the window to the SwiftUI fitting size, which for this page
         // is its minimum.
         //
-        // Always this size, and always centred — deliberately NOT the session
-        // windows' remembered frame, which is what it used to adopt. Wearing
-        // the terminal's geometry made filling it a pure content swap, but it
-        // also meant the question "what do you want to open?" arrived at
-        // whatever size the last terminal happened to be, which for a maximised
-        // window is a page of white space with a search field in it. The size
-        // now belongs to the content; `TerminalWindowManager` puts the
-        // terminal's geometry back on the way in.
+        // Wear the session windows' remembered frame when this launcher is going
+        // to BE the first session window: filling it in place should change the
+        // content, not the geometry. A window that resizes as you pick something
+        // reads as "a new window appeared", which is exactly what the in-place
+        // transition exists to avoid. With windows already open the saved frame
+        // belongs to one of them, so this one just centres at its own size.
+        if !BentoTerminalWindow.hasOpenWindows,
+           window.setFrameUsingName(TerminalWindowManager.frameName) {
+            return
+        }
         window.setContentSize(Self.contentSize)
         window.center()
     }

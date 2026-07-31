@@ -882,11 +882,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
         splitVC.splitView.autosaveName = "BentoSidebarSplit"
         win.contentViewController = splitVC
-        // Geometry is settled below (it needs `hasOpenWindows`), but it has to
-        // happen BEFORE `tab.connect()` at the end of this initialiser: the
-        // ghostty surface takes its cell grid from the view it is created in,
-        // and a resize afterwards is a second tmux resize round trip for a
-        // session that is still coming up.
+        // Adopting keeps the window exactly the size the user already had it —
+        // resizing a window under the pointer is the visual signature of "a new
+        // window appeared", which is the impression this whole path avoids.
+        if shell == nil { win.setContentSize(Self.defaultContentSize) }
         // The splitView autosave (kept for the sidebar width) also remembers
         // the dock's expanded state across window incarnations — a fresh
         // window would restore yesterday's EXPANDED dock with a brand-new,
@@ -906,76 +905,17 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(surfaceBackgroundChanged(_:)),
             name: .ghosttySurfaceBackgroundChanged, object: nil)
-
-        // Toolbar: <session> ⌄ | [window tabs] | New ⌄ | ⋯ — the centre hosts the
-        // current session's tmux WINDOWS as a Finder-style segmented
-        // `NSToolbarItemGroup`; sessions live in the named button's menu on the
-        // left. That gives tmux's three levels three fixed places (session /
-        // window / pane) instead of leaving the middle one homeless.
-        toolbar.onSelectSegment = { [weak self] idx in self?.segmentPicked(idx) }
-        // Open sessions raise their tab; a dormant one opens as a new tab.
-        toolbar.onSelectSession = { key in BentoTerminalWindow.focusOrOpen(sessionKey: key) }
-        toolbar.onOpenSearch = { [weak self] in
-            guard let self else { return }
-            self.tab.paneHost?.presentCommandPalette(from: self.toolbar.searchAnchor)
-        }
-        toolbar.onNewAgent = { BentoTerminalWindow.onNewAgentSession?() }
-        toolbar.onNewTerminal = { BentoTerminalWindow.newSessionTab() }
-        toolbar.onNewPlainShell = { BentoTerminalWindow.newWindowNoTmux() }
-        toolbar.onNewSSHHost = { BentoTerminalWindow.newSSHWindow(host: $0) }
-        toolbar.onNewRemoteTmuxHost = { BentoTerminalWindow.newTmuxWindow(host: $0) }
-        toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
-        toolbar.onCloseWindow = { [weak self] in self?.activeTab?.viewModel.closeWindow() }
-        toolbar.onSetSizingMode = { [weak self] mode in
-            self?.activeTab?.viewModel.setSizingMode(mode)
-            self?.rebuildTabBar()
-        }
-        toolbar.onSelectMode = { [weak self] mode in self?.requestMode(mode) }
-        toolbar.onKillSession = { [weak self] in self?.killActiveSession() }
-        toolbar.onDetach = { [weak self] in self?.detachActiveSession() }
-        // A plain tab vanishes with its window — there's nothing to reconnect.
-        toolbar.onCloseTab = { [weak self] in self?.window.close() }
-        toolbar.onRenameSession = { [weak self] in self?.presentRenameSheet() }
-        toolbar.onWindowMenu = { [weak self] index in self?.windowMenuItems(forSegment: index) }
-        toolbar.hostWindow = win
-        win.onRightClick = { [weak toolbar] point in
-            toolbar?.handleRightClick(atWindowPoint: point) ?? false
-        }
-        win.toolbar = toolbar.makeToolbar()
-        win.toolbarStyle = .unified
-        // Restore size + position, but only for the window that opens into an
+        // Only the FIRST window owns the saved frame — it's the one opening onto an
         // empty screen — the rest join its tab group (which shares one frame) or
         // cascade beside it, and AppKit refuses a duplicate autosave name anyway.
-        //
-        // An ADOPTED window gets the same treatment as a fresh one, which is a
-        // reversal: it used to be left at whatever size it already was, on the
-        // theory that a window resizing under the pointer looks like a new
-        // window appearing. That held while the launcher wore a session
-        // window's frame. The launcher is a 660×520 page now
-        // (`LauncherWindowController.contentSize`), and leaving it at that size
-        // would hand the user a terminal in a launcher-shaped window — the
-        // wrong end of the same trade. So the terminal's own remembered
-        // geometry is applied here, and the transition visibly resizes.
-        //
-        // Not animated, on purpose. The resize lands in the same runloop turn
-        // as the surface being built, so there is no stable "before" picture to
-        // animate away from; an animated frame change would instead walk the
-        // ghostty grid through a dozen intermediate sizes, each one a tmux
-        // resize for a session that has not finished attaching.
         if !BentoTerminalWindow.hasOpenWindows {
             Self.frameOwner = win
             win.setFrameAutosaveName(Self.frameName)
-            if !win.setFrameUsingName(Self.frameName) {
-                win.setContentSize(Self.defaultContentSize)
-                win.center()
-            }
-        } else {
-            // With other windows up the saved frame belongs to one of them.
-            // A fresh window is sized here and then cascaded or tabbed by
-            // AppKit; an adopted one only needs to stop being launcher-sized,
-            // and keeps its top-left so it grows out of where it already is
-            // rather than jumping to the middle of the screen.
-            win.setContentSize(Self.defaultContentSize)
+            // An adopted window already restored (or was placed at) its frame
+            // as a launcher — see `LauncherWindowController`. It takes over the
+            // autosave name so the size the user settles on is still recorded,
+            // but it must not be moved now: it is on screen and being looked at.
+            if shell == nil, !win.setFrameUsingName(Self.frameName) { win.center() }
         }
         self.window = win
         installContentConstraints(in: win)
@@ -1004,8 +944,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// a jump (`LauncherWindowController`).
     nonisolated static let frameName = "BentoMainTerminalWindow"
 
-    /// The size a session window opens at when nothing is remembered — and the
-    /// size a launcher window grows to as it is filled.
+    /// The size a session window opens at when nothing is remembered.
     nonisolated static let defaultContentSize = NSSize(width: 980, height: 640)
     private static weak var frameOwner: NSWindow?
 
