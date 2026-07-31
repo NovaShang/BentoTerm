@@ -757,24 +757,14 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             title: LaunchAction.plainTerminal.title,
             tip: LaunchAction.plainTerminal.detail,
             action: #selector(newPlainShellAction)))
-        // The one unbounded list — however many hosts ~/.ssh/config has.
-        let ssh = plainItem(
-            symbol: "network", title: "New SSH Connection",
-            tip: "A terminal connected to a host from your ~/.ssh/config.",
-            action: nil)
-        ssh.submenu = sshHostsSubmenu(action: #selector(newSSHHostAction(_:)))
-        menu.addItem(ssh)
-        // The same host list, but attaching a tmux session on the far end
-        // instead of dropping into its shell — the remote equivalent of "New
-        // Terminal", tiled panes and all. Kept as its own row rather than a
-        // modifier on the one above because the two differ in what SURVIVES:
-        // the plain connection dies with the tab, the session doesn't.
-        let sshTmux = plainItem(
-            symbol: nil, title: "New Remote tmux Session",
-            tip: "A tiled tmux session running on a host from your ~/.ssh/config.",
-            action: nil)
-        sshTmux.submenu = sshHostsSubmenu(action: #selector(newRemoteTmuxHostAction(_:)))
-        menu.addItem(sshTmux)
+        // The one unbounded list — however many hosts ~/.ssh/config has. Built
+        // by `SSHHostMenu` rather than here, because the launcher page's `SSH`
+        // row opens the same two rows and they must not drift.
+        for item in SSHHostMenu.items(target: self,
+                                      connect: #selector(newSSHHostAction(_:)),
+                                      remoteTmux: #selector(newRemoteTmuxHostAction(_:))) {
+            menu.addItem(item)
+        }
 
         pop(menu, from: newButton)
     }
@@ -793,25 +783,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         }
         if !tip.isEmpty { item.toolTip = tip }
         return item
-    }
-
-    /// One item per concrete host in ~/.ssh/config (re-read on every open, so
-    /// config edits show up immediately); a disabled hint when there are none —
-    /// including a missing or unreadable config.
-    private func sshHostsSubmenu(action: Selector) -> NSMenu {
-        let menu = NSMenu()
-        let hosts = SSHConfigHosts.hosts()
-        if hosts.isEmpty {
-            menu.addItem(NSMenuItem(title: "No hosts in ~/.ssh/config", action: nil, keyEquivalent: ""))
-            return menu
-        }
-        for host in hosts {
-            let item = NSMenuItem(title: host, action: action, keyEquivalent: "")
-            item.target = self
-            item.representedObject = host
-            menu.addItem(item)
-        }
-        return menu
     }
 
 
@@ -855,6 +826,83 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func renameAction() { onRenameSession?() }
     @objc private func detachAction() { onDetach?() }
     @objc private func killAction() { onKillSession?() }
+}
+
+// MARK: - The ~/.ssh/config menu
+
+/// The two ways to reach an ssh host, and the host list under each.
+///
+/// Two surfaces offer them: the toolbar's `New ⌄` menu and the launcher page's
+/// `SSH` row. There is no third vocabulary — the launcher opens *this*, so the
+/// titles, the tooltips, the order and the "no hosts" hint are the same object,
+/// not the same wording maintained twice. `LaunchAction` already does this for
+/// the three creation verbs (docs/launcher-design.md §5, "one concept one
+/// name"); this is the same rule applied to the one list it did not cover.
+///
+/// Hosts are re-read from `~/.ssh/config` on every open, so edits to the file
+/// show up without a relaunch, and the read is a single small local file — the
+/// launcher's "never block on the network" rule holds here too. Nothing
+/// enumerates sessions on the far end.
+enum SSHHostMenu {
+    static let connectTitle = "New SSH Connection"
+    static let connectTip = "A terminal connected to a host from your ~/.ssh/config."
+    /// The same host list, but attaching a tmux session on the far end instead
+    /// of dropping into its shell — the remote equivalent of "New Terminal",
+    /// tiled panes and all. Its own row rather than a modifier on the one above
+    /// because the two differ in what SURVIVES: the plain connection dies with
+    /// the tab, the session doesn't.
+    static let remoteTmuxTitle = "New Remote tmux Session"
+    static let remoteTmuxTip = "A tiled tmux session running on a host from your ~/.ssh/config."
+
+    /// The two rows, each with a host submenu. `representedObject` on the leaf
+    /// items is the host alias.
+    static func items(target: AnyObject, connect: Selector, remoteTmux: Selector) -> [NSMenuItem] {
+        let hosts = SSHConfigHosts.hosts()
+        let ssh = row(symbol: "network", title: connectTitle, tip: connectTip)
+        ssh.submenu = hostSubmenu(hosts: hosts, target: target, action: connect)
+        // `nil` symbol on the second row: the icon marks where the group
+        // starts, and repeating it says nothing the eye did not already get.
+        let tmux = row(symbol: nil, title: remoteTmuxTitle, tip: remoteTmuxTip)
+        tmux.submenu = hostSubmenu(hosts: hosts, target: target, action: remoteTmux)
+        return [ssh, tmux]
+    }
+
+    /// The two rows as a standalone menu — what the launcher's `SSH` row pops.
+    static func menu(target: AnyObject, connect: Selector, remoteTmux: Selector) -> NSMenu {
+        let menu = NSMenu()
+        for item in items(target: target, connect: connect, remoteTmux: remoteTmux) {
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    private static func row(symbol: String?, title: String, tip: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        if let symbol {
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        }
+        item.toolTip = tip
+        return item
+    }
+
+    /// One item per concrete host; a disabled hint when there are none —
+    /// including a missing or unreadable config.
+    private static func hostSubmenu(hosts: [String], target: AnyObject,
+                                    action: Selector) -> NSMenu {
+        let menu = NSMenu()
+        guard !hosts.isEmpty else {
+            menu.addItem(NSMenuItem(title: "No hosts in ~/.ssh/config",
+                                    action: nil, keyEquivalent: ""))
+            return menu
+        }
+        for host in hosts {
+            let item = NSMenuItem(title: host, action: action, keyEquivalent: "")
+            item.target = target
+            item.representedObject = host
+            menu.addItem(item)
+        }
+        return menu
+    }
 }
 
 #endif

@@ -160,10 +160,13 @@ public enum BentoTerminalWindow {
 
     /// ⌘P: open the command palette over the focused window's active pane.
     public static func presentCommandPalette() {
-        // Over a launcher window there is no pane to open a palette on, and no
-        // need for one: the page IS the palette, so ⌘P puts the caret in its
-        // filter field. The muscle memory lands somewhere either way (§2).
-        if LauncherWindowController.focusSearchFieldIfKey() { return }
+        // Over a launcher window there is no pane to hang the File / Pane
+        // sections off, but the palette still means what it means everywhere
+        // else, so the launcher builds the sections that survive an empty
+        // window and opens the same panel. It emphatically does NOT get its own
+        // kind of search: the page used to answer ⌘P by focusing a filter over
+        // its own dozen rows, which found strictly less than this does.
+        if LauncherWindowController.presentPaletteIfKey() { return }
         frontmostManager()?.tab.paneHost?.presentCommandPalette()
     }
 

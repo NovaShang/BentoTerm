@@ -420,6 +420,13 @@ struct PaletteRowView<Accessory: View>: View {
     let subtitle: String?
     let systemImage: String
     let selected: Bool
+    /// How many lines the second line may take. One everywhere except the
+    /// launcher's three create rows: those explain themselves in a full
+    /// sentence, and the launcher's left column is a third of a window rather
+    /// than the width of a palette, so a sentence cut through the middle would
+    /// be the only place on either surface where the explanation stops
+    /// explaining. Wrapping is the smaller divergence.
+    var subtitleLineLimit: Int = 1
     @ViewBuilder var accessory: () -> Accessory
 
     var body: some View {
@@ -438,8 +445,12 @@ struct PaletteRowView<Accessory: View>: View {
                     Text(sub)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(selected ? Color.white.opacity(0.75) : .secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                        .lineLimit(subtitleLineLimit)
+                        // A wrapped sentence loses nothing at the tail; a
+                        // one-line path loses its meaning there, which is why
+                        // the single-line case keeps eliding the middle.
+                        .truncationMode(subtitleLineLimit > 1 ? .tail : .middle)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 0)
@@ -455,9 +466,11 @@ struct PaletteRowView<Accessory: View>: View {
 }
 
 extension PaletteRowView where Accessory == EmptyView {
-    init(title: String, subtitle: String?, systemImage: String, selected: Bool) {
+    init(title: String, subtitle: String?, systemImage: String, selected: Bool,
+         subtitleLineLimit: Int = 1) {
         self.init(title: title, subtitle: subtitle, systemImage: systemImage,
-                  selected: selected, accessory: { EmptyView() })
+                  selected: selected, subtitleLineLimit: subtitleLineLimit,
+                  accessory: { EmptyView() })
     }
 }
 
