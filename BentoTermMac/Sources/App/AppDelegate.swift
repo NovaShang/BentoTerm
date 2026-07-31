@@ -169,6 +169,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return true
     }
 
+    /// Right-click on the Dock icon. Built on demand, synchronously, on the
+    /// main thread — see `DockMenu` for why every source it reads is a local
+    /// one. macOS appends its own Options / Show All Windows / Quit below
+    /// whatever we return, so none of those appear here.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        DockMenu.build()
+    }
+
     // MARK: - Appearance (light / dark / follow-system)
 
     /// Pin (or release, for follow-system) the app's appearance from the user's

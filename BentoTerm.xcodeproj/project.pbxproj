@@ -55,6 +55,7 @@
 		B75C83BC73E88802E1B32009 /* SSHKeyGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1399CF81CF6931B8C06F149C /* SSHKeyGenerator.swift */; };
 		C8F26467086719C7CDB020DC /* VoicePressGesture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5AC466A530CBDE61D316140 /* VoicePressGesture.swift */; };
 		CB7215B1174A003D54927BA8 /* VoiceOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2CA4D2E1FEFF22364DABD9 /* VoiceOverlayView.swift */; };
+		3C9AD5E14F70B821AE60D93B /* DockMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41E77C0D2A85F369C33E1A4 /* DockMenu.swift */; };
 		CD9D6777AB46D4955E345159 /* SessionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFDC57E93E49E1D15EE59BE8 /* SessionsMenu.swift */; };
 		CE5416AF9DFA0138420FA29C /* TmuxResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECFEF5332C0520EF88BE2CC3 /* TmuxResolver.swift */; };
 		D2DE4138925C2A317B99E0AC /* LLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9908690F0CE5B855494C928 /* LLMService.swift */; };
@@ -127,6 +128,7 @@
 		C6805ED978B14746F5A0AC1B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		CC92D5B3FD2CD59076F25369 /* bento-terminal-core */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "bento-terminal-core"; path = "bento-terminal-core"; sourceTree = SOURCE_ROOT; };
 		CD11DD75574C11691309C7A7 /* ActiveSessionsStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveSessionsStrip.swift; sourceTree = "<group>"; };
+		B41E77C0D2A85F369C33E1A4 /* DockMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockMenu.swift; sourceTree = "<group>"; };
 		CFDC57E93E49E1D15EE59BE8 /* SessionsMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsMenu.swift; sourceTree = "<group>"; };
 		D452D9CD410AF62831213B61 /* TerminalWrapperView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalWrapperView.swift; sourceTree = "<group>"; };
 		D6005111F6DF378E92F7451A /* FirstRunWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunWindow.swift; sourceTree = "<group>"; };
@@ -307,6 +309,7 @@
 			isa = PBXGroup;
 			children = (
 				6B4BE879A36BCA2292706B69 /* AgentWizardWindow.swift */,
+				B41E77C0D2A85F369C33E1A4 /* DockMenu.swift */,
 				D6005111F6DF378E92F7451A /* FirstRunWindow.swift */,
 				CFDC57E93E49E1D15EE59BE8 /* SessionsMenu.swift */,
 				562503FEB19999BE4353435E /* SettingsView.swift */,
@@ -619,6 +622,7 @@
 				EA2A598362FA7584EC61A85A /* AgentWizardWindow.swift in Sources */,
 				18EEB102591B01C80CB30EB2 /* AppDelegate.swift in Sources */,
 				D355E7331F2367ABC0076BBC /* BentoTermMacApp.swift in Sources */,
+				3C9AD5E14F70B821AE60D93B /* DockMenu.swift in Sources */,
 				DD0B65A1316BF8AC813D5666 /* FirstRunWindow.swift in Sources */,
 				CD9D6777AB46D4955E345159 /* SessionsMenu.swift in Sources */,
 				F80777E804F983B4ED110DAC /* SettingsView.swift in Sources */,
