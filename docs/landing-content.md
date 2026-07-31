@@ -140,11 +140,11 @@ Link: `Read the architecture notes →` (README#under-the-hood)
 
 **H2:** Yours, on your machine
 
-No accounts — nothing to sign up for. Telemetry is off by default and
-strictly opt-in: a closed set of feature counters, never terminal content.
-Voice audio goes directly from your machine to the speech provider, with your
-own key. Terminal output never leaves your machine except to power the
-features you invoke.
+No accounts — nothing to sign up for, and no analytics: Bento counts nothing
+and phones home to nothing, because there is no server of ours to phone. Voice
+audio goes directly from your machine to the speech provider, with your own
+key — or stays on-device, which is the default. Terminal output never leaves
+your machine except to power the features you invoke.
 
 ## 11. FAQ
 

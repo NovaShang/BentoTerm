@@ -115,4 +115,39 @@ final class VoiceTests: XCTestCase {
         XCTAssertFalse(gate.admit(chunk(amplitude: 181)).isEmpty)
         XCTAssertTrue(gate.isOpen)
     }
+
+    // MARK: - Bring-your-own-key gating
+
+    /// Apple is the only engine that works with nothing configured; the two
+    /// cloud engines must report themselves unavailable rather than let a
+    /// recording start and fail as a network error mid-utterance.
+    func testEngineAvailabilityRequiresAKey() {
+        let defaults = UserDefaults.standard
+        let savedOpenAI = defaults.string(forKey: "openai_api_key")
+        let savedQwen = defaults.string(forKey: "dashscope_api_key")
+        defer {
+            defaults.set(savedOpenAI, forKey: "openai_api_key")
+            defaults.set(savedQwen, forKey: "dashscope_api_key")
+        }
+
+        defaults.removeObject(forKey: "openai_api_key")
+        defaults.removeObject(forKey: "dashscope_api_key")
+        XCTAssertTrue(SpeechEngineKind.apple.isConfigured, "on-device needs nothing")
+        XCTAssertNil(SpeechEngineKind.apple.unavailableReason)
+        XCTAssertFalse(SpeechEngineKind.openai.isConfigured)
+        XCTAssertFalse(SpeechEngineKind.qwen.isConfigured)
+        // The reason has to name the credential, or it is not actionable.
+        XCTAssertTrue(SpeechEngineKind.openai.unavailableReason?.contains("OpenAI API key") == true)
+        XCTAssertTrue(SpeechEngineKind.qwen.unavailableReason?.contains("DashScope API key") == true)
+
+        // Whitespace is not a key — a stray space must not look configured.
+        defaults.set("   ", forKey: "openai_api_key")
+        XCTAssertFalse(SpeechEngineKind.openai.isConfigured)
+
+        defaults.set("sk-test", forKey: "openai_api_key")
+        XCTAssertTrue(SpeechEngineKind.openai.isConfigured)
+        XCTAssertNil(SpeechEngineKind.openai.unavailableReason)
+        XCTAssertEqual(SpeechEngineKind.openai.apiKey, "sk-test")
+        XCTAssertFalse(SpeechEngineKind.qwen.isConfigured, "keys are per-engine")
+    }
 }

@@ -166,7 +166,6 @@ final class VoiceInputController: ObservableObject {
             // model, then let the user preview/edit before sending — instead of
             // inserting directly. (Left swipe still does NL→shell-command.) The
             // preview batches the captured PCM itself, so just stop capture here.
-            TelemetryService.shared.record(.voiceSwipeRightPreview)
             let streamed = session.currentTranscript
             session.cancel()
             isRecording = false
@@ -189,9 +188,6 @@ final class VoiceInputController: ObservableObject {
             self.showOverlay = false
             guard !text.isEmpty else { return }
             HapticService.shared.sent()
-            TelemetryService.shared.record(.voiceSend)
-            TelemetryService.shared.record(.voiceFirstSend)
-            if direction == .left { TelemetryService.shared.record(.voiceSwipeLeftLLM) }
             self.onResult?(VoiceInputResult(text: text, direction: direction))
             self.voiceSendTotal = TipCenter.shared.recordVoiceSend()
         }
@@ -241,8 +237,6 @@ final class VoiceInputController: ObservableObject {
         isManualCompose = false
         guard !text.isEmpty else { return }
         HapticService.shared.sent()
-        TelemetryService.shared.record(.voiceSend)
-        TelemetryService.shared.record(.voiceFirstSend)
         onResult?(VoiceInputResult(text: text, direction: .up))
         voiceSendTotal = TipCenter.shared.recordVoiceSend()
     }

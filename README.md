@@ -53,8 +53,8 @@ To use a remote machine, it needs `sshd` running and `tmux` installed. Getting t
 ## Privacy
 
 - **No accounts.** Nothing to sign up for.
-- **Telemetry is off by default** and strictly opt-in — a closed set of feature counters, no terminal content, ever.
-- **Voice audio** goes directly from your machine to the speech provider you configured, using your own key. Terminal output never leaves your machine except to power the features you invoke.
+- **No analytics.** Bento counts nothing and phones home to nothing. There is no server of ours for it to phone.
+- **Voice audio** goes directly from your machine to the speech provider you configured, using your own key. Apple's on-device recognizer is the default and never leaves the machine at all. Terminal output never leaves your machine except to power the features you invoke.
 
 ## Under the hood
 

@@ -26,13 +26,10 @@ EOF
 fail=0
 while IFS=$'\t' read -r term why; do
     [ -z "$term" ] && continue
-    # String literals only, skipping comment lines and the telemetry wire value
-    # (an event name is a stored key, not user-facing copy — renaming it would
-    # silently split the metric series).
+    # String literals only, skipping comment lines.
     hits=$(grep -rn --include='*.swift' -E "\"[^\"]*(${term})[^\"]*\"" "${SOURCES[@]}" 2>/dev/null \
         | grep -v '/Tests\?/' \
         | grep -vE '^[^:]+:[0-9]+: *///?' \
-        | grep -v 'workspace_created' \
         || true)
     if [ -n "$hits" ]; then
         echo "✘ banned in user-facing strings: /${term}/ — ${why}"

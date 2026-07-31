@@ -22,7 +22,27 @@ struct SettingsView: View {
     @AppStorage("llm_model") private var llmModel: String = "gpt-4o-mini"
     @AppStorage("llm_endpoint") private var llmEndpoint: String = "https://api.openai.com/v1/chat/completions"
     @ObservedObject private var themeStore = ThemeStore.shared
-    @ObservedObject private var telemetry = TelemetryService.shared
+
+    private var selectedEngine: SpeechEngineKind {
+        SpeechEngineKind(rawValue: speechEngine) ?? .apple
+    }
+
+    /// Flag an engine in the picker that cannot run yet, so the constraint is
+    /// visible before it is chosen rather than after.
+    private func engineLabel(_ engine: SpeechEngineKind, _ name: String) -> String {
+        engine.isConfigured ? name : "\(name) — needs key"
+    }
+
+    private var speechFooter: String {
+        switch selectedEngine {
+        case .apple:
+            return "Apple's on-device SFSpeechRecognizer. Nothing leaves the device and no key is needed; accuracy varies by language."
+        case .openai:
+            return "OpenAI Realtime gpt-realtime-whisper, on your own OpenAI key. Audio goes from this device straight to OpenAI and is billed to you — Bento runs no server and proxies nothing."
+        case .qwen:
+            return "Alibaba Qwen realtime (qwen3-asr-flash) — best accuracy for Chinese and Chinese-English mixed speech. Runs on your own DashScope key, straight from this device to DashScope."
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -100,9 +120,9 @@ struct SettingsView: View {
 
                 Section {
                     Picker("Engine", selection: $speechEngine) {
-                        Text("Apple (on-device)").tag("apple")
-                        Text("OpenAI gpt-realtime-whisper").tag("openai")
-                        Text("Qwen (中文 / 中英混说)").tag("qwen")
+                        Text(engineLabel(.apple, "Apple (on-device)")).tag("apple")
+                        Text(engineLabel(.openai, "OpenAI gpt-realtime-whisper")).tag("openai")
+                        Text(engineLabel(.qwen, "Qwen (中文 / 中英混说)")).tag("qwen")
                     }
                     Picker("Language", selection: $speechLocale) {
                         Text("Auto").tag("auto")
@@ -111,12 +131,12 @@ struct SettingsView: View {
                         Text("日本語").tag("ja-JP")
                     }
                     if speechEngine == "openai" {
-                        SecureField("OpenAI API Key (optional)", text: $openaiAPIKey)
+                        SecureField("OpenAI API Key (required)", text: $openaiAPIKey)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     }
                     if speechEngine == "qwen" {
-                        SecureField("DashScope API Key (optional)", text: $dashscopeAPIKey)
+                        SecureField("DashScope API Key (required)", text: $dashscopeAPIKey)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         Toggle("Bias from on-screen text", isOn: $asrAutoContext)
@@ -129,19 +149,17 @@ struct SettingsView: View {
                                 .autocorrectionDisabled()
                         }
                     }
+                    // Say it here, where the engine is chosen — not as a failed
+                    // connection while the user is holding the mic button.
+                    if let reason = selectedEngine.unavailableReason {
+                        Label(reason, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(Color.stAmber)
+                    }
                 } header: {
                     BentoFormHeader("Speech Recognition")
                 } footer: {
-                    switch speechEngine {
-                    case "apple":
-                        BentoFormFooter("Uses Apple's on-device SFSpeechRecognizer. No API key needed; quality varies by language.")
-                    case "openai":
-                        BentoFormFooter("OpenAI Realtime gpt-realtime-whisper. Works out of the box via the Bento relay — no setup required. Paste your own API key only if you want to run against your personal quota.")
-                    case "qwen":
-                        BentoFormFooter("Alibaba Qwen realtime (qwen3-asr-flash) — best accuracy for Chinese and Chinese-English mixed speech. Works out of the box via the Bento relay — no setup required. Paste a DashScope key only to run against your own quota.")
-                    default:
-                        EmptyView()
-                    }
+                    BentoFormFooter(speechFooter)
                 }
                 .bentoSectionStyle()
 
@@ -171,49 +189,33 @@ struct SettingsView: View {
                 Section {
                     Toggle("Enabled", isOn: $llmEnabled)
                     if llmEnabled {
-                        SecureField("API Key (optional)", text: $llmAPIKey)
+                        SecureField("API Key (required)", text: $llmAPIKey)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                        // Model + endpoint only take effect in BYOK mode; the
-                        // built-in relay pins its own. Hide them until a key is set
-                        // so relay users aren't shown knobs that do nothing.
-                        if !llmAPIKey.isEmpty {
-                            Picker("Model", selection: $llmModel) {
-                                Text("gpt-4o-mini").tag("gpt-4o-mini")
-                                Text("gpt-4o").tag("gpt-4o")
-                                Text("gpt-4.1-mini").tag("gpt-4.1-mini")
-                                Text("gpt-4.1").tag("gpt-4.1")
-                            }
-                            TextField("Endpoint", text: $llmEndpoint)
-                                .textContentType(.URL)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .font(.caption.monospaced())
+                        // Always shown: it is the user's key and the user's bill,
+                        // and the endpoint only has to be OpenAI-compatible, so
+                        // there is nothing left for us to pin on their behalf.
+                        Picker("Model", selection: $llmModel) {
+                            Text("gpt-4o-mini").tag("gpt-4o-mini")
+                            Text("gpt-4o").tag("gpt-4o")
+                            Text("gpt-4.1-mini").tag("gpt-4.1-mini")
+                            Text("gpt-4.1").tag("gpt-4.1")
+                        }
+                        TextField("Endpoint", text: $llmEndpoint)
+                            .textContentType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .font(.caption.monospaced())
+                        if let reason = LLMService.shared.unavailableReason {
+                            Label(reason, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(Color.stAmber)
                         }
                     }
                 } header: {
                     BentoFormHeader("Voice → Shell Command (LLM)")
                 } footer: {
-                    BentoFormFooter("Works out of the box — no key needed. Swipe left/right while holding to talk: the LLM converts what you said into a shell command. Right swipe also runs it. Leave the key blank to use Bento's built-in service, or bring your own OpenAI-compatible key for direct, private billing.")
-                }
-                .bentoSectionStyle()
-
-                Section {
-                    Toggle("Share anonymous usage statistics", isOn: Binding(
-                        get: { telemetry.enabled },
-                        set: { telemetry.enabled = $0 }
-                    ))
-                    DisclosureGroup("What gets counted") {
-                        ForEach(TelemetryEvent.allCases, id: \.rawValue) { event in
-                            Text(event.rawValue)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(Color.bentoInkDim)
-                        }
-                    }
-                } header: {
-                    BentoFormHeader("Privacy")
-                } footer: {
-                    BentoFormFooter("No terminal content, commands, transcripts, paths, or hostnames — ever. Just the event names above, tied to a random ID that is deleted when you turn this off. Events go to Bento's own endpoint; no third-party SDKs.")
+                    BentoFormFooter("Swipe left/right while holding to talk: the LLM converts what you said into a shell command. Right swipe also runs it. Requires your own key for OpenAI or any OpenAI-compatible endpoint — the request goes straight there from this device.")
                 }
                 .bentoSectionStyle()
 

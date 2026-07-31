@@ -55,23 +55,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 await self?.refresh()
             }
         }
-        // Opt-in telemetry (no-op unless the user enabled the Settings toggle):
-        // count today as an active day.
-        TelemetryService.shared.appBecameActive()
+        RemovedFeatureCleanup.purgeTelemetryDefaults()
 
         Task { [weak self] in
             guard let self else { return }
             await self.refresh()
             self.startPolling()
             // Test hook: open a specific secondary window directly
-            // (BENTO_OPEN_WINDOW=wizard|firstRun), for screenshot-driven
-            // verification without UI scripting. This one DOES suppress the
-            // terminal window — the point of the hook is to get a clean
-            // screenshot of exactly one window.
+            // (BENTO_OPEN_WINDOW=wizard|plain|settings|firstRun), for
+            // screenshot-driven verification without UI scripting. This one
+            // DOES suppress the terminal window — the point of the hook is to
+            // get a clean screenshot of exactly one window.
             if let name = ProcessInfo.processInfo.environment["BENTO_OPEN_WINDOW"] {
                 switch name {
                 case "wizard": Windows.show(.wizard)
                 case "plain": BentoTerminalWindow.newWindowNoTmux()
+                case "settings": self.openSettings()
                 default: Windows.show(.firstRun)
                 }
                 return
@@ -91,12 +90,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 Windows.show(.firstRun)
             }
         }
-    }
-
-    /// Quitting takes down the GUI only. Nothing else of ours is running: the
-    /// tmux server owns the sessions and outlives us, so quitting is a detach.
-    func applicationWillTerminate(_ notification: Notification) {
-        TelemetryService.shared.flush()
     }
 
     /// No confirmation here (see the note further down) — this exists only to
@@ -192,7 +185,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationDidBecomeActive(_ notification: Notification) {
         // User is looking at the app now — clear the awaiting Dock badge.
         MacAwaitingNotifier.shared.clearBadge()
-        TelemetryService.shared.appBecameActive()
     }
 
     /// Closing the last window does NOT quit — Terminal.app behavior, chosen

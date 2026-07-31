@@ -79,6 +79,15 @@ public final class VoiceSession {
         // leave a second mic engine / ASR socket running.
         if isActive { cancel() }
         engine = .current()
+        // Bring-your-own-key engines refuse BEFORE the mic, the permission
+        // prompt, or any socket. Discovering a missing key as a network timeout
+        // while you are still holding the button is the worst possible moment,
+        // so the reason is raised the instant recording is attempted.
+        if let reason = engine.unavailableReason {
+            dlog("[voice] engine \(engine.rawValue) not configured — refusing to record")
+            onError(reason)
+            return
+        }
         isActive = true
         lastTranscript = ""
         lastInterimAt = nil
@@ -301,23 +310,17 @@ public final class VoiceSession {
         let language = openAILanguageHint(for: defaults.string(forKey: "speech_locale") ?? "auto")
         activeCorpus = ""
 
+        // Both realtime engines are bring-your-own-key; `start()` has already
+        // refused an unconfigured one, so the key here is non-empty.
         let asr: RealtimeASR
         switch engine {
         case .qwen:
-            // BYOK via a DashScope key; otherwise the bundled relay proxy (key
-            // injected server-side, zero-config).
-            let key = (defaults.string(forKey: "dashscope_api_key") ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let proxyURL: URL? = key.isEmpty ? QwenRealtimeASRService.defaultProxyURL : nil
             activeCorpus = assembleQwenCorpus(screenText: contextProvider?())
-            asr = QwenRealtimeASRService(apiKey: key, proxyURL: proxyURL, language: language, corpus: activeCorpus)
-            dlog("[voice] qwen begin: byok=\(!key.isEmpty) proxy=\(proxyURL != nil) lang=\(language.isEmpty ? "auto" : language) corpus=\(activeCorpus.count)c")
+            asr = QwenRealtimeASRService(apiKey: engine.apiKey, language: language, corpus: activeCorpus)
+            dlog("[voice] qwen begin: lang=\(language.isEmpty ? "auto" : language) corpus=\(activeCorpus.count)c")
         default: // .openai
-            let key = (defaults.string(forKey: "openai_api_key") ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let proxyURL: URL? = key.isEmpty ? OpenAIRealtimeASRService.defaultProxyURL : nil
-            asr = OpenAIRealtimeASRService(apiKey: key, proxyURL: proxyURL, language: language)
-            dlog("[voice] openai begin: byok=\(!key.isEmpty) proxy=\(proxyURL != nil) lang=\(language.isEmpty ? "auto" : language)")
+            asr = OpenAIRealtimeASRService(apiKey: engine.apiKey, language: language)
+            dlog("[voice] openai begin: lang=\(language.isEmpty ? "auto" : language)")
         }
         realtime = asr
         activeSampleRate = asr.sampleRate

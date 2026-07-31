@@ -78,7 +78,6 @@ struct AgentWizardWindow: View {
             .padding(.vertical, 12)
         }
         .frame(width: 560, height: 620)
-        .onAppear { TelemetryService.shared.record(.agentWizardLaunched) }
     }
 
     private var canLaunch: Bool {
@@ -132,13 +131,11 @@ struct AgentWizardWindow: View {
                     layout: BentoTerminalCore.TmuxLayout(rawValue: spec.layout.rawValue) ?? .solo
                 )
                 await MainActor.run { BentoTerminalWindow.newWindow(agent: coreSpec) }
-                TelemetryService.shared.record(.workspaceCreated)
                 dismiss()
                 return
             }
             let script = TmuxCLI.buildAgentScript(spec: spec, useTmuxControlMode: kind.supportsTmuxControlMode)
             try await TmuxCLI.openInTerminal(command: script, kind: kind)
-            TelemetryService.shared.record(.workspaceCreated)
             dismiss()
         } catch {
             self.error = "\(error)"

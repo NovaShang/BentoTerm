@@ -28,6 +28,7 @@ struct BentoApp: App {
         //     --domain-identifier com.bento.term.app --source Documents/debug.log …
         coreDlogFileSink = { DebugLogger.shared.log($0) }
         Self.purgePairingLeftovers()
+        RemovedFeatureCleanup.purgeTelemetryDefaults()
     }
 
     /// One-shot cleanup for installs that predate the removal of the paired-host
@@ -84,14 +85,6 @@ struct BentoApp: App {
             .tint(Color.bentoEmerald)
             .onChange(of: scenePhase) { _, newPhase in
                 sessionManager.handleScenePhaseChange(newPhase)
-                // Opt-in telemetry lifecycle: count the active day on
-                // foreground, flush the buffered batch on background.
-                // Both are no-ops unless the user enabled the toggle.
-                switch newPhase {
-                case .active: TelemetryService.shared.appBecameActive()
-                case .background: TelemetryService.shared.flush()
-                default: break
-                }
             }
             .onOpenURL { url in
                 handleDeepLink(url)
