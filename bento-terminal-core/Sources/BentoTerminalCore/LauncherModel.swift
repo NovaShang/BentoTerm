@@ -102,10 +102,10 @@ public final class LauncherModel: ObservableObject {
     @Published public private(set) var hostsExpanded = false
     @Published public private(set) var recentsExpanded = false
     @Published public private(set) var selectedID: String?
-    /// Bumped to pull first responder back to the filter field (⌘P).
-    @Published public private(set) var focusToken = 0
-
-    public func focusSearch() { focusToken &+= 1 }
+    // No focus token here any more: the filter field is an AppKit search item
+    // in the window's toolbar, owned by `LauncherWindowController`, so ⌘P asks
+    // the window for first responder directly rather than routing a counter
+    // through the model to reach a SwiftUI view.
 
     @Published public var query: String = "" {
         didSet { guard query != oldValue else { return }; rebuild() }

@@ -47,6 +47,48 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     /// The active tab is a plain (no-tmux) terminal — its menu is just "Close".
     var activeTabIsPlain = false
+
+    /// False on a launcher window: this toolbar's window has no session YET.
+    ///
+    /// The two windows are the same window, so the toolbar is the same toolbar
+    /// and every item keeps its slot; what changes is which of them have
+    /// something to refer to. The session button and the Parallel|Focus switch
+    /// are DISABLED rather than removed — they name and reshape a session, and
+    /// dropping them would resize the toolbar so that answering the launcher's
+    /// question shifted every remaining control sideways, which is the same
+    /// "a new window appeared" impression the in-place fill exists to avoid.
+    /// The window strip is the one thing that goes: it is a variable-width list
+    /// of tmux windows, and an empty list is not a disabled control, it is
+    /// nothing. Its slot is already shared with search (`setCenterShowsTabs`),
+    /// so the centre holds search — exactly what a one-window session shows.
+    var hasSession = true {
+        didSet {
+            guard hasSession != oldValue else { return }
+            centerShowsTabs = hasSession
+            applySessionAvailability()
+        }
+    }
+
+    private func applySessionAvailability() {
+        sessionsButton.isEnabled = hasSession
+        modeSwitch.isEnabled = hasSession
+        // Nothing to preview: the dock's content is the focused pane's folder.
+        previewButton.isEnabled = hasSession
+        // An attributed title ignores AppKit's disabled dimming, so the color
+        // has to be chosen here or a dead button reads as a live one.
+        setMenuText(sessionsButton, sessionsText)
+        setMenuText(newButton, "New")
+    }
+
+    /// A view to put in the search slot instead of the palette button.
+    ///
+    /// A session window has nothing to type INTO up there — the palette owns
+    /// the query and the results — so its search item is a button that opens
+    /// the palette. A launcher window is the opposite case: its query has
+    /// nowhere else to live, and the page below it is the results. Same slot,
+    /// same identifier, same position; the occupant differs because what the
+    /// window can do with a keystroke differs.
+    var customSearchView: NSView?
     /// EVERY tmux session on the machine, open here or not, with its dot.
     /// Native tabs can only switch between sessions that are already open, so
     /// without this list a session running on the machine but not loaded in
@@ -248,7 +290,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     }
 
     /// Whichever search control is currently on screen — the panel hangs off it.
-    var searchAnchor: NSView { centerShowsTabs ? searchCompact : searchField }
+    var searchAnchor: NSView {
+        centerShowsTabs ? searchCompact : (customSearchView ?? searchField)
+    }
 
     /// The centre of the toolbar is shared: the window strip when the session
     /// has more than one window, the search field when it doesn't.
@@ -431,7 +475,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // Pin the session strip to the WINDOW's center, independent of the side
         // items' widths — so the session-name button can size to its text without
         // ever nudging the tabs (the native alternative to hardcoding widths).
-        tb.centeredItemIdentifiers = [Self.centerID]
+        tb.centeredItemIdentifiers = [hasSession ? Self.centerID : Self.searchID]
         toolbarRef = tb
         return tb
     }
@@ -463,10 +507,12 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     private func setMenuText(_ b: NSButton, _ text: String) {
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let color: NSColor = b.isEnabled ? .labelColor : .disabledControlTextColor
         let title = NSMutableAttributedString(
             string: text + "  ",
-            attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+            attributes: [.font: font, .foregroundColor: color])
         if let chevron = Self.chevronImage(pointSize: font.pointSize * 0.8,
+                                           color: color,
                                            appearance: b.effectiveAppearance) {
             let att = NSTextAttachment()
             att.image = chevron
@@ -484,10 +530,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// appearance — otherwise it keeps whatever it resolved to at build time
     /// (e.g. dark-mode white) and looks wrong on a light title bar. The menu
     /// buttons rebuild it via `chromeAppearanceChanged` when the theme flips.
-    private static func chevronImage(pointSize: CGFloat, appearance: NSAppearance) -> NSImage? {
-        var label = NSColor.labelColor
+    private static func chevronImage(pointSize: CGFloat, color: NSColor,
+                                     appearance: NSAppearance) -> NSImage? {
+        var label = color
         appearance.performAsCurrentDrawingAppearance {
-            label = NSColor.labelColor.usingColorSpace(.sRGB) ?? .labelColor
+            label = color.usingColorSpace(.sRGB) ?? color
         }
         let cfg = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
             .applying(NSImage.SymbolConfiguration(paletteColors: [label]))
@@ -501,7 +548,13 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // ◧ | Sessions ⌄ | Tiled|List | ⸺flex⸺ | [session tabs] | ⸺flex⸺ | New ⌄ | ⋯ | ◨
-        [Self.sessionsID, Self.modeID, .flexibleSpace, Self.centerID,
+        //
+        // Same eight slots with no session — only the centre differs, and only
+        // because a window strip with no windows in it is not a control that
+        // can be disabled. Search takes the centre there, which is where a
+        // one-window session puts it too.
+        [Self.sessionsID, Self.modeID, .flexibleSpace,
+         hasSession ? Self.centerID : Self.searchID,
          .flexibleSpace, Self.newID, Self.moreID, Self.previewID]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -526,7 +579,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         case Self.newID:      item.view = newButton;      item.label = "New"
         case Self.moreID:     item.view = moreButton;     item.label = "Settings"
         case Self.previewID:  item.view = previewButton;  item.label = "Preview"
-        case Self.searchID:   item.view = searchField;    item.label = "Search"
+        case Self.searchID:   item.view = customSearchView ?? searchField; item.label = "Search"
         case Self.searchCompactID: item.view = searchCompact; item.label = "Search"
         default: return nil
         }
@@ -671,25 +724,32 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             tip: LaunchAction.emptySession.detail,
             action: #selector(newTerminalAction)))
 
-        menu.addItem(.separator())
-        menu.addItem(plainItem(
-            symbol: "macwindow", title: "New tmux Window",
-            tip: "A tmux window in this session, with the current pane's folder and command.",
-            action: #selector(newWindowDuplicateAction)))
-        menu.addItem(plainItem(
-            symbol: nil, title: "New tmux Window at a Path…",
-            tip: "A tmux window, choosing the folder and what to run in it.",
-            action: #selector(newWindowPathCommandAction)))
+        // The window and pane levels need a session to create INSIDE. On a
+        // launcher there isn't one, and these are dropped rather than disabled:
+        // a menu is opened, read and closed, so its width and its rows are not
+        // geometry anyone is relying on staying put — unlike the toolbar behind
+        // it, where four greyed rows would just be a longer list to read past.
+        if hasSession {
+            menu.addItem(.separator())
+            menu.addItem(plainItem(
+                symbol: "macwindow", title: "New tmux Window",
+                tip: "A tmux window in this session, with the current pane's folder and command.",
+                action: #selector(newWindowDuplicateAction)))
+            menu.addItem(plainItem(
+                symbol: nil, title: "New tmux Window at a Path…",
+                tip: "A tmux window, choosing the folder and what to run in it.",
+                action: #selector(newWindowPathCommandAction)))
 
-        menu.addItem(.separator())
-        menu.addItem(plainItem(
-            symbol: "square.split.2x1", title: "New Pane",
-            tip: "Split the current pane, inheriting its folder and command.",
-            action: #selector(newPaneDuplicateAction)))
-        menu.addItem(plainItem(
-            symbol: nil, title: "New Pane at a Path…",
-            tip: "Split off a pane, choosing the folder and what to run in it.",
-            action: #selector(newPanePathCommandAction)))
+            menu.addItem(.separator())
+            menu.addItem(plainItem(
+                symbol: "square.split.2x1", title: "New Pane",
+                tip: "Split the current pane, inheriting its folder and command.",
+                action: #selector(newPaneDuplicateAction)))
+            menu.addItem(plainItem(
+                symbol: nil, title: "New Pane at a Path…",
+                tip: "Split off a pane, choosing the folder and what to run in it.",
+                action: #selector(newPanePathCommandAction)))
+        }
 
         menu.addItem(.separator())
         menu.addItem(plainItem(

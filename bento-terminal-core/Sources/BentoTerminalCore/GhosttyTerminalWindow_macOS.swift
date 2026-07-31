@@ -309,19 +309,33 @@ public enum BentoTerminalWindow {
         newWindow(session: nextSessionName())
     }
 
-    /// File → New Window (⌘N). Always a NEW standalone window — never a tab,
-    /// never "front the window you already have" — showing the launcher.
+    /// File → New Window (⌘N). Always something NEW — never "front the window
+    /// you already have" — and what lands in it is the launcher.
     ///
     /// ⌘N used to create the window AND a session called `session-3`: a name
     /// the user never chose, in a directory nobody picked. Both halves of that
     /// are real intents, so they get a key each and both are honest — ⌘N opens
     /// a window and then asks what to put in it; ⌘⇧T says don't ask, give me a
-    /// session now (docs/launcher-design.md §9). The window is standalone for
-    /// the reason `4f93e6b` gave: `newSessionPlacement` answers "where does a
-    /// new SESSION land", and a user pressing ⌘N has already answered it.
+    /// session now (docs/launcher-design.md §9).
+    ///
+    /// **It is no longer forced standalone.** `4f93e6b` made ⌘N ignore
+    /// `newSessionPlacement` on the grounds that the preference answers "where
+    /// does a new SESSION land" and pressing ⌘N had already answered it — which
+    /// was true while ⌘N created a session outright. It doesn't now. What ⌘N
+    /// produces is an empty window that is about to BECOME a session, so the
+    /// preference applies to it exactly as it applies to every other route into
+    /// a session; forcing a standalone window meant a tabs user got a stray
+    /// window every time, and then their choice arrived in it rather than in
+    /// the tab bar where they put everything else.
     public static func newSessionWindow() {
         openLauncherWindow()
     }
+
+    /// The window a new tab would join: the frontmost session window, or nil
+    /// when none is open. The launcher needs it for the same reason `addWindow`
+    /// does — a launcher that will become a session has to appear where a
+    /// session would.
+    static var tabGroupHost: NSWindow? { frontmostManager()?.window }
 
     /// Open a window that has no session yet and shows the launcher. Picking
     /// something in it turns THAT window into the session (see
@@ -392,9 +406,11 @@ public enum BentoTerminalWindow {
 
     /// Whether the NEXT session should join the current tab group.
     ///
-    /// ⌘N no longer needs a one-shot override here: it opens a LAUNCHER window,
-    /// which is standalone by construction and is then filled in place, so the
-    /// question "tab or window?" is already settled before a session exists.
+    /// A launcher window asks this too, and must: it is a session window whose
+    /// session hasn't been chosen yet, so if sessions open as tabs then the
+    /// question "what should I open?" belongs in a tab as well — otherwise
+    /// answering it moves the answer from a window into the tab bar, or leaves
+    /// a stray window behind.
     static var shouldOpenAsTab: Bool {
         switch newSessionPlacement {
         case .tab:    return true
@@ -803,31 +819,14 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     init(tab: SessionTab, adopting shell: TerminalSessionWindow? = nil) {
         self.tab = tab
         super.init()
-        let win = shell ?? TerminalSessionWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 980, height: 640),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
-            backing: .buffered, defer: false)
+        // A session window and a launcher window are ONE kind of window, built
+        // and dressed by one function (`TerminalSessionWindow.makeShell`). When
+        // `shell` is non-nil it has already been through that function as a
+        // launcher, so there is nothing here to redo — which is the point: the
+        // two must not be able to drift, and they drifted for as long as each
+        // configured its own window inline.
+        let win = shell ?? TerminalSessionWindow.makeShell()
         win.delegate = self
-        win.isReleasedWhenClosed = false
-        // Native window tabs: same identifier → one tab group, and AppKit hides
-        // the tab bar entirely at one tab, which is why a session strip only
-        // appears once there is more than one session to switch between.
-        win.tabbingIdentifier = "bento.terminal"
-        // `.preferred` when we're about to tab: `.automatic` defers to the
-        // system preference at a moment AppKit picks, and with this window's
-        // hidden title + full-size content that ended in windows joined to a
-        // group whose tab bar never appeared — sessions became invisible
-        // 33-pixel strips offscreen. Stating the intent avoids the ambiguity;
-        // `tabbingIdentifier` is set either way, so Merge All Windows and
-        // dragging a tab out still work in both modes.
-        win.tabbingMode = BentoTerminalWindow.shouldOpenAsTab ? .preferred : .automatic
-        win.titleVisibility = .hidden
-        // Full-size content: the sidebar column runs the window's full height
-        // (Finder-style) and the title bar blends into the terminal — the
-        // window chrome wears the ghostty theme's background.
-        win.styleMask.insert(.fullSizeContentView)
-        win.titlebarAppearsTransparent = true
-        win.titlebarSeparatorStyle = .none
 
         // Content = the system sidebar arrangement. The sidebar split item
         // brings the native material, full-height layout, animated collapse,
@@ -881,11 +880,19 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         previewDock.treeContextProvider = { [weak self] in self?.activeTab?.previewContext }
 
         splitVC.splitView.autosaveName = "BentoSidebarSplit"
+        // Assigning a `contentViewController` RESIZES the window to that
+        // controller's fitting size — measured, and for this split view that is
+        // 500 × 500. On a fresh window nobody sees it (the real size is set on
+        // the next line); on an adopted one it is the fill visibly shrinking a
+        // window the user is looking at, which is exactly the jump this path
+        // exists to avoid. So the adopted frame is captured and put back.
+        let adoptedFrame = shell?.frame
         win.contentViewController = splitVC
-        // Adopting keeps the window exactly the size the user already had it —
-        // resizing a window under the pointer is the visual signature of "a new
-        // window appeared", which is the impression this whole path avoids.
-        if shell == nil { win.setContentSize(Self.defaultContentSize) }
+        if let adoptedFrame {
+            win.setFrame(adoptedFrame, display: true)
+        } else {
+            win.setContentSize(Self.defaultContentSize)
+        }
         // The splitView autosave (kept for the sidebar width) also remembers
         // the dock's expanded state across window incarnations — a fresh
         // window would restore yesterday's EXPANDED dock with a brand-new,
@@ -945,14 +952,17 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // Restore size + position, but only for the window that opens into an
         // empty screen — the rest join its tab group (which shares one frame) or
         // cascade beside it, and AppKit refuses a duplicate autosave name anyway.
-        if !BentoTerminalWindow.hasOpenWindows {
-            Self.frameOwner = win
-            win.setFrameAutosaveName(Self.frameName)
-            // An adopted window already restored (or was placed at) its frame
-            // as a launcher — see `LauncherWindowController`. It takes over the
-            // autosave name so the size the user settles on is still recorded,
-            // but it must not be moved now: it is on screen and being looked at.
-            if shell == nil, !win.setFrameUsingName(Self.frameName) { win.center() }
+        //
+        // An ADOPTED launcher already claimed the name and is already at the
+        // restored frame; the claim rides along with the window because it IS
+        // the same window, so there is no handover and therefore no window in
+        // which the name is unowned and a resize goes unrecorded. Moving it now
+        // would be wrong twice over: it is on screen and being looked at, and
+        // the frame it is at is the one the user just settled on.
+        if BentoWindowFrame.owns(win) {
+            // Nothing to do — the launcher brought the name with it.
+        } else if !BentoTerminalWindow.hasOpenWindows, BentoWindowFrame.claim(win) {
+            if shell == nil, !win.setFrameUsingName(BentoWindowFrame.name) { win.center() }
         }
         self.window = win
         installContentConstraints(in: win)
@@ -967,23 +977,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         BentoTerminalWindow.persistOpenSessions()
     }
 
-    /// Frame autosave is per WINDOW NAME, and every session window shares one
-    /// name — so they'd all fight over one saved frame. Whichever window opens
-    /// while none are up holds the name; the others ride its tab group's frame.
-    ///
-    /// This used to be a one-shot `didRestoreFrame` flag that was set on the
-    /// first window of the process and never cleared, so once you closed every
-    /// window the next one got no name at all — it neither restored the size you
-    /// left nor recorded the one you set. Ownership is released on close now, so
-    /// the next window into an empty screen picks it up again.
-    /// Not private: a launcher window opening into an empty screen restores
-    /// this same frame, so that filling it in place is a content swap and not
-    /// a jump (`LauncherWindowController`).
-    nonisolated static let frameName = "BentoMainTerminalWindow"
-
     /// The size a session window opens at when nothing is remembered.
     nonisolated static let defaultContentSize = NSSize(width: 980, height: 640)
-    private static weak var frameOwner: NSWindow?
 
     var activeTab: SessionTab? { tab }
 
@@ -1857,18 +1852,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        // Record the arrangement the user is actually leaving. Autosave only
-        // fires on move/resize and only for the name's owner, so without this a
-        // window closed straight after a resize — or any window that isn't the
-        // owner — left nothing behind. Tabs in a group share one frame, so
-        // whichever closes last writes the same answer.
-        window.saveFrame(usingName: Self.frameName)
-        if Self.frameOwner === window {
-            // Hand the name back before this window goes away: AppKit rejects a
-            // second window claiming an autosave name that's still held.
-            window.setFrameAutosaveName("")
-            Self.frameOwner = nil
-        }
+        BentoWindowFrame.release(window)
         // Free every session's surfaces BEFORE AppKit tears the window down.
         activeCancellables.removeAll()
         tabCancellables.removeAll()
@@ -1898,6 +1882,99 @@ final class TerminalSessionWindow: NSWindow {
     override func sendEvent(_ event: NSEvent) {
         if event.type == .rightMouseDown, onRightClick?(event.locationInWindow) == true { return }
         super.sendEvent(event)
+    }
+
+    /// **Every** Bento window is built here — with a session or without one.
+    ///
+    /// The launcher used to build its own `NSWindow` with its own style mask and
+    /// nothing else, which made it a different kind of window that merely looked
+    /// adjacent: no toolbar, no tab group, no frame autosave. Every one of those
+    /// was a separate visible bug, and they were one bug. A window with no
+    /// session is not a different window; it is this window with nothing in it
+    /// yet, so it is dressed by the same function and only its CONTENT differs.
+    @MainActor
+    static func makeShell() -> TerminalSessionWindow {
+        let win = TerminalSessionWindow(
+            contentRect: NSRect(origin: .zero, size: TerminalWindowManager.defaultContentSize),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        // Native window tabs: same identifier → one tab group, and AppKit hides
+        // the tab bar entirely at one tab, which is why a session strip only
+        // appears once there is more than one session to switch between.
+        win.tabbingIdentifier = "bento.terminal"
+        // `.preferred` when we're about to tab: `.automatic` defers to the
+        // system preference at a moment AppKit picks, and with this window's
+        // hidden title + full-size content that ended in windows joined to a
+        // group whose tab bar never appeared — sessions became invisible
+        // 33-pixel strips offscreen. Stating the intent avoids the ambiguity;
+        // `tabbingIdentifier` is set either way, so Merge All Windows and
+        // dragging a tab out still work in both modes.
+        win.tabbingMode = BentoTerminalWindow.shouldOpenAsTab ? .preferred : .automatic
+        win.titleVisibility = .hidden
+        // Full-size content: the sidebar column runs the window's full height
+        // (Finder-style) and the title bar blends into the terminal — the
+        // window chrome wears the ghostty theme's background.
+        win.styleMask.insert(.fullSizeContentView)
+        win.titlebarAppearsTransparent = true
+        win.titlebarSeparatorStyle = .none
+        return win
+    }
+}
+
+/// The one saved frame every Bento window shares, and who currently holds it.
+///
+/// Frame autosave is per WINDOW NAME, and every Bento window — session or
+/// launcher — wants the same remembered geometry, so they would all fight over
+/// one name. AppKit settles it by refusing: a second live window claiming a
+/// held name silently gets nothing. Whichever window opens into an empty screen
+/// therefore holds the name, and the others ride its tab group's frame.
+///
+/// This was a one-shot `didRestoreFrame` flag once, set on the first window of
+/// the process and never cleared, so after closing every window the next one
+/// got no name at all — it neither restored the size you left nor recorded the
+/// one you set. Ownership is released on close now, so the next window into an
+/// empty screen picks it up again.
+///
+/// It lives outside `TerminalWindowManager` because the manager is not the only
+/// thing that opens a Bento window: the launcher does too, and the launcher
+/// having no way to RECORD a frame is exactly why resizing it used to be
+/// thrown away. Claiming is idempotent for the current owner, which is what
+/// makes filling a launcher in place a no-op here rather than a handover — the
+/// name never passes through an unowned moment.
+@MainActor
+enum BentoWindowFrame {
+    nonisolated static let name = "BentoMainTerminalWindow"
+
+    private static weak var owner: NSWindow?
+
+    static func owns(_ win: NSWindow) -> Bool { owner === win }
+
+    /// Give `win` the autosave name if nobody holds it. Returns whether `win`
+    /// holds it afterwards.
+    @discardableResult
+    static func claim(_ win: NSWindow) -> Bool {
+        if owner === win { return true }
+        guard owner == nil else { return false }
+        owner = win
+        win.setFrameAutosaveName(name)
+        return true
+    }
+
+    /// Record the arrangement the user is leaving and hand the name back.
+    ///
+    /// The save is unconditional. Autosave only fires on move/resize and only
+    /// for the name's owner, so without this a window closed straight after a
+    /// resize — or any window that isn't the owner — left nothing behind. Tabs
+    /// in a group share one frame, so whichever closes last writes the same
+    /// answer.
+    static func release(_ win: NSWindow) {
+        win.saveFrame(usingName: name)
+        guard owner === win else { return }
+        // Hand the name back BEFORE the window goes away: AppKit rejects a
+        // second window claiming an autosave name that is still held.
+        win.setFrameAutosaveName("")
+        owner = nil
     }
 }
 
