@@ -1,66 +1,27 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-  <!--
-    配色策略:
-      外壳 = 偏冷深色 (像 IDE / 终端窗口背景)
-      食物 = 保持温暖 (米饭/三文鱼/青蔬保留 bento 识别度)
-      prompt 绿 = 鲜亮的 terminal-cursor 绿 (#4ADE80, Tailwind emerald)
-    冷框 + 暖内的对比 = dev tool + 便当意象共存
-  -->
-
-  <!-- 外壳: 深冷灰,像代码编辑器侧栏 -->
-  <rect width="1024" height="1024" fill="#16181D"/>
-
-  <!-- ─── 上左 · 命令行 (320×328,外角=TL) ────────── -->
-  <path d="M 224 80 H 384 A 16 16 0 0 1 400 96 V 392
-           A 16 16 0 0 1 384 408 H 96 A 16 16 0 0 1 80 392
-           V 224 A 144 144 0 0 1 224 80 Z"
-        fill="#0D0F13"/>
-  <!-- > 箭头 -->
-  <path d="M 149 174 L 233 244 L 149 314"
-        stroke="#4ADE80" stroke-width="32" fill="none"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- _ 光标 -->
-  <rect x="253" y="296" width="78" height="22" rx="11" fill="#4ADE80"/>
-
-  <!-- ─── 上右 · 三文鱼 (496×328,外角=TR) ───────── -->
-  <path d="M 464 80 H 800 A 144 144 0 0 1 944 224 V 392
-           A 16 16 0 0 1 928 408 H 464 A 16 16 0 0 1 448 392
-           V 96 A 16 16 0 0 1 464 80 Z"
-        fill="#E89B7C"/>
-  <path d="M 488 200 Q 696 270 904 220"
-        stroke="#FFFFFF" stroke-width="22" fill="none"
-        opacity="0.55" stroke-linecap="round"/>
-  <path d="M 488 290 Q 696 340 904 310"
-        stroke="#FFFFFF" stroke-width="14" fill="none"
-        opacity="0.45" stroke-linecap="round"/>
-
-  <!-- ─── 下左 · 米饭 (656×488,外角=BL) ─────────── -->
-  <path d="M 96 456 H 720 A 16 16 0 0 1 736 472 V 928
-           A 16 16 0 0 1 720 944 H 224 A 144 144 0 0 1 80 800
-           V 472 A 16 16 0 0 1 96 456 Z"
-        fill="#F0EAD8"/>
-  <g fill="#D6CAB0" opacity="0.82">
-    <ellipse cx="200" cy="560" rx="14" ry="9" transform="rotate(-22 200 560)"/>
-    <ellipse cx="380" cy="540" rx="14" ry="9" transform="rotate(18 380 540)"/>
-    <ellipse cx="560" cy="565" rx="14" ry="9" transform="rotate(-12 560 565)"/>
-    <ellipse cx="280" cy="660" rx="14" ry="9" transform="rotate(28 280 660)"/>
-    <ellipse cx="470" cy="680" rx="14" ry="9" transform="rotate(-18 470 680)"/>
-    <ellipse cx="640" cy="660" rx="14" ry="9" transform="rotate(20 640 660)"/>
-    <ellipse cx="180" cy="770" rx="14" ry="9" transform="rotate(-8 180 770)"/>
-    <ellipse cx="370" cy="790" rx="14" ry="9" transform="rotate(15 370 790)"/>
-    <ellipse cx="560" cy="775" rx="14" ry="9" transform="rotate(-25 560 775)"/>
-    <ellipse cx="270" cy="880" rx="14" ry="9" transform="rotate(22 270 880)"/>
-    <ellipse cx="470" cy="895" rx="14" ry="9" transform="rotate(-15 470 895)"/>
-    <ellipse cx="650" cy="880" rx="14" ry="9" transform="rotate(10 650 880)"/>
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#424850"/><stop offset="1" stop-color="#262A32"/></linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#171B22"/><stop offset="1" stop-color="#0B0D11"/></linearGradient>
+    <linearGradient id="panelLit" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2E3542"/><stop offset="1" stop-color="#191E27"/></linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.11"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#shell)"/>
+  <path d="M 224 80 H 404 A 16 16 0 0 1 420 96 V 412 A 16 16 0 0 1 404 428 H 96 A 16 16 0 0 1 80 412 V 224 A 144 144 0 0 1 224 80 Z" fill="url(#panelLit)"/>
+  <path d="M 464 80 H 800 A 144 144 0 0 1 944 224 V 392 A 16 16 0 0 1 928 408 H 464 A 16 16 0 0 1 448 392 V 96 A 16 16 0 0 1 464 80 Z" fill="url(#panel)"/>
+  <path d="M 96 456 H 720 A 16 16 0 0 1 736 472 V 928 A 16 16 0 0 1 720 944 H 224 A 144 144 0 0 1 80 800 V 472 A 16 16 0 0 1 96 456 Z" fill="url(#panel)"/>
+  <path d="M 800 456 H 928 A 16 16 0 0 1 944 472 V 800 A 144 144 0 0 1 800 944 H 800 A 16 16 0 0 1 784 928 V 472 A 16 16 0 0 1 800 456 Z" fill="url(#panel)"/>
+  <g fill="#8A93A6" opacity="0.13">
+    <rect x="136" y="600" width="440" height="26" rx="13"/>
+    <rect x="136" y="690" width="300" height="26" rx="13"/>
+    <rect x="136" y="780" width="530" height="26" rx="13"/>
   </g>
-
-  <!-- ─── 下右 · 青蔬 (160×488,外角=BR) ─────────── -->
-  <path d="M 800 456 H 928 A 16 16 0 0 1 944 472 V 800
-           A 144 144 0 0 1 800 944 H 800 A 16 16 0 0 1 784 928
-           V 472 A 16 16 0 0 1 800 456 Z"
-        fill="#6FA254"/>
-  <g fill="#4D7C3F" opacity="0.75">
-    <circle cx="864" cy="600" r="56"/>
-    <circle cx="864" cy="780" r="56"/>
-  </g>
+  <path d="M 143 164 L 239 244 L 143 325" stroke="#4ADE80" stroke-width="42" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="262" y="302" width="99" height="28" rx="14" fill="#4ADE80"/>
+  <path d="M 224 80 H 404 A 16 16 0 0 1 420 96 V 412 A 16 16 0 0 1 404 428 H 96 A 16 16 0 0 1 80 412 V 224 A 144 144 0 0 1 224 80 Z" fill="url(#sheen)"/><path d="M 464 80 H 800 A 144 144 0 0 1 944 224 V 392 A 16 16 0 0 1 928 408 H 464 A 16 16 0 0 1 448 392 V 96 A 16 16 0 0 1 464 80 Z" fill="url(#sheen)"/>
+  <path d="M 96 456 H 720 A 16 16 0 0 1 736 472 V 928 A 16 16 0 0 1 720 944 H 224 A 144 144 0 0 1 80 800 V 472 A 16 16 0 0 1 96 456 Z" fill="url(#sheen)"/><path d="M 800 456 H 928 A 16 16 0 0 1 944 472 V 800 A 144 144 0 0 1 800 944 H 800 A 16 16 0 0 1 784 928 V 472 A 16 16 0 0 1 800 456 Z" fill="url(#sheen)"/>
 </svg>
