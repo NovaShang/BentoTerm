@@ -23,6 +23,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     var onNewTerminal: (() -> Void)?
     var onNewPlainShell: (() -> Void)?
     var onNewSSHHost: ((String) -> Void)?
+    /// Open a tiled tmux SESSION on an ssh host (as opposed to `onNewSSHHost`,
+    /// which is a bare `ssh <host>` in a plain tab).
+    var onNewRemoteTmuxHost: ((String) -> Void)?
     var onOpenSettings: (() -> Void)?
     var onCloseWindow: (() -> Void)?
     var onRenameSession: (() -> Void)?
@@ -48,7 +51,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// Native tabs can only switch between sessions that are already open, so
     /// without this list a session running on the machine but not loaded in
     /// Bento is unreachable — the tab bar has no row for it to appear in.
-    var sessions: [(key: String, dot: NSImage?, isOpen: Bool)] = []
+    /// `key` is the session's identity (`TmuxSessionID.key`) and `label` is what
+    /// the row says. They differ for a session on an ssh host, whose row has to
+    /// name the machine — showing the bare name would present it as a local
+    /// session, and clicking it would then be a different session than it read.
+    var sessions: [(key: String, label: String, dot: NSImage?, isOpen: Bool)] = []
     var activeSessionKey: String?
     var onSelectSession: ((String) -> Void)?
 
@@ -220,7 +227,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         header.isEnabled = false
         menu.addItem(header)
         for session in sessions {
-            let item = NSMenuItem(title: session.key,
+            let item = NSMenuItem(title: session.label,
                                   action: #selector(selectSessionAction(_:)),
                                   keyEquivalent: "")
             item.target = self
@@ -229,7 +236,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             item.state = (session.key == activeSessionKey) ? .on : .off
             // A hollow dot already says "not open"; the suffix says what
             // clicking will DO, since it opens rather than switches.
-            if !session.isOpen { item.title = "\(session.key)  —  open in a new tab" }
+            if !session.isOpen { item.title = "\(session.label)  —  open in a new tab" }
             menu.addItem(item)
         }
         menu.addItem(.separator())
@@ -687,8 +694,19 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             symbol: "network", title: "New SSH Connection",
             tip: "A terminal connected to a host from your ~/.ssh/config.",
             action: nil)
-        ssh.submenu = sshHostsSubmenu()
+        ssh.submenu = sshHostsSubmenu(action: #selector(newSSHHostAction(_:)))
         menu.addItem(ssh)
+        // The same host list, but attaching a tmux session on the far end
+        // instead of dropping into its shell — the remote equivalent of "New
+        // Terminal", tiled panes and all. Kept as its own row rather than a
+        // modifier on the one above because the two differ in what SURVIVES:
+        // the plain connection dies with the tab, the session doesn't.
+        let sshTmux = plainItem(
+            symbol: nil, title: "New Remote tmux Session",
+            tip: "A tiled tmux session running on a host from your ~/.ssh/config.",
+            action: nil)
+        sshTmux.submenu = sshHostsSubmenu(action: #selector(newRemoteTmuxHostAction(_:)))
+        menu.addItem(sshTmux)
 
         pop(menu, from: newButton)
     }
@@ -712,7 +730,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// One item per concrete host in ~/.ssh/config (re-read on every open, so
     /// config edits show up immediately); a disabled hint when there are none —
     /// including a missing or unreadable config.
-    private func sshHostsSubmenu() -> NSMenu {
+    private func sshHostsSubmenu(action: Selector) -> NSMenu {
         let menu = NSMenu()
         let hosts = SSHConfigHosts.hosts()
         if hosts.isEmpty {
@@ -720,7 +738,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             return menu
         }
         for host in hosts {
-            let item = NSMenuItem(title: host, action: #selector(newSSHHostAction(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: host, action: action, keyEquivalent: "")
             item.target = self
             item.representedObject = host
             menu.addItem(item)
@@ -761,6 +779,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func newPanePathCommandAction() { BentoPaneAction.dispatch(BentoPaneAction.splitPathCommand) }
     @objc private func newSSHHostAction(_ sender: NSMenuItem) {
         if let host = sender.representedObject as? String { onNewSSHHost?(host) }
+    }
+    @objc private func newRemoteTmuxHostAction(_ sender: NSMenuItem) {
+        if let host = sender.representedObject as? String { onNewRemoteTmuxHost?(host) }
     }
     @objc private func settingsAction() { onOpenSettings?() }
     @objc private func renameAction() { onRenameSession?() }

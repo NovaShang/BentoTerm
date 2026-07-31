@@ -13,12 +13,33 @@ public final class LocalPtyTransport: TerminalTransport, @unchecked Sendable {
     public var onDataReceived: (@Sendable (Data) -> Void)?
     public var onStateChanged: (@Sendable (TerminalConnectionState) -> Void)?
 
-    /// A pty on this machine — bulk reads (deep `capture-pane` seeds) are cheap.
-    public var isLocalLink: Bool { true }
+    private let _isLocalLink: Bool
+    private let _startsInTmuxControlMode: Bool
 
-    /// `command` overrides the default login shell (e.g. a `tmux -CC` invocation).
-    public init(command: [String]? = nil) {
+    /// A pty on this machine is only a *local link* when what runs in it stays
+    /// on this machine. This used to be hardcoded `true`, which was fine while
+    /// the pty always held a login shell — but the pty is also how we run
+    /// `ssh`, and then every byte crosses a network. Reporting `true` there
+    /// asked the seed path for 2000 lines of `capture-pane` per pane over the
+    /// link, which is exactly the first-paint stall the flag exists to avoid.
+    public var isLocalLink: Bool { _isLocalLink }
+
+    public var startsInTmuxControlMode: Bool { _startsInTmuxControlMode }
+
+    /// `command` overrides the default login shell (e.g. `["ssh", "-t", host]`).
+    ///
+    /// `isLocalLink` defaults to "a bare pty is local", which is true for the
+    /// login shell and for local `exec`-style commands; callers that put a
+    /// network hop in `command` pass `false`. `startsInTmuxControlMode` says
+    /// `command` *is* a `tmux -CC` invocation, so nothing should be typed at it.
+    public init(
+        command: [String]? = nil,
+        isLocalLink: Bool = true,
+        startsInTmuxControlMode: Bool = false
+    ) {
         self.command = command
+        self._isLocalLink = isLocalLink
+        self._startsInTmuxControlMode = startsInTmuxControlMode
         pty.onData = { [weak self] data in self?.onDataReceived?(data) }
         pty.onExit = { [weak self] in self?.setState(.disconnected) }
     }

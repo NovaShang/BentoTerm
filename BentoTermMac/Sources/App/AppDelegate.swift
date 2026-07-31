@@ -7,17 +7,21 @@ import SwiftUI
 /// session list.
 ///
 /// The poll is not cosmetic and must not be mistaken for leftover menu-bar
-/// machinery: `refresh()` feeds `BentoTerminalWindow.setServerSessions(...)`,
+/// machinery: `refresh()` feeds `BentoTerminalWindow.setLocalServerSessions(…)`,
 /// which backs the window's tab strip AND the filter `openMainWindow()` uses to
 /// decide which remembered sessions still exist. Without it, sessions that died
 /// on the server get "reopened" as fresh empty ones.
+///
+/// It polls the LOCAL tmux server, and that is all it can speak for. Whether an
+/// open window's session is still alive is asked of that window's own control
+/// channel instead — the only thing that knows which machine to ask.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var tmuxSessions: [TmuxSession] = []
     /// Windows per session, fetched alongside the session list so the
     /// menu's submenu can render without a per-open async fetch (NSMenu
     /// would already be on screen by the time tmux replied).
-    @Published var tmuxWindows: [String: [TmuxWindow]] = [:]
+    @Published var tmuxWindows: [LocalTmuxSessionName: [TmuxWindow]] = [:]
 
     private var pollTimer: Timer?
     /// KVO token for `NSApp.effectiveAppearance` — drives follow-system light/dark.
@@ -46,13 +50,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         BentoTerminalWindow.onOpenSettings = { [weak self] in
             self?.openSettings()
         }
-        // Kill a session reliably via a one-shot `tmux kill-session`, then refresh
-        // so the strip reflects it immediately (don't wait for the 5s poll).
-        BentoTerminalWindow.killSessionCLI = { [weak self] name in
-            Task { @MainActor in
-                try? await TmuxCLI.kill(session: name)
-                await self?.refresh()
-            }
+        // A window changed something about the local server (killed its
+        // session) — re-poll now so the strip reflects it immediately instead
+        // of up to 5s later. The kill itself happens over that window's own
+        // control channel; this hook is only the refresh.
+        BentoTerminalWindow.onLocalServerChanged = { [weak self] in
+            Task { @MainActor in await self?.refresh() }
         }
         RemovedFeatureCleanup.purgeTelemetryDefaults()
 
@@ -71,6 +74,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 case "plain": BentoTerminalWindow.newWindowNoTmux()
                 case "settings": self.openSettings()
                 default: Windows.show(.firstRun)
+                }
+                return
+            }
+            // Test hook: open exactly these sessions, by KEY, instead of
+            // restoring. Keys, so a remote session can be named
+            // (`ssh://gpu-box/foo`) — the point is being able to bring up a
+            // local and a remote session with the SAME NAME side by side and
+            // check they stay distinct, which is not something UI scripting can
+            // set up reliably. Comma-separated; it also keeps a test run from
+            // touching whatever the user actually had open.
+            if let list = ProcessInfo.processInfo.environment["BENTO_OPEN_SESSIONS"] {
+                for key in list.split(separator: ",").map(String.init) where !key.isEmpty {
+                    BentoTerminalWindow.focusOrOpen(sessionKey: key)
+                }
+                // Test hook: N seconds later, run Kill Session on whichever
+                // window ended up frontmost (the last one opened above). Only
+                // meaningful alongside BENTO_OPEN_SESSIONS, which is why it is
+                // read here — see
+                // `BentoTerminalWindow.killFrontmostSessionSkippingConfirmation`
+                // for why a hook is needed at all.
+                if let after = ProcessInfo.processInfo.environment["BENTO_TEST_KILL_SESSION_AFTER"],
+                   let seconds = Double(after) {
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(seconds))
+                        BentoTerminalWindow.killFrontmostSessionSkippingConfirmation()
+                    }
                 }
                 return
             }
@@ -251,12 +280,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let sessions = await TmuxCLI.listSessions()
         tmuxSessions = sessions
         // Drive the terminal window's tab strip with the full session list.
-        BentoTerminalWindow.setServerSessions(sessions.map(\.name))
+        BentoTerminalWindow.setLocalServerSessions(sessions.map(\.name))
         // Fan-out the per-session window queries concurrently. Each call
         // is a single `tmux list-windows` shell-out (a few ms), so even
         // with many sessions this finishes well under the 5s poll period.
-        var fresh: [String: [TmuxWindow]] = [:]
-        await withTaskGroup(of: (String, [TmuxWindow]).self) { group in
+        var fresh: [LocalTmuxSessionName: [TmuxWindow]] = [:]
+        await withTaskGroup(of: (LocalTmuxSessionName, [TmuxWindow]).self) { group in
             for s in sessions {
                 group.addTask { (s.name, await TmuxCLI.listWindows(session: s.name)) }
             }

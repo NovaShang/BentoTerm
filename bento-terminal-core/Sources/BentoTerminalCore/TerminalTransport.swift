@@ -49,6 +49,19 @@ public protocol TerminalTransport: AnyObject, Sendable {
     /// over SSH, where the bytes are also decrypted and drained on the
     /// main thread of a phone.
     var isLocalLink: Bool { get }
+
+    /// Whether `startShell` puts a `tmux -CC` client on the wire directly,
+    /// rather than a login shell that we then type a launch line into.
+    ///
+    /// The typed launch is a race by construction: the write is gated on a
+    /// fixed 500ms sleep, and on a host that asks for a password or a 2FA code
+    /// the launch line lands *in the prompt*. A transport that can carry the
+    /// tmux invocation as its own argument (`ssh -t host "tmux -CC …"`) has no
+    /// such window — authentication finishes before tmux starts — so it says so
+    /// here and the view model skips both the shell-discovery phase and the
+    /// launch write. The `-CC` greeting is still awaited either way; it comes
+    /// off the byte stream and does not care who asked for it.
+    var startsInTmuxControlMode: Bool { get }
 }
 
 public extension TerminalTransport {
@@ -62,6 +75,9 @@ public extension TerminalTransport {
     /// Default to the conservative answer — anything that hasn't declared itself
     /// local is assumed to be paying for every byte.
     var isLocalLink: Bool { false }
+
+    /// Default: a login shell, which the view model drives by typing.
+    var startsInTmuxControlMode: Bool { false }
 }
 
 /// Host-app services the cross-platform TerminalViewModel needs but that are

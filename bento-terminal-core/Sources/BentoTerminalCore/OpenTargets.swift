@@ -181,10 +181,12 @@ import AppKit
 ///
 /// **Where the session list comes from.** The live `tmux ls` result is polled
 /// every 5s by the Mac app and pushed *into* core via
-/// `BentoTerminalWindow.setServerSessions` — the dependency already points app
-/// → core, and this reads the value where it lands
+/// `BentoTerminalWindow.setLocalServerSessions` — the dependency already points
+/// app → core, and this reads the value where it lands
 /// (`BentoTerminalWindow.serverSessions`) rather than reaching back out to the
-/// app. Sessions this app has open are unioned in, so a cold start (poll hasn't
+/// app. That list is the LOCAL server's, so sessions open on an ssh host are
+/// deliberately excluded from it: these rows attach on the local machine, and a
+/// remote name here would create an empty local session under it. Sessions this app has open are unioned in, so a cold start (poll hasn't
 /// fired yet) still lists what's on screen. Every source is an injectable
 /// closure, which is also how the tests compose a provider with no tmux, no
 /// `~/.ssh/config` and no `UserDefaults` in sight.
@@ -241,14 +243,20 @@ public final class OpenTargetProvider {
     public func open(_ target: OpenTarget) {
         switch target.kind {
         case .tmuxSession(let name):
-            BentoTerminalWindow.focusOrOpen(session: name)
+            // `.local` explicitly: every source behind `sessionTargets` is the
+            // local server's list, and a bare name would be ambiguous now that
+            // a session can live on an ssh host.
+            BentoTerminalWindow.focusOrOpen(.local(name))
 
         case .sshHost(let alias):
-            // Plain `ssh <alias>` in a no-tmux tab, deliberately. A "connect
-            // with tmux" variant would have to namespace session keys per host
-            // and fix every `TmuxCLI` call site — all of which run against the
-            // LOCAL server — so offering it today would silently drive the
-            // wrong machine.
+            // Plain `ssh <alias>` in a no-tmux tab. The reason this used to be
+            // the only option — that session keys weren't namespaced per host
+            // and every `TmuxCLI` call site ran against the local server — no
+            // longer holds: keys are `TmuxSessionID`s now and the local-only
+            // operations take a `LocalTmuxSessionName` that a remote session
+            // cannot produce. A "connect with tmux" row is therefore just
+            // `BentoTerminalWindow.newTmuxWindow(host: alias)`, and belongs to
+            // whoever adds the second row and decides what names it offers.
             BentoTerminalWindow.newSSHWindow(host: alias)
 
         case .recentLaunch(let record):

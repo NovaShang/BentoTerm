@@ -4,6 +4,14 @@ import BentoTerminalCore
 /// TmuxCLI shells out to a tmux binary. The Mac app never proxies the
 /// tmux protocol — the agent wizard builds a command sequence and `exec`s
 /// it. Binary resolution (system vs bundled) lives in TmuxResolver.
+/// Every function here runs the `tmux` binary on THIS machine, so every one of
+/// them takes a `LocalTmuxSessionName` rather than a bare `String`. That is the
+/// whole point of the type: a window attached to a session on an ssh host
+/// cannot hand its session name to `kill` or `rename`, because the only way to
+/// make one of these from a `TmuxSessionID` is a failable initializer that
+/// returns nil for anything remote. The bug it forecloses is not cosmetic —
+/// "Kill Session" in a remote window used to destroy the LOCAL session that
+/// happened to share the name.
 enum TmuxCLI {
     /// Backwards-compatible accessor. Returns the resolved tmux URL, or
     /// nil if neither system nor bundled tmux is available. Callers that
@@ -29,7 +37,7 @@ enum TmuxCLI {
                 activity = .distantPast
             }
             sessions.append(TmuxSession(
-                name: parts[0],
+                name: LocalTmuxSessionName(onLocalServer: parts[0]),
                 attached: parts[1] == "1",
                 lastActivity: activity
             ))
@@ -131,7 +139,8 @@ enum TmuxCLI {
     /// an independent client — clicking three different windows from
     /// the submenu opens three terminal windows, which is what the user
     /// expects there.
-    static func attach(session: String, window: Int? = nil) async throws {
+    static func attach(session localSession: LocalTmuxSessionName, window: Int? = nil) async throws {
+        let session = localSession.rawValue
         let tmux = locate()?.path ?? "tmux"
         let kind = TerminalAppKind.preferred
         let target = window.map { "\(session):\($0)" }
@@ -141,13 +150,13 @@ enum TmuxCLI {
         // session is handled inside the native UI; the `window` arg is ignored
         // here until per-window tabs land.)
         if kind.isNative {
-            await MainActor.run { BentoTerminalWindow.newWindow(session: session) }
+            await MainActor.run { BentoTerminalWindow.focusOrOpen(localSession.id) }
             return
         }
 
         if kind.supportsTmuxControlMode {
             // CC path: reuse an existing control client if one exists.
-            if let cc = await firstControlModeClient(session: session) {
+            if let cc = await firstControlModeClient(session: localSession) {
                 if let target {
                     _ = try await runCapture(URL(fileURLWithPath: tmux), [
                         "switch-client", "-c", cc, "-t", target
@@ -181,9 +190,9 @@ enum TmuxCLI {
     /// `session` in control mode (i.e. iTerm2 CC), or nil if none.
     /// `client_flags` contains "control" for CC clients; non-CC clients
     /// have flags like "active,readonly" instead.
-    private static func firstControlModeClient(session: String) async -> String? {
+    private static func firstControlModeClient(session: LocalTmuxSessionName) async -> String? {
         guard let rows = await captureRows([
-            "list-clients", "-t", session, "-F", "#{client_tty}|#{client_flags}"
+            "list-clients", "-t", session.rawValue, "-F", "#{client_tty}|#{client_flags}"
         ]) else { return nil }
         for parts in rows {
             guard parts.count == 2 else { continue }
@@ -197,7 +206,8 @@ enum TmuxCLI {
     /// Enumerate every window inside `session`. Used to drive the
     /// per-session submenu so users can jump straight to "the claude
     /// window" instead of attaching + typing prefix-n a few times.
-    static func listWindows(session: String) async -> [TmuxWindow] {
+    static func listWindows(session localSession: LocalTmuxSessionName) async -> [TmuxWindow] {
+        let session = localSession.rawValue
         // Format mirrors listSessions: pipe-separated fields, easy to
         // split unambiguously since tmux disallows `|` in names.
         // index | name | active | pane_count
@@ -211,7 +221,7 @@ enum TmuxCLI {
                 continue
             }
             windows.append(TmuxWindow(
-                session: session,
+                session: localSession,
                 index: idx,
                 name: parts[1],
                 active: parts[2] == "1",
@@ -237,15 +247,15 @@ enum TmuxCLI {
     /// Kill a tmux session. Any Terminal windows attached to it exit.
     /// `=` forces an exact-name target — a bare `-t foo` prefix-matches and
     /// could kill `foo2` instead.
-    static func kill(session: String) async throws {
+    static func kill(session: LocalTmuxSessionName) async throws {
         guard let tmux = locate() else { return }
-        _ = try await runCapture(tmux, ["kill-session", "-t", "=" + session])
+        _ = try await runCapture(tmux, ["kill-session", "-t", "=" + session.rawValue])
     }
 
     /// Rename a tmux session (exact-name target, same as `kill`).
-    static func rename(session: String, to newName: String) async throws {
+    static func rename(session: LocalTmuxSessionName, to newName: String) async throws {
         guard let tmux = locate() else { return }
-        _ = try await runCapture(tmux, ["rename-session", "-t", "=" + session, newName])
+        _ = try await runCapture(tmux, ["rename-session", "-t", "=" + session.rawValue, newName])
     }
 
     // MARK: - helpers

@@ -103,7 +103,10 @@ struct TerminalWrapperView: View {
         }
         .alert("Kill this session?", isPresented: $pendingKillSession) {
             Button("Kill Session", role: .destructive) {
-                viewModel.killSession()
+                // Leave the screen now; the kill awaits tmux's reply before it
+                // tears the connection down (see `killSession`), and holding
+                // the alert open for that round trip would look like a hang.
+                Task { await viewModel.killSession() }
                 dismiss()
             }
             Button("Cancel", role: .cancel) { }

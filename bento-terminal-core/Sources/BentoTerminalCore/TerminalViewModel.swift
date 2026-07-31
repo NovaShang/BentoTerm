@@ -142,6 +142,19 @@ public final class TerminalViewModel: ObservableObject {
     @Published public var availableTmuxSessions: [String] = []
     @Published public var sessionsLoading: Bool = false
 
+    /// Bumped every time `availableTmuxSessions` is re-read from the attached
+    /// tmux server over the CONTROL CHANNEL — i.e. once per answered
+    /// `list-sessions`, from the server this connection is actually on.
+    ///
+    /// This is what tells a window whether its own session still exists.
+    /// Previously that answer came from a global `tmux ls` poll of the LOCAL
+    /// machine, pushed into every window: correct only as long as every window
+    /// was local, and silently fatal once one wasn't — a remote session is
+    /// never in the local list, so its window counted four straight misses and
+    /// closed itself after about twenty seconds. Counting *this* list makes
+    /// remote and local the same case instead of two.
+    @Published public private(set) var sessionListGeneration: Int = 0
+
     /// Incremented on each state poll cycle to trigger SwiftUI re-render
     @Published public var stateVersion: Int = 0
 
@@ -491,6 +504,17 @@ public final class TerminalViewModel: ObservableObject {
         rawHistory.removeAll(keepingCapacity: true)
         guard let startedSize = await bringUpTransport() else { return }
 
+        // A transport that starts `tmux -CC` itself has NO shell on the other
+        // end — every write below is a line of text typed at a control-mode
+        // stream. Skip straight out and let `applyTmuxChoice` await the
+        // greeting. (The keychain unlock and the marker-bracketed `tmux ls` in
+        // `refreshTmuxSessions` are both shell commands; over `ssh -t host
+        // "tmux -CC …"` they would be typed into the protocol.)
+        if transport.startsInTmuxControlMode {
+            phase = .starting
+            return
+        }
+
         // Wait briefly for the shell prompt to settle.
         try? await Task.sleep(for: .milliseconds(500))
 
@@ -588,6 +612,9 @@ public final class TerminalViewModel: ObservableObject {
                     return String(parts[1])
                 }
             dlog("Found tmux sessions (control): \(self.availableTmuxSessions)")
+            // Answered by the server this connection is attached to — the only
+            // list that can speak for this window's session.
+            sessionListGeneration &+= 1
             return
         }
 
@@ -656,7 +683,21 @@ public final class TerminalViewModel: ObservableObject {
             // the just-fetched `tmux ls` output. On attach we want to keep
             // the existing session's server-side geometry; the canvas can
             // overflow the phone viewport and the user pans/zooms to see.
-            let isAttachToExisting = availableTmuxSessions.contains(name)
+            // `resizeToScreen` forces the client viewport to this device's
+            // screen, and is only ever right when we CREATED the session —
+            // shrinking one that already exists would shrink it for every other
+            // client too.
+            //
+            // Knowing which happened relies on the `tmux ls` that `connect()`
+            // ran first. A transport that starts `tmux -CC` itself has no such
+            // list (there was no shell to ask), and an empty list must not be
+            // read as "the session is new" — that is precisely the case where
+            // it is most likely to be an existing session on a machine that has
+            // been running for weeks. Leave the geometry alone; the pty was
+            // opened at the rendered grid, so the attach already reports a
+            // sensible client size.
+            let isAttachToExisting =
+                transport.startsInTmuxControlMode || availableTmuxSessions.contains(name)
             await launchTmux(
                 sessionName: name,
                 groupWith: nil,
@@ -732,10 +773,20 @@ public final class TerminalViewModel: ObservableObject {
         usingTmux = true
         activeTmuxSessionName = sessionName
 
-        let launchCmd = tmuxService.launchCommand(
-            sessionName: sessionName, groupWith: groupWith, path: path, command: command)
-        dlog("Launching tmux: \(launchCmd.trimmingCharacters(in: .whitespacesAndNewlines))")
-        transport.write(launchCmd)
+        // When the transport carried the `tmux -CC` invocation as its own
+        // argument, tmux is already coming up and there is nothing to type —
+        // writing the launch line here would send it *through* control mode as
+        // pane input. See `TerminalTransport.startsInTmuxControlMode` for why
+        // that shape exists at all (it is what makes a host that prompts for a
+        // password or a 2FA code work).
+        if transport.startsInTmuxControlMode {
+            dlog("tmux -CC launched by the transport itself — awaiting greeting")
+        } else {
+            let launchCmd = tmuxService.launchCommand(
+                sessionName: sessionName, groupWith: groupWith, path: path, command: command)
+            dlog("Launching tmux: \(launchCmd.trimmingCharacters(in: .whitespacesAndNewlines))")
+            transport.write(launchCmd)
+        }
 
         // Wait for the -CC greeting (its first %begin) instead of a fixed
         // sleep: commands sent before tmux attaches would be typed into the
@@ -1511,9 +1562,26 @@ public final class TerminalViewModel: ObservableObject {
         }
     }
 
-    public func killSession() {
-        if let name = activeTmuxSessionName {
-            tmuxService.sendFireAndForget(.killSession(name: name))
+    /// Kill THIS window's session, over this window's own control channel.
+    ///
+    /// The channel is the only thing that knows which tmux server the session
+    /// is on. Shelling out to the local `tmux` binary instead — which is what
+    /// the macOS window used to do — kills whatever the *local* server has by
+    /// that name, and for a session on an ssh host that is a different session
+    /// with different processes in it.
+    ///
+    /// It is `async` because the fire-and-forget version raced: `disconnect()`
+    /// tears the pty down, and a `kill-session` still sitting in the write
+    /// buffer died with it, leaving the session alive and the next poll
+    /// resurrecting it. Awaiting the response means tmux has acted (or the
+    /// send timed out, on a connection already broken enough that the session
+    /// is unreachable anyway) before anything is torn down.
+    public func killSession() async {
+        if usingTmux, let name = activeTmuxSessionName {
+            let resp = await tmuxService.send(.killSession(name: name), timeout: .seconds(5))
+            // tmux commonly kills the client along with the session, so a
+            // timeout here is expected rather than a failure — log, don't warn.
+            if resp.isError { dlog("kill-session \(name): \(resp.output)") }
         }
         disconnect()
     }
@@ -1832,6 +1900,7 @@ public final class TerminalViewModel: ObservableObject {
         // another list-panes every 2s and floods the response queue.
         statePollingTask?.cancel()
         statePollingTask = Task { [weak self] in
+            var tick = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self, !Task.isCancelled else { break }
@@ -1840,6 +1909,13 @@ public final class TerminalViewModel: ObservableObject {
                 // polling list-panes is how the GUI learns to forward the mouse.
                 await self.refreshPanes()
                 await self.updatePaneStates()
+                // Every third tick (~6s), re-read the session list from THIS
+                // connection's server. One extra `list-sessions` per window is
+                // cheap even over ssh, and it is what lets a window notice that
+                // its session was killed from somewhere else — on whichever
+                // machine that session actually lives.
+                tick += 1
+                if tick % 3 == 0 { await self.refreshTmuxSessions() }
             }
         }
     }

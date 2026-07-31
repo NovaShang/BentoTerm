@@ -35,36 +35,55 @@ public enum BentoTerminalWindow {
     /// App-provided hooks for toolbar actions that live in the app target.
     public static var onNewAgentSession: (() -> Void)?
     public static var onOpenSettings: (() -> Void)?
-    /// Kill a tmux session by name via a one-shot CLI command (reliable —
-    /// independent of any control-mode connection). Wired in the app target.
-    public static var killSessionCLI: ((String) -> Void)?
+    /// The local `tmux ls` poll wants to run as soon as something changed here,
+    /// rather than up to 5s later. Wired in the app target.
+    public static var onLocalServerChanged: (() -> Void)?
 
-    /// Session names currently open as tabs (drives the ✓ in the Sessions menu).
+    /// Session KEYS currently open as tabs (drives the ✓ in the Sessions menu).
+    /// Keys, not names: a remote `bento` and a local `bento` are two sessions
+    /// and must not tick each other's box. See `TmuxSessionID.key`.
     public static var openSessionKeys: Set<String> { Set(managers.map(\.tab.sessionKey)) }
+
+    /// The identities of every open session, for callers that need to tell
+    /// local from remote rather than just "is it open".
+    public static var openSessionIDs: [TmuxSessionID] { managers.map(\.tab.id) }
 
     /// Whether any session window is up. A window being built isn't in
     /// `managers` yet, so this answers "am I opening into an empty screen?".
     static var hasOpenWindows: Bool { !managers.isEmpty }
 
     /// Select a session (loading it if needed), or open the window if none yet.
-    public static func focusOrOpen(session name: String) {
-        if let m = manager(for: name) {
+    /// Takes a KEY so a menu item can name a remote session unambiguously; an
+    /// unparseable key is ignored rather than guessed at.
+    public static func focusOrOpen(sessionKey key: String) {
+        guard let id = TmuxSessionID(key: key) else { return }
+        focusOrOpen(id)
+    }
+
+    public static func focusOrOpen(_ id: TmuxSessionID) {
+        if let m = manager(for: id.key) {
             m.bringToFront()
         } else {
-            newWindow(session: name)
+            open(choice: .createOrAttach(name: id.name), server: id.server,
+                 title: titleFor(id))
         }
     }
 
-    /// Pushed from the app's `tmux ls` poll so the tab strip lists every session
-    /// on the machine (loaded or not).
-    public static func setServerSessions(_ names: [String]) {
+    /// Pushed from the app's `tmux ls` poll: every session on the LOCAL server.
+    ///
+    /// This is now only the *dormant sessions* list — the names a window can
+    /// offer to open that aren't open yet. It deliberately no longer decides
+    /// whether an open window's session is still alive: that answer belongs to
+    /// the window's own control channel, which is the only thing that knows
+    /// which server to ask (`TerminalViewModel.sessionListGeneration`).
+    public static func setLocalServerSessions(_ names: [LocalTmuxSessionName]) {
         knownServerSessions = names
-        for m in managers { m.updateServerSessions(names) }
+        for m in managers { m.updateLocalServerSessions(names) }
     }
 
     /// The last `tmux ls` the app pushed in. Kept here (not only fanned out to
     /// the managers) because the reopen path runs when there are none.
-    private static var knownServerSessions: [String] = []
+    private static var knownServerSessions: [LocalTmuxSessionName] = []
 
     /// Every session on the local server, as far as this process knows: the
     /// last `tmux ls` the app pushed in, plus anything we have open (the poll
@@ -75,8 +94,13 @@ public enum BentoTerminalWindow {
         var seen = Set<String>()
         // Plain (no-tmux) tabs keep a sessionKey too, but there's no session
         // behind it — attaching to one would create an empty session by that
-        // name, so they stay out.
-        return (knownServerSessions + managers.map(\.tab).filter { !$0.isPlain }.map(\.sessionKey))
+        // name, so they stay out. So do sessions on an ssh host, for the same
+        // reason: the launcher attaches on the LOCAL server, and a remote name
+        // offered here would create an empty local session under it.
+        let open = managers.map(\.tab)
+            .filter { !$0.isPlain && $0.id.isLocal }
+            .map(\.id.name)
+        return (knownServerSessions.map(\.rawValue) + open)
             .filter { seen.insert($0).inserted }
     }
 
@@ -96,6 +120,19 @@ public enum BentoTerminalWindow {
     /// Close the terminal window (sessions keep running on the server; the next
     /// open reconnects them). The red traffic-light button does the same.
     public static func closeMainWindow() { frontmostManager()?.requestClose() }
+
+    /// Test hook: run Kill Session on the frontmost window, skipping ONLY the
+    /// confirmation alert (see `BENTO_TEST_KILL_SESSION_AFTER`).
+    ///
+    /// Kill Session lives in a toolbar `NSMenu` and there is no menu-bar item
+    /// for it, so there is no scriptable route to the thing that most needs
+    /// verifying: that killing from a REMOTE window leaves a local session of
+    /// the same name alone. This enters the real `performKillSession`, so the
+    /// path under test is the shipping one — the alert it skips is a
+    /// confirmation, not the mechanism.
+    public static func killFrontmostSessionSkippingConfirmation() {
+        frontmostManager()?.killActiveSessionWithoutConfirmation()
+    }
 
     /// Menu-bar command: hand sizing back to this window. A one-shot re-fit
     /// used to live here and looked broken — tmux recomputes a window's size
@@ -133,7 +170,7 @@ public enum BentoTerminalWindow {
         // to create. An empty poll means we haven't heard from tmux yet — trust
         // the list rather than throw it away.
         if !knownServerSessions.isEmpty {
-            let live = Set(knownServerSessions)
+            let live = Set(knownServerSessions.map(\.rawValue))
             last = last.filter { live.contains($0) }
         }
         if last.isEmpty {
@@ -141,6 +178,7 @@ public enum BentoTerminalWindow {
         } else {
             for name in last { newWindow(session: name) }
         }
+        // Only LOCAL sessions are in `last` — see `persistOpenSessions`.
         // Front the FIRST one reopened, not the last: the list is in creation
         // order, so the first is the session this window group started as.
         (managers.first ?? frontmostManager())?.bringToFront()
@@ -149,7 +187,24 @@ public enum BentoTerminalWindow {
     static func persistOpenSessions() {
         // Only tmux sessions are reconnectable — plain tabs vanish on close, so
         // they never go into the "reopen last session" list.
-        let names = managers.map(\.tab).filter { !$0.isPlain }.map(\.sessionKey)
+        //
+        // Sessions on an ssh host are deliberately left out as well, and it is
+        // worth saying why, because "reopen what was open" would seem to want
+        // them. Reopening means `new-session -A`, which CREATES when the name
+        // is absent — which is why `openMainWindow` first prunes the list
+        // against the sessions the server actually still has. For a remote host
+        // that check is a network round trip that can hang, or stop on a
+        // password / 2FA prompt, before the app has put a single window on
+        // screen; and skipping the check is how you get a phantom empty session
+        // created on the build box every time the Dock icon is clicked. So a
+        // remote session is scoped to the run that opened it. The key format
+        // already carries the host (`ssh://host/name`), so a later step that
+        // wants to offer "reopen bento on gpu-box" as a deliberate, user-driven
+        // action has everything it needs — it just must not happen unasked at
+        // launch.
+        let names = managers.map(\.tab)
+            .filter { !$0.isPlain && $0.id.isLocal }
+            .map(\.sessionKey)
         UserDefaults.standard.set(names, forKey: lastSessionsKey)
     }
 
@@ -164,7 +219,21 @@ public enum BentoTerminalWindow {
     }
 
     public static func newWindow(session: String = defaultSessionName) {
-        open(choice: .createOrAttach(name: session), title: titleFor(session))
+        let id = TmuxSessionID.local(session)
+        open(choice: .createOrAttach(name: session), server: .local, title: titleFor(id))
+    }
+
+    /// Open a tmux session on a REMOTE host over ssh, tiled exactly like a
+    /// local one. `host` is an alias from the user's `~/.ssh/config`; how to
+    /// actually reach it is ssh's problem, not ours.
+    ///
+    /// The whole remote capability is this one line plus an honest identity:
+    /// `tmux -CC` is parsed entirely client-side off the byte stream, so once
+    /// the bytes come from `ssh` instead of a login shell, every pane, split,
+    /// window and status detection above it works unchanged.
+    public static func newTmuxWindow(host: String, session: String = defaultSessionName) {
+        let id = TmuxSessionID.ssh(host: host, name: session)
+        open(choice: .createOrAttach(name: session), server: id.server, title: titleFor(id))
     }
 
     /// Open a brand-new uniquely-named tmux session as a tab (the tab-bar `+`).
@@ -203,7 +272,8 @@ public enum BentoTerminalWindow {
     public static func newWindow(agent spec: AgentSpec) {
         // The launch is recorded where the session is actually built
         // (`applyTmuxChoice`), so iPad's wizard gets it too.
-        open(choice: .createAgent(spec: spec), title: titleFor(spec.sessionName))
+        open(choice: .createAgent(spec: spec), server: .local,
+             title: titleFor(.local(spec.sessionName)))
     }
 
     /// Open a plain (no-tmux) tab running `ssh <host>`, where `host` is an
@@ -307,12 +377,12 @@ public enum BentoTerminalWindow {
         managers.first { $0.tab.sessionKey == key }
     }
 
-    private static func open(choice: TmuxStartChoice, title: String) {
-        let key = SessionTab.key(for: choice)
-        if let existing = manager(for: key) {
+    private static func open(choice: TmuxStartChoice, server: TmuxServer, title: String) {
+        let id = SessionTab.id(for: choice, on: server)
+        if let existing = manager(for: id.key) {
             existing.bringToFront()
         } else {
-            addWindow(for: SessionTab(choice: choice, title: title)).bringToFront()
+            addWindow(for: SessionTab(choice: choice, server: server, title: title)).bringToFront()
         }
         persistOpenSessions()
     }
@@ -323,12 +393,14 @@ public enum BentoTerminalWindow {
         var n = 1
         var key = title
         while manager(for: key) != nil { n += 1; key = "\(title) \(n)" }
-        addWindow(for: SessionTab(choice: .noTmux, title: key, key: key, command: command))
+        addWindow(for: SessionTab(choice: .noTmux, server: .local, title: key,
+                                  key: key, command: command))
             .bringToFront()
     }
 
-    static func titleFor(_ session: String) -> String {
-        session == defaultSessionName ? "BentoTerm" : "BentoTerm · \(session)"
+    static func titleFor(_ id: TmuxSessionID) -> String {
+        if !id.isLocal { return "BentoTerm · \(id.displayName)" }
+        return id.name == defaultSessionName ? "BentoTerm" : "BentoTerm · \(id.name)"
     }
 }
 
@@ -346,9 +418,12 @@ final class SessionTab {
     let paneHost: GhosttyTiledPaneHost?
     let plainSurface: GhosttyTerminalSurface?
     /// The session's identity everywhere (strip order, active selection,
-    /// persistence, the kill CLI target). A tmux rename changes that identity,
-    /// so the manager migrates this key to follow (`migrateSessionKey`).
-    fileprivate(set) var sessionKey: String
+    /// persistence). A tmux rename changes that identity, so the manager
+    /// migrates it to follow (`migrateSessionKey`) — the SERVER never changes,
+    /// only the name on it.
+    fileprivate(set) var id: TmuxSessionID
+    /// String form of `id`, for the places identity has to travel as text.
+    var sessionKey: String { id.key }
     let choice: TmuxStartChoice
     let windowTitle: String
 
@@ -363,25 +438,61 @@ final class SessionTab {
         paneHost?.activePathPreviewContext ?? plainSurface?.pathPreviewContext
     }
 
-    /// `command` overrides the plain tab's login shell (e.g. `["ssh", host]`);
-    /// tmux-backed tabs must leave it nil — the VM issues tmux itself.
-    init(choice: TmuxStartChoice, title: String, key: String? = nil, command: [String]? = nil) {
+    /// `command` overrides the plain (no-tmux) tab's login shell — a
+    /// quick-connect `["ssh", host]`, or a one-liner from the wizard.
+    ///
+    /// A tmux-backed tab must leave `command` nil for the LOCAL server (the VM
+    /// types the tmux line into a login shell). For a session on an ssh host it
+    /// is the opposite: the command is built here, below, and carries the
+    /// `tmux -CC` invocation as ssh's own argument.
+    init(choice: TmuxStartChoice, server: TmuxServer, title: String,
+         key: String? = nil, command: [String]? = nil) {
         self.choice = choice
         self.windowTitle = title
-        self.sessionKey = key ?? Self.key(for: choice)
+        self.id = key.flatMap(TmuxSessionID.init(key:)) ?? Self.id(for: choice, on: server)
         let theme = ThemeStore.shared.makeTerminalTheme()
-        let storedKey = sessionKey
+        let storedKey = id.key
         let env = TerminalEnvironment(
             idealTerminalSize: { (120, 30) },
             onSessionUpdate: { _, session, awaiting, prompt in
+                // The VM reports the session NAME; the notifier keys on
+                // IDENTITY. On a remote session those differ, and passing the
+                // bare name would let an agent waiting in `bento` on a build
+                // box overwrite the notification for the local `bento`.
+                let key = session.isEmpty
+                    ? storedKey
+                    : TmuxSessionID(server: server, name: session).key
                 MacAwaitingNotifier.shared.update(
-                    sessionKey: session.isEmpty ? storedKey : session,
-                    awaiting: awaiting, prompt: prompt)
+                    sessionKey: key, awaiting: awaiting, prompt: prompt)
             }
         )
+        let transport: LocalPtyTransport
+        if let sshHost = server.sshHost, choice != .noTmux {
+            // The tmux invocation goes in as ssh's ARGUMENT rather than being
+            // typed at a shell afterwards.
+            //
+            // Typing it is a race with the connection: the launch write is
+            // gated on a fixed 500ms sleep, which is a guess about how long a
+            // login takes. On a host that asks for a password or a 2FA code
+            // that guess is not just wrong, it is dangerous — the launch line,
+            // and then a newline, get typed into the prompt. As an argument
+            // there is no window at all: ssh does not run the command until
+            // authentication has completed, however long that takes and however
+            // many prompts it involves.
+            //
+            // `-t` forces a pty, which tmux requires; ssh otherwise allocates
+            // none when it is given a command to run.
+            let launch = Self.remoteLaunchCommand(for: choice, name: id.name)
+            transport = LocalPtyTransport(
+                command: ["ssh", "-t", sshHost, launch],
+                isLocalLink: false,
+                startsInTmuxControlMode: true)
+        } else {
+            transport = LocalPtyTransport(command: command)
+        }
         let vm = TerminalViewModel(
-            host: Host(name: "Local"),
-            transport: LocalPtyTransport(command: command),
+            host: Host(name: server.sshHost ?? "Local"),
+            transport: transport,
             environment: env)
         self.viewModel = vm
         if choice == .noTmux {
@@ -433,12 +544,31 @@ final class SessionTab {
         MacAwaitingNotifier.shared.clear(sessionKey: sessionKey)
     }
 
-    static func key(for choice: TmuxStartChoice) -> String {
+    static func id(for choice: TmuxStartChoice, on server: TmuxServer) -> TmuxSessionID {
         switch choice {
-        case .createOrAttach(let name): return name
-        case .createAgent(let spec): return spec.sessionName
-        case .shareWithDesktop(let target): return target
-        case .noTmux: return "local"
+        case .createOrAttach(let name): return TmuxSessionID(server: server, name: name)
+        case .createAgent(let spec): return TmuxSessionID(server: server, name: spec.sessionName)
+        case .shareWithDesktop(let target): return TmuxSessionID(server: server, name: target)
+        // A plain tab has no session behind it; it is deduped by title instead
+        // (see `openPlain`), and this is only its starting point.
+        case .noTmux: return .local("local")
+        }
+    }
+
+    /// The `tmux -CC …` line handed to `ssh` as its argument. Built by the same
+    /// builder the typed local path uses, so a remote session is created and
+    /// attached on exactly the same terms as a local one.
+    static func remoteLaunchCommand(for choice: TmuxStartChoice, name: String) -> String {
+        switch choice {
+        case .createAgent(let spec):
+            return TmuxControlMode.launchCommandLine(
+                sessionName: name, path: spec.workingDir,
+                command: spec.agentCommand.isEmpty ? nil : spec.agentCommand)
+        case .shareWithDesktop(let target):
+            return TmuxControlMode.launchCommandLine(
+                sessionName: "\(target)-mobile", groupWith: target)
+        case .createOrAttach, .noTmux:
+            return TmuxControlMode.launchCommandLine(sessionName: name)
         }
     }
 }
@@ -451,12 +581,17 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// The ONE session this window shows. Several sessions means several
     /// windows, joined into a native tab group — see `BentoTerminalWindow`.
     let tab: SessionTab
-    /// Every tmux session on the machine (pushed from the app's `tmux ls` poll).
-    /// Used to notice that THIS window's session died elsewhere.
-    private var serverSessions: [String] = []
-    /// Consecutive polls this window's session has been missing from `tmux ls`.
+    /// Every tmux session on the LOCAL machine (pushed from the app's `tmux ls`
+    /// poll). Only the dormant-session list for the strip — it says nothing
+    /// about whether THIS window's session is alive when this window is remote.
+    private var localServerSessions: [LocalTmuxSessionName] = []
+    /// Consecutive self-polls in which this window's session was missing from
+    /// its OWN server's session list.
     private var absentPolls = 0
     private static let absentPollsToClose = 4
+    /// The last `sessionListGeneration` acted on, so a Combine republish that
+    /// isn't a fresh list can't be counted as a miss.
+    private var lastSessionListGeneration = 0
     /// The sessions currently shown as segments (subset when overflowing).
     /// The tmux windows currently shown as segments (a subset when they
     /// overflow the strip). Sessions moved to the named button on the left.
@@ -618,7 +753,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // window / pane) instead of leaving the middle one homeless.
         toolbar.onSelectSegment = { [weak self] idx in self?.segmentPicked(idx) }
         // Open sessions raise their tab; a dormant one opens as a new tab.
-        toolbar.onSelectSession = { key in BentoTerminalWindow.focusOrOpen(session: key) }
+        toolbar.onSelectSession = { key in BentoTerminalWindow.focusOrOpen(sessionKey: key) }
         toolbar.onOpenSearch = { [weak self] in
             guard let self else { return }
             self.tab.paneHost?.presentCommandPalette(from: self.toolbar.searchAnchor)
@@ -627,6 +762,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onNewTerminal = { BentoTerminalWindow.newSessionTab() }
         toolbar.onNewPlainShell = { BentoTerminalWindow.newWindowNoTmux() }
         toolbar.onNewSSHHost = { BentoTerminalWindow.newSSHWindow(host: $0) }
+        toolbar.onNewRemoteTmuxHost = { BentoTerminalWindow.newTmuxWindow(host: $0) }
         toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
         toolbar.onCloseWindow = { [weak self] in self?.activeTab?.viewModel.closeWindow() }
         toolbar.onSetSizingMode = { [weak self] mode in
@@ -872,17 +1008,32 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
 
 
-    /// Pushed from the app's `tmux ls` poll — the machine's full session list.
-    /// A window only cares whether ITS OWN session is still there; when the
-    /// session is killed from elsewhere (another client, `tmux kill-session`)
-    /// the tab closes itself rather than sitting on a dead client.
-    func updateServerSessions(_ names: [String]) {
-        serverSessions = names
+    /// Pushed from the app's `tmux ls` poll — the LOCAL machine's session list.
+    ///
+    /// This used to also decide whether this window's session was still alive,
+    /// and that was wrong the moment a window could be attached to a different
+    /// tmux server: a remote session is never in the local list, so a remote
+    /// window counted a miss every 5s and closed itself on the fourth. The
+    /// liveness question moved to `sessionListChanged`, which asks the server
+    /// this window is actually on. What is left here is presentation: the
+    /// dormant local sessions a window can offer to open.
+    func updateLocalServerSessions(_ names: [LocalTmuxSessionName]) {
+        localServerSessions = names
+        rebuildTabBar()
+    }
+
+    /// This window's OWN tmux server answered `list-sessions`. When our session
+    /// isn't in it, it was killed from somewhere else (another client, a
+    /// `tmux kill-session`) and the window closes rather than sit on a dead
+    /// client — the same rule as before, now asked of the right machine.
+    private func sessionListChanged(generation: Int, names: [String]) {
+        guard generation != lastSessionListGeneration else { return }
+        lastSessionListGeneration = generation
         guard !tab.isPlain, !names.isEmpty else { return }
-        if !names.contains(tab.sessionKey) {
+        if !names.contains(tab.id.name) {
             absentPolls += 1
-            // One transient miss must not close a live tab — `tmux ls` can drop
-            // a session for a poll while the server is busy.
+            // One transient miss must not close a live tab — a busy server can
+            // drop a session from one listing.
             if absentPolls >= Self.absentPollsToClose { window.close() }
         } else {
             absentPolls = 0
@@ -905,7 +1056,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         content.autoresizingMask = [.width, .height]
         container.addSubview(content)
         window.makeFirstResponder(content)
-        window.title = tab.viewModel.activeTmuxSessionName ?? tab.windowTitle
+        window.title = displayTitle(for: tab)
         rebindActiveToolbar(tab)
         toolbar.setSessionMode(tab.isPlain ? nil : tab.viewModel.sessionMode)
         updateSidebar()
@@ -919,7 +1070,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// Kill the active tmux session (destroys it) and drop its tab.
     private func killActiveSession() {
         guard let tab = activeTab, let window else { return }
-        let name = tab.sessionKey
+        let name = tab.id.displayName
         // Kill Session is destructive AND irreversible — every window/pane and
         // its running processes die. Confirm first (parity with iOS) so a stray
         // click doesn't silently end a session with work in it.
@@ -933,21 +1084,40 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         if #available(macOS 11.0, *) { killButton.hasDestructiveAction = true }
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }
-            self?.performKillSession(tab: tab, name: name)
+            self?.performKillSession(tab: tab)
         }
     }
 
-    private func performKillSession(tab: SessionTab, name: String) {
-        // Kill via a one-shot CLI command — reliable and independent of the
-        // control connection we're about to tear down. (Sending kill-session
-        // through the -CC client and then SIGTERM'ing it races, so the session
-        // could survive and the next poll would resurrect it.)
-        BentoTerminalWindow.killSessionCLI?(name)
-        serverSessions.removeAll { $0 == name }
-        // The kill is async, so stop the poll from closing us on a stale miss —
-        // the window is going away right now either way.
-        absentPolls = 0
-        window.close()
+    /// See `BentoTerminalWindow.killFrontmostSessionSkippingConfirmation`.
+    func killActiveSessionWithoutConfirmation() {
+        guard let tab = activeTab else { return }
+        performKillSession(tab: tab)
+    }
+
+    private func performKillSession(tab: SessionTab) {
+        // Kill over THIS window's own control channel.
+        //
+        // This used to shell out to the local `tmux` binary, which was fine
+        // while every window was local and a destroy-your-work bug the moment
+        // one wasn't: with a remote window focused, "Kill Session" killed the
+        // LOCAL session that happened to share the name. The control channel is
+        // the one thing in the window that knows which machine it is talking
+        // to, so routing the kill through it makes local and remote the same
+        // code path instead of two, and there is no name left for a local
+        // command to misread. The old race that motivated the CLI (tearing the
+        // pty down with the kill still in the write buffer) is handled inside
+        // `killSession`, which now awaits tmux's reply first.
+        let id = tab.id
+        Task { [weak self] in
+            await tab.viewModel.killSession()
+            guard let self else { return }
+            if id.isLocal { BentoTerminalWindow.onLocalServerChanged?() }
+            self.localServerSessions.removeAll { $0.rawValue == id.name }
+            // Stop the self-poll from closing us on a stale miss — the window
+            // is going away right now either way.
+            self.absentPolls = 0
+            self.window.close()
+        }
     }
 
 
@@ -1005,6 +1175,19 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
                 self.rebuildTabBar()
             }
             .store(in: &bag)
+        // Liveness, from this window's own control channel (see
+        // `sessionListChanged`). The generation counter — not the array — is
+        // what is observed, so only a genuinely fresh answer from the server
+        // counts as a poll.
+        tab.viewModel.$sessionListGeneration
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self, weak tab] generation in
+                guard let self, let tab else { return }
+                self.sessionListChanged(
+                    generation: generation, names: tab.viewModel.availableTmuxSessions)
+            }
+            .store(in: &bag)
         tabCancellables[ObjectIdentifier(tab)] = bag
     }
 
@@ -1020,25 +1203,29 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// shows up as a phantom dormant session — and Kill Session silently kills
     /// a name that no longer exists.
     private func migrateSessionKey(of tab: SessionTab, to name: String) {
-        let old = tab.sessionKey
-        guard !name.isEmpty, name != old else { return }
+        let old = tab.id
+        guard !name.isEmpty, name != old.name else { return }
+        // The SERVER doesn't change under a rename — only the name on it. A
+        // remote `bento` renamed to `work` is still on that host, and carrying
+        // the server across is what keeps it from colliding with a local `work`.
+        let new = TmuxSessionID(server: old.server, name: name)
         // Killing a session does NOT detach its clients — tmux parks them on
         // another session. So "my session is now called X" has two meanings: a
         // rename (X is mine), or my session died and I've been re-homed onto
         // someone else's. If a window already shows X, this is the second case
         // and there is nothing here to keep: two windows on one session is a
         // duplicate, and the poll would never close it because X is alive.
-        if let other = BentoTerminalWindow.manager(for: name), other !== self {
+        if let other = BentoTerminalWindow.manager(for: new.key), other !== self {
             window.close()
             return
         }
-        tab.sessionKey = name
+        tab.id = new
         // Drop the old name from a not-yet-refreshed poll snapshot so the next
         // one doesn't read this window's session as gone.
-        serverSessions.removeAll { $0 == old }
+        localServerSessions.removeAll { $0.rawValue == old.name }
         absentPolls = 0
         BentoTerminalWindow.persistOpenSessions()
-        MacAwaitingNotifier.shared.clear(sessionKey: old)
+        MacAwaitingNotifier.shared.clear(sessionKey: old.key)
     }
 
     /// Fill the toolbar's centre strip with the ACTIVE SESSION'S WINDOWS, and
@@ -1059,11 +1246,23 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // The tab bar only knows about sessions that are OPEN, so the left
         // button still lists every session on the machine — a dormant one is
         // otherwise unreachable.
-        let openKeys = BentoTerminalWindow.openSessionKeys
-        let all = (Set(serverSessions).union(openKeys)).sorted()
-        toolbar.sessions = all.map { name in
-            (key: name, dot: dotImage(for: dot(forSession: name)), isOpen: openKeys.contains(name))
+        //
+        // Everything below is in KEY space, not name space. A local `foo` and a
+        // remote `foo` are two rows here, each labelled for the machine it is
+        // on — folding them into one entry by name would show one and silently
+        // switch to the other.
+        let openIDs = BentoTerminalWindow.openSessionIDs
+        let openKeys = Set(openIDs.map(\.key))
+        var ids = openIDs
+        for local in localServerSessions where !openKeys.contains(local.id.key) {
+            ids.append(local.id)
         }
+        toolbar.sessions = ids
+            .sorted { ($0.isLocal ? 0 : 1, $0.displayName) < ($1.isLocal ? 0 : 1, $1.displayName) }
+            .map { id in
+                (key: id.key, label: id.displayName,
+                 dot: dotImage(for: dot(forSession: id)), isOpen: openKeys.contains(id.key))
+            }
         toolbar.activeSessionKey = tab.sessionKey
 
         let tmuxWindows = tab.isPlain ? [] : tab.viewModel.windows
@@ -1102,7 +1301,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.updateTabs(items, selected: activeIdx)
 
         if let active = activeTab {
-            let name = active.viewModel.activeTmuxSessionName ?? active.windowTitle
+            let name = displayTitle(for: active)
             window.title = name
             toolbar.setSessionTitle(name)
             toolbar.activeTabIsPlain = active.isPlain
@@ -1162,6 +1361,16 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     ///     awaiting (amber) → done-unseen (green) → working (blue) → idle (gray).
     fileprivate enum SessionDot: String { case awaiting, doneUnseen, working, idle, dormant, plain }
 
+    /// What the window, its native tab, and the toolbar's session button call
+    /// this session. A remote one reads `name — host`, so two tabs on
+    /// same-named sessions on different machines are tellable apart at a
+    /// glance, rather than only after clicking one.
+    private func displayTitle(for tab: SessionTab) -> String {
+        if tab.isPlain { return tab.windowTitle }
+        let live = tab.viewModel.activeTmuxSessionName ?? tab.id.name
+        return TmuxSessionID(server: tab.id.server, name: live).displayName
+    }
+
     /// Put the session name and its status on the native tab.
     ///
     /// A tab title is a plain string, so the dot rides IN it: an agent waiting
@@ -1169,9 +1378,9 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// of the colour language. `NSWindow.tab.attributedTitle` lets it be a real
     /// coloured glyph rather than a letter standing in for one.
     private func updateTabTitle() {
-        let name = tab.viewModel.activeTmuxSessionName ?? tab.windowTitle
+        let name = displayTitle(for: tab)
         window.title = name
-        let dot = sessionDot(for: name)
+        let dot = sessionDot()
         guard let color = tabDotColor(dot) else {
             window.tab.attributedTitle = nil
             return
@@ -1196,12 +1405,12 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     /// The dot for ANY session name: its own manager's live state when it's
     /// open here, a hollow ring when it only exists on the server.
-    private func dot(forSession name: String) -> SessionDot {
-        guard let m = BentoTerminalWindow.manager(for: name) else { return .dormant }
-        return m.sessionDot(for: name)
+    private func dot(forSession id: TmuxSessionID) -> SessionDot {
+        guard let m = BentoTerminalWindow.manager(for: id.key) else { return .dormant }
+        return m.sessionDot()
     }
 
-    fileprivate func sessionDot(for name: String) -> SessionDot {
+    fileprivate func sessionDot() -> SessionDot {
         if tab.isPlain { return .plain }   // no tmux → a terminal glyph, not a dot
         let vm = tab.viewModel
         if vm.agentsWaiting > 0    { return .awaiting }
