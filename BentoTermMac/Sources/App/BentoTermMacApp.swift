@@ -31,7 +31,7 @@ struct TerminalCommands: Commands {
         // ⌘N is the reflex key for "give me one more of these" in every Mac
         // app, so it always makes a new standalone window — never a no-op when
         // a window is already up, and never a tab. What lands in that window is
-        // the launcher: ⌘N asks, ⌘⇧T (New Session, below) doesn't.
+        // the launcher: ⌘N asks, ⌘⇧T (New Empty Session, below) doesn't.
         // Reopen-the-last-session is a RESTORE gesture and lives where restore
         // gestures belong: the Dock icon and launch (`openMainWindow`).
         CommandGroup(replacing: .newItem) {
@@ -65,9 +65,14 @@ struct TerminalCommands: Commands {
             // new-window sat on ⌃⌘T. Frequency and resistance were inverted.
             Button("New tmux Window") { BentoPaneAction.dispatch(BentoPaneAction.newTmuxWindow) }
                 .keyboardShortcut("t", modifiers: .command)
-            Button("New Session") { BentoTerminalWindow.newWindow() }
+            // Same two names the toolbar's `+`, the launcher page and the Dock
+            // menu use (`LaunchAction`). This menu used to say "New Session"
+            // for the blank one — which stopped being unambiguous the moment an
+            // agent session sat beside it — and "New Window (no tmux)" for a
+            // thing that is a terminal, not a window: closing it discards it.
+            Button(LaunchAction.emptySession.title) { BentoTerminalWindow.newWindow() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
-            Button("New Window (no tmux)") { BentoTerminalWindow.newWindowNoTmux() }
+            Button(LaunchAction.plainTerminal.title) { BentoTerminalWindow.newWindowNoTmux() }
                 .keyboardShortcut("t", modifiers: [.command, .option, .shift])
             Divider()
             Button("Split Right (-h)") { BentoPaneAction.dispatch(BentoPaneAction.splitVertically) }

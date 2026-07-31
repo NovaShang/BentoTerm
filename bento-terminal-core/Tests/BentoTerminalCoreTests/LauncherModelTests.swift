@@ -6,7 +6,8 @@ import Testing
 /// The empty state's structure, without a window.
 ///
 /// Everything the launcher decides — which sections appear, in what order, what
-/// a row would do, how hosts collapse, when the page is "truly empty" — is in
+/// a row would do, how hosts and recents collapse, what a query does to the
+/// pinned create rows, when there is nothing left to open — is in
 /// `LauncherModel`, precisely so it can be checked here rather than by looking
 /// at a screenshot. The view then only draws what these tests assert.
 @MainActor
@@ -19,16 +20,54 @@ private func model(sessions: [String] = [], hosts: [String] = [],
 }
 
 @Suite @MainActor struct LauncherModelTests {
-    @Test func sectionsFollowTheProviderOrderTheOtherSurfacesUse() {
-        // Sessions, then recents, then hosts — `OpenTargetProvider.allTargets`'
-        // order, which the Dock menu also renders. Three surfaces, one order.
+    @Test func theThreeCreateRowsComeFirstAndTheQuickShellLeadsThem() {
+        // Order is the decision, so it is asserted rather than described:
+        // throwaway shell, agent session, empty session, and only then the
+        // things that already exist. The Dock menu renders the same list from
+        // the same `LaunchAction.displayOrder`.
         let m = model(sessions: ["bento", "session-2"],
                       hosts: ["dev"],
                       launches: [LaunchRecord(dir: "/Users/x/code/app", command: "claude")])
+        #expect(m.actions.map(\.title) == ["New Terminal without tmux",
+                                           "New Agent Session…",
+                                           "New Empty Session"])
         #expect(m.sessions.map(\.title) == ["bento", "session-2"])
         #expect(m.recents.map(\.title) == ["claude  ·  /Users/x/code/app"])
         #expect(m.hosts.map(\.title) == ["dev"])
-        #expect(m.focusableRows.first?.title == "bento")
+        #expect(m.focusableRows.map(\.section).first == .actions)
+        // ⌘N ⏎ is a throwaway shell.
+        #expect(m.selectedID == LaunchAction.plainTerminal.id)
+    }
+
+    @Test func aQueryPinsTheActionsButNeverSelectsOneOverAMatch() {
+        // Typing must not turn a search into a creation: the create rows stay
+        // put (they are the page's verbs, not a list to hunt through) while ⏎
+        // follows the match.
+        let m = model(sessions: ["bento"], hosts: ["dev"])
+        m.query = "bento"
+        #expect(m.actions.count == 3)
+        #expect(m.selectedID == "session:bento")
+        #expect(m.focusableRows.first?.id == LaunchAction.plainTerminal.id)
+    }
+
+    @Test func aQueryThatMatchesNothingOpenableFallsBackToTheNamedAction() {
+        let m = model(sessions: ["bento"])
+        m.query = "agent"
+        #expect(m.sessions.isEmpty)
+        #expect(m.selectedID == LaunchAction.agentSession.id)
+    }
+
+    @Test func recentsShowThreeAndExpandToTheRest() {
+        let launches = (1...5).map { LaunchRecord(dir: "/Users/x/p\($0)", command: "claude") }
+        let m = model(launches: launches)
+        #expect(m.recents.count == LauncherModel.recentPreviewLimit)
+        #expect(m.hasHiddenRecents)
+        #expect(m.recentsExpanderRow.title == "2 more")
+        #expect(m.focusableRows.contains { $0.id == "recents:expand" })
+
+        m.expandRecents()
+        #expect(m.recents.count == 5)
+        #expect(!m.hasHiddenRecents)
     }
 
     @Test func aSessionRowSaysHowManyWindowsAndHowStale() {
@@ -53,13 +92,15 @@ private func model(sessions: [String] = [], hosts: [String] = [],
         #expect(m.hostsCollapsed)
         #expect(m.hostChips.count == LauncherModel.hostChipLimit)
         #expect(m.hasHiddenHostChips)
-        #expect(m.expanderRow.title == "16 hosts")
-        // Collapsed, the whole section contributes ONE keyboard stop.
-        #expect(m.focusableRows.map(\.id) == ["session:bento", "hosts:expand"])
+        #expect(m.hostsExpanderRow.title == "16 hosts")
+        // Collapsed, the whole section contributes ONE keyboard stop — after
+        // the three create rows, which are always there.
+        #expect(m.focusableRows.map(\.id)
+                == LaunchAction.displayOrder.map(\.id) + ["session:bento", "hosts:expand"])
 
         m.expandHosts()
         #expect(!m.hostsCollapsed)
-        #expect(m.focusableRows.count == 17)
+        #expect(m.focusableRows.count == 3 + 1 + 16)
     }
 
     @Test func typingExpandsHostsWithoutAsking() {
@@ -100,30 +141,33 @@ private func model(sessions: [String] = [], hosts: [String] = [],
 
     @Test func selectionSurvivesARefreshAndWrapsAtTheEnds() {
         let m = model(sessions: ["a", "b"], hosts: [])
-        #expect(m.selectedID == "session:a")
-        m.moveSelection(1)
+        #expect(m.selectedID == LaunchAction.plainTerminal.id)
+        m.moveSelection(-1)   // wrap up from the first row to the last
         #expect(m.selectedID == "session:b")
         m.moveSelection(1)
+        #expect(m.selectedID == LaunchAction.plainTerminal.id)
+        m.moveSelection(3)
         #expect(m.selectedID == "session:a")
-        m.moveSelection(-1)
-        #expect(m.selectedID == "session:b")
         m.refresh()
-        #expect(m.selectedID == "session:b")
+        #expect(m.selectedID == "session:a")
     }
 
     @Test func selectionMovesOffARowThatDisappeared() {
         let m = model(sessions: ["alpha", "beta"])
-        m.moveSelection(1)
+        m.moveSelection(4)
         #expect(m.selectedID == "session:beta")
         m.query = "alpha"
         #expect(m.selectedID == "session:alpha")
     }
 
-    @Test func trulyEmptyIsOneSentenceAndOneAction() {
+    @Test func nothingToOpenStillOffersTheThreeWaysToMakeSomething() {
+        // The bare-machine case is no longer a different screen: the verbs are
+        // unconditional, so what "empty" costs is one explanatory line where
+        // three section headers would otherwise stand over nothing.
         let m = model()
         #expect(m.isEmpty)
-        #expect(m.focusableRows.isEmpty)
-        #expect(m.structureDump().contains("truly empty"))
+        #expect(m.focusableRows.map(\.id) == LaunchAction.displayOrder.map(\.id))
+        #expect(m.structureDump().contains("nothing to open"))
     }
 
     @Test func noMatchesIsNotTheSameAsNothingToOpen() {
@@ -132,7 +176,8 @@ private func model(sessions: [String] = [], hosts: [String] = [],
         let m = model(sessions: ["bento"])
         m.query = "zzzz"
         #expect(!m.isEmpty)
-        #expect(m.focusableRows.isEmpty)
+        #expect(m.sessions.isEmpty)
+        #expect(m.focusableRows.map(\.id) == LaunchAction.displayOrder.map(\.id))
     }
 
     @Test func everyRowSaysWhatItWouldDo() {
@@ -144,6 +189,8 @@ private func model(sessions: [String] = [], hosts: [String] = [],
         #expect(dump.contains("ssh dev in place"))
         #expect(dump.contains("running claude, in place"))
         #expect(dump.contains("actions: [ssh] [tmux]"))
+        #expect(dump.contains("plain local shell, no tmux, in place"))
+        #expect(dump.contains("open the agent wizard (launcher stays)"))
     }
 }
 

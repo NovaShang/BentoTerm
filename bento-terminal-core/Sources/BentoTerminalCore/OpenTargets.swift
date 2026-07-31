@@ -215,6 +215,89 @@ public struct OpenTarget: Identifiable, Equatable, Sendable {
     }
 }
 
+// MARK: - The three ways to make something new
+
+/// The creation verbs, shared by every surface that offers them.
+///
+/// There are exactly three ways to get a terminal that did not exist a moment
+/// ago, and four places offer them: the toolbar's `+` menu, the Shell menu, the
+/// launcher page, and the Dock menu. Until now each place spelled them its own
+/// way — the toolbar said "New Session with Agent…" while the launcher's footer
+/// said "New Agent Session…", and the Shell menu called a blank tmux session
+/// plain "New Session" while the toolbar called it "New Empty Session". One
+/// concept with two names is two concepts to the reader. So the words live
+/// here, once, and the surfaces render them.
+///
+/// **Order is part of the definition.** The quick throwaway shell is first
+/// because it is what the user reaches for most: one command, no session, gone
+/// when it closes. The two tmux creations follow as a pair — same shape, one
+/// word different — because choosing between them is a second, smaller
+/// question than "do I even want tmux here".
+public enum LaunchAction: String, CaseIterable, Identifiable, Sendable {
+    /// A raw local pty, no tmux, gone when you close it.
+    case plainTerminal
+    /// The agent wizard (name, folder, agent, layout).
+    case agentSession
+    /// A blank tmux session, auto-named `session-N`.
+    case emptySession
+
+    /// Declaration order is not display order — `allCases` would otherwise
+    /// silently decide the layout of four surfaces.
+    public static let displayOrder: [LaunchAction] = [.plainTerminal, .agentSession, .emptySession]
+
+    public var id: String { "new:" + rawValue }
+
+    public var title: String {
+        switch self {
+        case .plainTerminal: return "New Terminal without tmux"
+        case .agentSession:  return "New Agent Session…"
+        case .emptySession:  return "New Empty Session"
+        }
+    }
+
+    /// The one-line explanation. It is the toolbar menu's tooltip text and the
+    /// launcher row's subtitle — the same sentence, because the difference
+    /// between these three is exactly what a new user needs told.
+    public var detail: String {
+        switch self {
+        case .plainTerminal:
+            return "A quick local shell. Closing it discards it for good."
+        case .agentSession:
+            return "A fresh tmux session running Claude, Codex or another agent, "
+                 + "optionally split into panes."
+        case .emptySession:
+            return "A blank tmux session on the host. It keeps running after you disconnect."
+        }
+    }
+
+    public var systemImage: String {
+        switch self {
+        case .plainTerminal: return "terminal"
+        case .agentSession:  return "rectangle.stack"
+        case .emptySession:  return "plus.rectangle"
+        }
+    }
+
+    /// What a typed query is matched against. The detail text is deliberately
+    /// excluded: "shell", "tmux" and "session" appear in all three sentences,
+    /// so matching them would make every query hit every action.
+    public var matchText: String {
+        switch self {
+        case .plainTerminal: return "new terminal without tmux shell"
+        case .agentSession:  return "new agent session claude codex"
+        case .emptySession:  return "new empty session tmux"
+        }
+    }
+
+    /// Whether performing this INTO a launcher window uses that window up.
+    ///
+    /// False for the agent path only, and not as an implementation detail: the
+    /// wizard is a separate window that can be cancelled, so the question the
+    /// launcher is asking has not been answered yet and its window must still
+    /// be there if you back out (docs/launcher-design.md §7).
+    public var consumesShell: Bool { self != .agentSession }
+}
+
 /// `~`-abbreviate a path for display. Shared so every launcher surface shortens
 /// the same way.
 public func tildeAbbreviated(_ path: String) -> String {
@@ -358,6 +441,38 @@ public final class OpenTargetProvider {
         case .sshShell(let alias):    BentoTerminalWindow.newSSHWindow(host: alias)
         case .agent(let spec):        BentoTerminalWindow.newWindow(agent: spec)
         case nil:                     break
+        }
+    }
+
+    /// Perform a creation verb in a window of its own (Dock menu, Shortcuts).
+    ///
+    /// Here rather than in each surface for the same reason `open` is here: the
+    /// Dock menu and the launcher must not be able to disagree about what "New
+    /// Empty Session" builds, only about where it lands.
+    public func perform(_ action: LaunchAction) {
+        switch action {
+        case .plainTerminal:
+            BentoTerminalWindow.newWindowNoTmux()
+        case .agentSession:
+            BentoTerminalWindow.onNewAgentSession?()
+        case .emptySession:
+            BentoTerminalWindow.newWindow(session: BentoTerminalWindow.nextSessionName())
+        }
+    }
+
+    /// The same verb, into the launcher's own window. Returns false when the
+    /// shell was not consumed — see `LaunchAction.consumesShell`.
+    @discardableResult
+    func perform(_ action: LaunchAction, into shell: TerminalSessionWindow) -> Bool {
+        switch action {
+        case .plainTerminal:
+            BentoTerminalWindow.fill(shell, plainTitle: "Terminal")
+            return true
+        case .agentSession:
+            BentoTerminalWindow.onNewAgentSession?()
+            return false
+        case .emptySession:
+            return BentoTerminalWindow.fill(shell, localSession: BentoTerminalWindow.nextSessionName())
         }
     }
 

@@ -23,12 +23,18 @@ import BentoTerminalCore
 /// SSH section offers hosts (`ssh <alias>`, exactly as the palette does) rather
 /// than sessions on them.
 ///
-/// Vocabulary and ordering are deliberately the palette's, so the two surfaces
-/// can't disagree about what a thing is called: "Sessions", "Recent Launches",
-/// "SSH Hosts". The order is the flat one `OpenTargetProvider.allTargets`
-/// documents — what's running, then what you ran recently, then where you can
-/// reach — because with no window on screen the likeliest reason you came here
-/// is to get back to a session that is already up.
+/// Vocabulary and ordering are deliberately the launcher's, so the surfaces
+/// can't disagree about what a thing is called or where it sits: the three
+/// creation verbs (`LaunchAction.displayOrder`), then "Sessions", "Recent
+/// Launches", "SSH Hosts". The verbs lead for the reason the launcher page
+/// gives (docs/launcher-design.md §5) — the commonest thing to want from a
+/// standing start is a quick shell to run one command in, and it used to be the
+/// last item in this menu, spelled "New Window", behind however many sessions
+/// and hosts happened to exist.
+///
+/// That "New Window" row is gone, not renamed. It opened the launcher, i.e. it
+/// answered "what can I open?" with the same question again; now that the three
+/// answers are in this menu, the round trip is what it was worth.
 @MainActor
 enum DockMenu {
     /// Caps, not scrollbars. A Dock menu is read at a glance while the pointer
@@ -46,6 +52,18 @@ enum DockMenu {
     /// invalidate, which is also why a session created a second ago is in it.
     static func build(provider: OpenTargetProvider = .shared) -> NSMenu {
         let menu = NSMenu()
+
+        // The verbs, first, always all three — a first run has no sessions, no
+        // recents and possibly no `~/.ssh/config`, and these rows are what stop
+        // the menu rendering as nothing. No section header over them: they are
+        // at the top with nothing to be told apart from.
+        for action in LaunchAction.displayOrder {
+            let item = actionItem(title: action.title, systemImage: action.systemImage) {
+                provider.perform(action)
+            }
+            item.toolTip = action.detail
+            menu.addItem(item)
+        }
 
         // Sessions come from the provider, i.e. from
         // `BentoTerminalWindow.serverSessions`, which is the LOCAL server's
@@ -75,15 +93,6 @@ enum DockMenu {
         addSection(to: menu, title: "SSH Hosts",
                    targets: provider.sshTargets(), limit: sshLimit,
                    provider: provider)
-
-        // Always last, always present: a first run has no sessions, no recents
-        // and possibly no `~/.ssh/config`, and a menu that renders as nothing
-        // reads as a broken app rather than an empty one. ⌘N's action, so the
-        // row means the same thing it means in the File menu.
-        if !menu.items.isEmpty { menu.addItem(.separator()) }
-        menu.addItem(actionItem(title: "New Window", systemImage: "plus.rectangle") {
-            BentoTerminalWindow.newSessionWindow()
-        })
 
         return menu
     }

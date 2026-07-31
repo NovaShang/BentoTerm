@@ -8,12 +8,22 @@ import SwiftUI
 ///
 /// **It is the same window that becomes the session.** Picking a row hands this
 /// window's shell to `TerminalWindowManager`, which configures it in place —
-/// same `NSWindow` object, same frame, same screen position, same z-order. That
-/// is the whole reason the launcher is a window rather than a sheet or a panel:
-/// the old flow created the window first and then had to express failure inside
-/// a terminal that was already on screen (docs/launcher-design.md §4), and the
+/// same `NSWindow` object, same screen position, same z-order. That is the
+/// whole reason the launcher is a window rather than a sheet or a panel: the
+/// old flow created the window first and then had to express failure inside a
+/// terminal that was already on screen (docs/launcher-design.md §4), and the
 /// fix is to let the window exist *before* the session without pretending a
 /// session is there.
+///
+/// **It is small, and filling it resizes it.** The first version inherited
+/// whatever frame the session windows were using, so that filling it changed
+/// only the content. That bought a seamless swap at the price of a mostly-empty
+/// page: ⌘N over a full-screen-ish terminal produced a 2500pt window holding a
+/// search field and nine rows. The page is now 660×520 — the palette's width,
+/// so the same list read in a panel and read as a page measures the same — and
+/// `TerminalWindowManager.init(adopting:)` applies the session windows' normal
+/// remembered geometry as it fills. The transition therefore visibly resizes,
+/// which is the honest picture: a small question became a terminal.
 ///
 /// The one case where the shell is not consumed is picking a session that is
 /// already open in another window: there is nothing to fill, that window comes
@@ -62,10 +72,20 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         return true
     }
 
+    /// The page's own size, not a session window's.
+    ///
+    /// 660 wide is the command palette's width to the point: the launcher IS
+    /// that list rendered as a page, and two readings of one list that measure
+    /// differently read as two features. 520 tall is what the content asks for
+    /// — the three create rows, three or four sessions, three recents and the
+    /// host chips land just inside it, so the common case does not scroll while
+    /// a machine with twenty sessions still can.
+    static let contentSize = NSSize(width: 660, height: 520)
+
     private override init() {
         model = LauncherModel()
         window = TerminalSessionWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 560),
+            contentRect: NSRect(origin: .zero, size: Self.contentSize),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false)
         super.init()
@@ -78,18 +98,17 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         window.contentViewController = host
         // Size AFTER the content view controller, never before: assigning one
         // resizes the window to the SwiftUI fitting size, which for this page
-        // is its minimum — a launcher that restored a 2544pt frame and then
-        // collapsed to 520pt as the content landed.
+        // is its minimum.
         //
-        // Restore the frame the session windows use when this launcher is
-        // going to BE the first session window: filling it in place should
-        // change the content, not the geometry. With windows already open the
-        // saved frame belongs to one of them, so this one just centres.
-        if !BentoTerminalWindow.hasOpenWindows,
-           window.setFrameUsingName(TerminalWindowManager.frameName) {
-            return
-        }
-        window.setContentSize(NSSize(width: 820, height: 560))
+        // Always this size, and always centred — deliberately NOT the session
+        // windows' remembered frame, which is what it used to adopt. Wearing
+        // the terminal's geometry made filling it a pure content swap, but it
+        // also meant the question "what do you want to open?" arrived at
+        // whatever size the last terminal happened to be, which for a maximised
+        // window is a page of white space with a search field in it. The size
+        // now belongs to the content; `TerminalWindowManager` puts the
+        // terminal's geometry back on the way in.
+        window.setContentSize(Self.contentSize)
         window.center()
     }
 
@@ -130,46 +149,20 @@ struct LauncherView: View {
     unowned let owner: LauncherWindowController
 
     var body: some View {
-        Group {
-            if model.isEmpty {
-                nothingYet
-            } else {
-                // One centred column, whatever the window's width. This window
-                // may have restored a session window's frame (that is the
-                // point — it is about to BECOME that window), and a filter
-                // field stretched across 2500 points is a form, not a launcher.
-                list.frame(maxWidth: 780)
-            }
-        }
-        .frame(minWidth: 520, minHeight: 320)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        list
+            .frame(minWidth: 480, minHeight: 380)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
     }
-
-    // MARK: Truly empty
-
-    /// No sessions, no recents, no `~/.ssh/config`. One sentence and one
-    /// action — a page of empty section headers would be the skeleton of a
-    /// feature this user doesn't have yet.
-    private var nothingYet: some View {
-        VStack(spacing: 14) {
-            Text("Nothing is running yet.")
-                .font(.system(size: 15))
-                .foregroundStyle(.secondary)
-            Button("New Session") { newSession() }
-                .keyboardShortcut(.defaultAction)
-                .controlSize(.large)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // MARK: Populated
 
     private var list: some View {
         VStack(spacing: 0) {
             KeyDrivenSearchField(
                 text: model.query,
-                placeholder: "Type to filter…",
+                // Nothing to filter is worth saying out loud. A field promising
+                // "type to filter" over three create rows and no lists invites
+                // typing that can only fail.
+                placeholder: model.isEmpty ? "Nothing running to filter" : "Type to filter…",
                 fontSize: 16,
                 onChange: { model.query = $0 },
                 onMove: { model.moveSelection($0) },
@@ -187,15 +180,26 @@ struct LauncherView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    section(LauncherModel.Section.sessions.title, model.sessions)
-                    section(LauncherModel.Section.recents.title, model.recents)
-                    hostSection
-                    if model.sessions.isEmpty && model.recents.isEmpty && model.hosts.isEmpty {
-                        Text("No matches")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 24)
+                    // The verbs, first and unfiltered. Everything below them is
+                    // "something that already exists"; these three are the only
+                    // rows that are true on a machine with nothing on it, which
+                    // is why they carry no section header and sit above the
+                    // first divider the eye finds.
+                    section(LauncherModel.Section.actions.title, model.actions)
+                    if model.isEmpty {
+                        nothingToOpen
+                    } else {
+                        Divider().opacity(0.4).padding(.horizontal, 20).padding(.vertical, 4)
+                        section(LauncherModel.Section.sessions.title, model.sessions)
+                        recentSection
+                        hostSection
+                        if model.sessions.isEmpty && model.recents.isEmpty && model.hosts.isEmpty {
+                            Text("No matches")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 24)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -207,10 +211,27 @@ struct LauncherView: View {
         }
     }
 
+    // MARK: Nothing to open
+
+    /// No sessions, no recents, no `~/.ssh/config`. One sentence under the
+    /// create rows — not a separate screen, and not three empty headers. The
+    /// page still has its three real answers; this only explains why the rest of
+    /// it is missing, and names the three things it looked for so the reader
+    /// knows it looked.
+    private var nothingToOpen: some View {
+        Text("Nothing running to open — no tmux sessions, no recent launches, "
+             + "no hosts in ~/.ssh/config.")
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+    }
+
     @ViewBuilder
     private func section(_ title: String, _ rows: [LauncherModel.Row]) -> some View {
         if !rows.isEmpty {
-            PaletteSectionHeader(title: title)
+            if !title.isEmpty { PaletteSectionHeader(title: title) }
             ForEach(rows) { row in
                 PaletteRowView(title: row.title, subtitle: row.subtitle,
                                systemImage: row.systemImage,
@@ -228,6 +249,30 @@ struct LauncherView: View {
         }
     }
 
+    /// Recents: three rows and a "N more" once there are more than three. The
+    /// same collapse idiom as the hosts, for the same reason — the tail is
+    /// rarely the one you meant — but as a row rather than chips, because a
+    /// recent launch needs its folder shown and a capsule cannot hold a path.
+    @ViewBuilder
+    private var recentSection: some View {
+        section(LauncherModel.Section.recents.title, model.recents)
+        if model.hasHiddenRecents {
+            let row = model.recentsExpanderRow
+            Button { model.expandRecents() } label: {
+                HStack(spacing: 3) {
+                    Text(row.title)
+                    Image(systemName: "chevron.down").font(.system(size: 9))
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(model.selectedID == row.id ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 44)
+            .padding(.top, 2)
+            .padding(.bottom, 4)
+        }
+    }
+
     /// Hosts: a chip line plus a count while collapsed, full rows once you
     /// expand or type. Two shapes for one section because the two moods are
     /// different — scanning past them, versus having picked one (§5).
@@ -242,11 +287,11 @@ struct LauncherView: View {
                         model.expandHosts()
                     } label: {
                         HStack(spacing: 2) {
-                            Text(model.expanderRow.title)
+                            Text(model.hostsExpanderRow.title)
                             Image(systemName: "chevron.right").font(.system(size: 9))
                         }
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(model.selectedID == model.expanderRow.id
+                        .foregroundStyle(model.selectedID == model.hostsExpanderRow.id
                                          ? Color.accentColor : Color.secondary)
                     }
                     .buttonStyle(.plain)
@@ -325,23 +370,19 @@ struct LauncherView: View {
 
     // MARK: Footer
 
+    /// The footer used to hold the two create buttons. They are rows at the top
+    /// of the page now (§5), so what is left is the keyboard legend — and the
+    /// legend is worth keeping, because the page opens with the field focused
+    /// and nothing else says that ↑↓ reach the rows.
     private var footer: some View {
         HStack(spacing: 10) {
-            Button("New Session") { newSession() }
-            Button("New Agent Session…") {
-                // §7: the agent path leaves the list on purpose. Its choices
-                // are two-dimensional (a layout grid), which a linear list of
-                // rows cannot draw, so it opens the existing wizard instead of
-                // being flattened into four questions.
-                BentoTerminalWindow.onNewAgentSession?()
-            }
             Spacer(minLength: 0)
             Text("↑↓ to move · ⏎ to open")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
     }
 
     // MARK: Actions
@@ -361,16 +402,21 @@ struct LauncherView: View {
         switch row.action {
         case .expandHosts:
             model.expandHosts()
+        case .expandRecents:
+            model.expandRecents()
         case .open(let target):
             owner.fill { OpenTargetProvider.shared.open(target, into: $0) }
+        case .create(let action):
+            // §7: the agent path leaves the page on purpose — its choices are
+            // two-dimensional (a layout grid), which a linear list of rows
+            // cannot draw — and because the wizard can be cancelled it does not
+            // consume this window. The other two fill it in place.
+            if action.consumesShell {
+                owner.fill { OpenTargetProvider.shared.perform(action, into: $0) }
+            } else {
+                OpenTargetProvider.shared.perform(action)
+            }
         }
-    }
-
-    /// "Don't ask, give me a session" — the same thing ⌘⇧T does, in this
-    /// window. The name is the next unused `session-N`, which is what the tab
-    /// bar's `+` has always produced.
-    private func newSession() {
-        owner.fill { BentoTerminalWindow.fill($0, localSession: BentoTerminalWindow.nextSessionName()) }
     }
 }
 

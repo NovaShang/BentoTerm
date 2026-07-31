@@ -655,13 +655,20 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func newTapped() {
         let menu = NSMenu()
 
+        // Titles and tips come from `LaunchAction`, which is also what the
+        // launcher page, the Dock menu and the Shell menu render — one concept,
+        // one name, four surfaces. This row used to read "New Session with
+        // Agent…" while the launcher's said "New Agent Session…"; the launcher's
+        // wording won because it makes the pair parallel ("New _ Session"), so
+        // the two rows differ by exactly the word that differs.
         menu.addItem(plainItem(
-            symbol: "rectangle.stack", title: "New Session with Agent…",
-            tip: "A fresh tmux session running Claude, Codex or another agent, optionally split into panes.",
+            symbol: LaunchAction.agentSession.systemImage,
+            title: LaunchAction.agentSession.title,
+            tip: LaunchAction.agentSession.detail,
             action: #selector(newAgentAction)))
         menu.addItem(plainItem(
-            symbol: nil, title: "New Empty Session",
-            tip: "A blank tmux session on the host. It keeps running after you disconnect.",
+            symbol: nil, title: LaunchAction.emptySession.title,
+            tip: LaunchAction.emptySession.detail,
             action: #selector(newTerminalAction)))
 
         menu.addItem(.separator())
@@ -686,8 +693,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
         menu.addItem(.separator())
         menu.addItem(plainItem(
-            symbol: "terminal", title: "New Terminal without tmux",
-            tip: "A quick local shell. Closing it discards it for good.",
+            symbol: LaunchAction.plainTerminal.systemImage,
+            title: LaunchAction.plainTerminal.title,
+            tip: LaunchAction.plainTerminal.detail,
             action: #selector(newPlainShellAction)))
         // The one unbounded list — however many hosts ~/.ssh/config has.
         let ssh = plainItem(
