@@ -162,7 +162,7 @@ struct RelayPairView: View {
                     }
                 }
             } footer: {
-                BentoFormFooter("Open BentoTerm on your Mac, click the menubar icon, look under the connection status — that's the daemon ID.")
+                BentoFormFooter("The daemon ID identifies the BentoTerm host running on your Mac. Copy it there and paste it here.")
             }
             .bentoSectionStyle()
 

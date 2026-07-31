@@ -30,7 +30,7 @@ func File(name string) (string, error) {
 	return filepath.Join(root, name), nil
 }
 
-// SocketPath is where the daemon listens for CLI/menubar RPC.
+// SocketPath is where the daemon listens for CLI/Mac-app RPC.
 func SocketPath() (string, error) {
 	if p := os.Getenv("BENTO_SOCKET"); p != "" {
 		return p, nil

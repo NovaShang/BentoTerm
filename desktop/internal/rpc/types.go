@@ -1,4 +1,4 @@
-// Package rpc holds the wire types shared between bento-daemon and CLI/menubar.
+// Package rpc holds the wire types shared between bento-daemon and the CLI/Mac app.
 // Transport is HTTP over the Unix socket at state.SocketPath().
 package rpc
 

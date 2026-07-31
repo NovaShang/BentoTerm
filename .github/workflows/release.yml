@@ -1,5 +1,5 @@
 # Tag-triggered release: cross-compile bento-daemon + bento CLI for each
-# supported (os, arch) slot, build the Mac menubar app (arm64-only), and
+# supported (os, arch) slot, build the Mac app (arm64-only), and
 # upload everything as assets on a GitHub release tagged from the workflow
 # trigger.
 #
@@ -12,7 +12,7 @@
 #   bento-darwin-arm64.tar.gz   daemon + cli + bundled tmux for Apple Silicon
 #   bento-linux-x86_64.tar.gz   same shape for Linux amd64
 #   bento-linux-arm64.tar.gz    same shape for Linux arm64
-#   BentoTerm-macos-arm64.zip       the menubar app (unsigned for now)
+#   BentoTerm-macos-arm64.zip       the Mac app (unsigned for now)
 #   *.sha256                    side-car checksum for each archive
 #
 # Intel Mac is intentionally omitted: GH-hosted Intel runners are queue-

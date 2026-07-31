@@ -57,7 +57,7 @@ never touch the reconnect state machine.
 ```
 
 Old daemons reply `false` to the subsystem request → the client shows
-"update the menu bar app". Hard read cap 32 MiB server-side.
+"update the Mac app". Hard read cap 32 MiB server-side.
 
 ## UX
 

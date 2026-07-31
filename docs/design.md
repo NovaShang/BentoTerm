@@ -47,7 +47,7 @@ The BentoMark (4-cell SVG-geometry view) appears in the toolbar wordmark and in 
 
 ## 3. Color tokens
 
-All tokens live in `Bento/Sources/Views/Common/BentoTheme.swift` under `BentoBrand` (UIColor) and `Color.bento*` (SwiftUI). **Dark-mode only** — Bento ships dark-locked via `.preferredColorScheme(.dark)` on the root.
+All tokens live in `BentoTermiOS/Sources/Views/Common/BentoTheme.swift` under `BentoBrand` (UIColor) and `Color.bento*` (SwiftUI). **Dark-mode only** — Bento ships dark-locked via `.preferredColorScheme(.dark)` on the root.
 
 ### Frame (cold)
 
@@ -135,7 +135,7 @@ Rows go inside Sections as plain `HStack`s — no own surface or border (the Sec
 
 Capsule with `color.opacity(0.12)` fill, 6pt colored dot + label. Used for "Connected", "3 waiting", etc.
 
-### BentoMark (`Bento/Sources/Views/Common/BentoMark.swift`)
+### BentoMark (`BentoTermiOS/Sources/Views/Common/BentoMark.swift`)
 
 The 4-cell logo geometry. Two variants:
 
@@ -202,10 +202,10 @@ When all sections would be empty, swap the Form for a centered `BentoMarkHero(si
 
 | Concern                | File                                                   |
 | ---------------------- | ------------------------------------------------------ |
-| Color tokens & fonts   | `Bento/Sources/Views/Common/BentoTheme.swift`          |
-| Logo geometry          | `Bento/Sources/Views/Common/BentoMark.swift`           |
-| Home page reference    | `Bento/Sources/Views/HostList/HostListView.swift`      |
-| Active session cards   | `Bento/Sources/Views/HostList/ActiveSessionsStrip.swift` |
-| Dark mode + tint root  | `Bento/Sources/App/BentoApp.swift`                     |
+| Color tokens & fonts   | `BentoTermiOS/Sources/Views/Common/BentoTheme.swift`          |
+| Logo geometry          | `BentoTermiOS/Sources/Views/Common/BentoMark.swift`           |
+| Home page reference    | `BentoTermiOS/Sources/Views/HostList/HostListView.swift`      |
+| Active session cards   | `BentoTermiOS/Sources/Views/HostList/ActiveSessionsStrip.swift` |
+| Dark mode + tint root  | `BentoTermiOS/Sources/App/BentoApp.swift`                     |
 
 When in doubt, open `HostListView.swift` and copy the pattern — that file is the de facto reference implementation for cards, sections, empty state, and toolbar layout.

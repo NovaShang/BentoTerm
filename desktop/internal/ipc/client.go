@@ -16,7 +16,7 @@ import (
 )
 
 // Client speaks HTTP-over-Unix to the running daemon. Used by `bento` CLI
-// and by the Mac menubar app.
+// and by the Mac app.
 type Client struct {
 	http *http.Client
 }

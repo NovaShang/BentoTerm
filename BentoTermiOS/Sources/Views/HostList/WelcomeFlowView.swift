@@ -228,7 +228,7 @@ struct HostPathView: View {
                     .foregroundStyle(Color.bentoInkDim)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Already running BentoTerm on your Mac? Click its menu-bar icon → “Pair new iPhone…”.")
+            Text("Already running BentoTerm on your Mac? You still need a pairing code from that Mac to continue.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.bentoInkMute)
                 .fixedSize(horizontal: false, vertical: true)

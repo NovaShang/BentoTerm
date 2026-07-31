@@ -480,7 +480,7 @@ final class BentoRelayClient {
             try await subFuture.get()
         } catch {
             throw FilePreviewError.unavailable(
-                "File preview needs a newer BentoTerm on the Mac — update the menu bar app and retry.")
+                "File preview needs a newer BentoTerm on the Mac — update the Mac app and retry.")
         }
 
         var body = try JSONEncoder().encode(request)

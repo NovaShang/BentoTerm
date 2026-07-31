@@ -1,4 +1,4 @@
-// Package ipc serves the CLI and macOS menubar over a per-user Unix socket.
+// Package ipc serves the CLI and the macOS app over a per-user Unix socket.
 // It is purely a control plane — no SSH traffic flows through here.
 package ipc
 
