@@ -1,20 +1,20 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#424850"/><stop offset="1" stop-color="#262A32"/></linearGradient>
+      <stop offset="0" stop-color="#6C768A"/><stop offset="1" stop-color="#444C5E"/></linearGradient>
     <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#171B22"/><stop offset="1" stop-color="#0B0D11"/></linearGradient>
+      <stop offset="0" stop-color="#181D24"/><stop offset="1" stop-color="#0C0F14"/></linearGradient>
     <linearGradient id="panelLit" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2E3542"/><stop offset="1" stop-color="#191E27"/></linearGradient>
+      <stop offset="0" stop-color="#272E3A"/><stop offset="1" stop-color="#151A22"/></linearGradient>
     <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.11"/>
       <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>
   </defs>
   <rect width="1024" height="1024" fill="url(#shell)"/>
-  <path d="M 224 80 H 404 A 16 16 0 0 1 420 96 V 412 A 16 16 0 0 1 404 428 H 96 A 16 16 0 0 1 80 412 V 224 A 144 144 0 0 1 224 80 Z" fill="url(#panelLit)"/>
-  <path d="M 464 80 H 800 A 144 144 0 0 1 944 224 V 392 A 16 16 0 0 1 928 408 H 464 A 16 16 0 0 1 448 392 V 96 A 16 16 0 0 1 464 80 Z" fill="url(#panel)"/>
-  <path d="M 96 456 H 720 A 16 16 0 0 1 736 472 V 928 A 16 16 0 0 1 720 944 H 224 A 144 144 0 0 1 80 800 V 472 A 16 16 0 0 1 96 456 Z" fill="url(#panel)"/>
-  <path d="M 800 456 H 928 A 16 16 0 0 1 944 472 V 800 A 144 144 0 0 1 800 944 H 800 A 16 16 0 0 1 784 928 V 472 A 16 16 0 0 1 800 456 Z" fill="url(#panel)"/>
+  <path d="M 224 80 H 424 A 16 16 0 0 1 440 96 V 444 A 16 16 0 0 1 424 460 H 96 A 16 16 0 0 1 80 444 V 224 A 144 144 0 0 1 224 80 Z" fill="url(#panelLit)"/>
+  <path d="M 520 80 H 800 A 144 144 0 0 1 944 224 V 444 A 16 16 0 0 1 928 460 H 520 A 16 16 0 0 1 504 444 V 96 A 16 16 0 0 1 520 80 Z" fill="url(#panel)"/>
+  <path d="M 96 524 H 744 A 16 16 0 0 1 760 540 V 928 A 16 16 0 0 1 744 944 H 224 A 144 144 0 0 1 80 800 V 540 A 16 16 0 0 1 96 524 Z" fill="url(#panel)"/>
+  <path d="M 840 524 H 928 A 16 16 0 0 1 944 540 V 800 A 144 144 0 0 1 800 944 H 840 A 16 16 0 0 1 824 928 V 540 A 16 16 0 0 1 840 524 Z" fill="url(#panel)"/>
   <g fill="#8A93A6" opacity="0.13">
     <rect x="136" y="600" width="440" height="26" rx="13"/>
     <rect x="136" y="690" width="300" height="26" rx="13"/>
@@ -22,6 +22,6 @@
   </g>
   <path d="M 143 164 L 239 244 L 143 325" stroke="#4ADE80" stroke-width="42" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
   <rect x="262" y="302" width="99" height="28" rx="14" fill="#4ADE80"/>
-  <path d="M 224 80 H 404 A 16 16 0 0 1 420 96 V 412 A 16 16 0 0 1 404 428 H 96 A 16 16 0 0 1 80 412 V 224 A 144 144 0 0 1 224 80 Z" fill="url(#sheen)"/><path d="M 464 80 H 800 A 144 144 0 0 1 944 224 V 392 A 16 16 0 0 1 928 408 H 464 A 16 16 0 0 1 448 392 V 96 A 16 16 0 0 1 464 80 Z" fill="url(#sheen)"/>
-  <path d="M 96 456 H 720 A 16 16 0 0 1 736 472 V 928 A 16 16 0 0 1 720 944 H 224 A 144 144 0 0 1 80 800 V 472 A 16 16 0 0 1 96 456 Z" fill="url(#sheen)"/><path d="M 800 456 H 928 A 16 16 0 0 1 944 472 V 800 A 144 144 0 0 1 800 944 H 800 A 16 16 0 0 1 784 928 V 472 A 16 16 0 0 1 800 456 Z" fill="url(#sheen)"/>
+  <path d="M 224 80 H 404 A 16 16 0 0 1 420 96 V 412 A 16 16 0 0 1 404 428 H 96 A 16 16 0 0 1 80 412 V 224 A 144 144 0 0 1 224 80 Z" fill="url(#sheen)"/><path d="M 520 80 H 800 A 144 144 0 0 1 944 224 V 444 A 16 16 0 0 1 928 460 H 520 A 16 16 0 0 1 504 444 V 96 A 16 16 0 0 1 520 80 Z" fill="url(#sheen)"/>
+  <path d="M 96 524 H 744 A 16 16 0 0 1 760 540 V 928 A 16 16 0 0 1 744 944 H 224 A 144 144 0 0 1 80 800 V 540 A 16 16 0 0 1 96 524 Z" fill="url(#sheen)"/><path d="M 840 524 H 928 A 16 16 0 0 1 944 540 V 800 A 144 144 0 0 1 800 944 H 840 A 16 16 0 0 1 824 928 V 540 A 16 16 0 0 1 840 524 Z" fill="url(#sheen)"/>
 </svg>
