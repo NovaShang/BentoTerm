@@ -6,8 +6,8 @@ import Foundation
 /// a `FilePreviewSource` is only the dumb pipe that resolves + stats + reads
 /// bytes on whatever machine the pane is talking to:
 ///   • macOS local panes  → `LocalFileSource` (direct FileManager)
-///   • iOS direct SSH     → Citadel SFTP (app target)
-///   • iOS relay          → `bento-file` subsystem on the daemon (app target)
+///   • iOS SSH panes      → Citadel SFTP over the pane's own connection
+///                          (app target)
 public protocol FilePreviewSource: AnyObject, Sendable {
     /// Resolve `path` (absolute, `~/…`, or relative) against the pane's `cwd`
     /// and stat it. Cheap — used to verify low-confidence candidates before
@@ -17,8 +17,8 @@ public protocol FilePreviewSource: AnyObject, Sendable {
     func read(resolvedPath: String, maxBytes: Int) async throws -> Data
     /// Bounded recursive listing under `root` (absolute), entries relative to
     /// it — the dumb pipe behind `SmartPathResolver`'s tree search. Sources
-    /// that can't list (old daemons) keep the default, which throws: the
-    /// resolver degrades to direct resolution.
+    /// that can't list keep the default, which throws: the resolver degrades
+    /// to direct resolution.
     func listTree(root: String, request: TreeListRequest) async throws -> [FileTreeEntry]
 }
 

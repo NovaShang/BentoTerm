@@ -77,7 +77,7 @@ Note: primary ink is **not** pure white. It carries the icon's rice color, which
 | `bentoEmerald`   | `#4ADE80` | **Primary.** Connected / live / prompt / cursor / CTA    |
 | `bentoSalmon`    | `#E89B7C` | Awaiting input / voice action / warm secondary           |
 | `bentoRice`      | `#F0EAD8` | Same as `bentoInk` — used when "rice" cell is rendered   |
-| `bentoVeg`       | `#6FA254` | Category — relay/Mac, "my computers" group               |
+| `bentoVeg`       | `#6FA254` | Category — muted green for grouping/section accents      |
 | `bentoVegDeep`   | `#4D7C3F` | Veg shadow / depth                                       |
 | `bentoRed`       | `#FF5A52` | Error / ended session                                    |
 
@@ -129,7 +129,7 @@ Drop into a `Section`'s `header:` / `footer:` closures. `BentoFormHeader("Title"
 
 ### Row content
 
-Rows go inside Sections as plain `HStack`s — no own surface or border (the Section supplies that). Pattern: 34×34 rounded icon plate (12pt corner) on the left, two-line title/subtitle in the middle, status pill or relative-time on the right. See `HostRow`, `RelayDaemonRow`, `ActiveSessionRow` in `HostListView.swift` for the reference implementation.
+Rows go inside Sections as plain `HStack`s — no own surface or border (the Section supplies that). Pattern: 34×34 rounded icon plate (12pt corner) on the left, two-line title/subtitle in the middle, status pill or relative-time on the right. See `HostRow` and `ActiveSessionRow` in `HostListView.swift` for the reference implementation.
 
 ### `StatusPill`
 

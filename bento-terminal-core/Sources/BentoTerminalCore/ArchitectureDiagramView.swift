@@ -1,12 +1,13 @@
 import SwiftUI
 
 /// The one picture that answers every future "why": the host runs the tmux
-/// server, every device is just another client. Shown on the first screen of
-/// both platforms' first-run flows and in Help → "How Bento works"
+/// server, every device is just another client, and the wire between them is
+/// ordinary SSH — nothing of ours sits in the middle. Shown on the first
+/// screen of both platforms' first-run flows and in Help → "How Bento works"
 /// (design doc §2). One implementation shared by iOS and macOS.
 ///
-/// Names the real thing (tmux server / client) rather than a metaphor: the
-/// user will meet those words in `tmux ls`, in tmux's own docs, and in any
+/// Names the real thing (tmux server / client, ssh) rather than a metaphor:
+/// the user will meet those words in `tmux ls`, in tmux's own docs, and in any
 /// other terminal, and a private vocabulary only breaks when it leaks.
 public struct ArchitectureDiagramView: View {
     /// Accent used for the link + host highlight (apps pass their brand green).
@@ -32,7 +33,7 @@ public struct ArchitectureDiagramView: View {
             endpoint(
                 symbol: "desktopcomputer",
                 title: "Your computer",
-                caption: "Runs the tmux server.\nMac, Linux, or Windows (WSL).",
+                caption: "Runs sshd and the tmux server.\nMac, Linux, or Windows (WSL).",
                 highlighted: true
             )
         }
@@ -42,7 +43,7 @@ public struct ArchitectureDiagramView: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Your phone is a tmux client connected through the Bento relay to your computer, which runs the tmux server. Sessions keep running there even when the phone is closed.")
+        .accessibilityLabel("Your phone is a tmux client connected over SSH to your computer, which runs the tmux server. Sessions keep running there even when the phone is closed.")
     }
 
     private func endpoint(symbol: String, title: String, caption: String, highlighted: Bool = false) -> some View {
@@ -71,8 +72,9 @@ public struct ArchitectureDiagramView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// The relay link: a dashed line with a traveling pulse dot in each
-    /// direction and a small cloud badge. Purely decorative — reduced-motion
+    /// The SSH link: a dashed line with a traveling pulse dot, badged with a
+    /// padlock and the literal word `ssh` — the wire is the user's own SSH
+    /// connection, so the picture says so. Purely decorative — reduced-motion
     /// users just see the static dashes.
     private var link: some View {
         VStack(spacing: 4) {
@@ -91,12 +93,12 @@ public struct ArchitectureDiagramView: View {
                 }
             }
             .frame(height: 12)
-            Image(systemName: "cloud.fill")
+            Image(systemName: "lock.fill")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.secondary.opacity(0.6))
             if !compact {
-                Text("encrypted relay")
-                    .font(.system(size: 10))
+                Text("ssh")
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
         }

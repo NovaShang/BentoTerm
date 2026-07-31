@@ -5,21 +5,16 @@ public enum AuthMethod: Codable, Hashable, Sendable {
     case privateKey(keyLabel: String)
 }
 
-/// Where the SSH bytes go on the wire. The transport is a property of the
-/// Host so all downstream code (TerminalViewModel, TmuxLister, SessionManager)
-/// stays transport-agnostic; only SSHService.connect branches on this.
+/// Where the SSH bytes go on the wire. There is exactly one answer today —
+/// a TCP connection to `host.hostname:port` — but the transport stays a
+/// property of the Host so downstream code (TerminalViewModel, TmuxLister,
+/// SessionManager) keeps being written transport-agnostically, and so saved
+/// hosts already carry the field if a second way in is ever added.
 public enum HostTransport: Codable, Hashable, Sendable {
     /// Plain TCP/SSH to host.hostname:port — what users add via the +
-    /// menu's "Add SSH host…" entry.
+    /// menu's "Add SSH host…" entry. Reaching the machine (VPN, Tailscale,
+    /// a jump host) is the user's own ssh plumbing, not ours.
     case directTCP
-
-    /// Relay-routed to a Bento daemon paired earlier via 6-digit code. The
-    /// carried fields are everything SSHService needs to instantiate
-    /// BentoRelayClient without re-querying RelayDaemonStore.
-    /// `deviceID` is the opaque identifier the daemon assigned at pair
-    /// time; iOS includes it in the device-attach challenge so the relay
-    /// can pin our pubkey before bridging the stream.
-    case relay(daemonID: String, hostFingerprint: String, deviceID: String)
 }
 
 public struct Host: Identifiable, Codable, Hashable, Sendable {
@@ -62,15 +57,14 @@ public struct Host: Identifiable, Codable, Hashable, Sendable {
         name.isEmpty ? "\(username)@\(hostname)" : name
     }
 
-    /// True if this Host is reached via the Bento relay rather than direct TCP.
-    public var isRelay: Bool {
-        if case .relay = transport { return true }
-        return false
-    }
-
-    // Lenient decoder — every field defaults if missing so adding new fields
-    // never invalidates previously-saved JSON. When you add a new field to
-    // this struct, default it here too.
+    // Lenient decoder — every field defaults if missing (or unreadable) so
+    // adding new fields never invalidates previously-saved JSON. When you add
+    // a new field to this struct, default it here too.
+    //
+    // The same leniency is what retires a transport: a `hosts.json` written by
+    // a version that had more `HostTransport` cases decodes here with the
+    // unknown case falling back to `.directTCP` rather than failing — one host
+    // is degraded, the rest of the file still loads.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()

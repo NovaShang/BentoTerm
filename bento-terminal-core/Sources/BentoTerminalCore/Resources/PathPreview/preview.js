@@ -105,7 +105,7 @@ const md = window.markdownit({
 // stub. File-relative sources (the normal markdown case — resolved against the
 // FILE's own directory, not any root) become placeholders the native side
 // reads through the pane's file source and fills in as data: URIs — this works
-// for local AND remote (SSH/relay) files alike.
+// for local AND remote (SSH) files alike.
 md.renderer.rules.image = function (tokens, idx) {
   const t = tokens[idx];
   const src = (t.attrGet("src") || "").trim();

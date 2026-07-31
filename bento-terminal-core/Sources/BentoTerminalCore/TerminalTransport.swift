@@ -9,8 +9,8 @@ public enum TerminalConnectionState: Sendable, Equatable {
     case failed(String)
 }
 
-/// A bidirectional byte channel to a shell — SSH/relay on iOS, a local pty on
-/// macOS. TerminalViewModel drives both through this protocol, so the session
+/// A bidirectional byte channel to a shell — an SSH connection on iOS, a local
+/// pty on macOS. TerminalViewModel drives both through this protocol, so the session
 /// logic is identical across platforms; only the concrete transport differs.
 ///
 /// Not actor-isolated: callers invoke from the MainActor, and conformers
@@ -46,14 +46,14 @@ public protocol TerminalTransport: AnyObject, Sendable {
     ///
     /// Not cosmetic: it decides how much bulk this connection can be asked for.
     /// A `capture-pane` of deep scrollback is nearly free on a pty and expensive
-    /// over SSH/relay, where the bytes are also decrypted and drained on the
+    /// over SSH, where the bytes are also decrypted and drained on the
     /// main thread of a phone.
     var isLocalLink: Bool { get }
 }
 
 public extension TerminalTransport {
-    /// Default: trust the reported state. Transports with a real wire (relay
-    /// WS) override this with an actual round-trip.
+    /// Default: trust the reported state. Transports with a real wire (the
+    /// iOS SSH socket) override this with an actual round-trip.
     func probeLiveness() async -> Bool {
         if case .connected = state { return true }
         return false

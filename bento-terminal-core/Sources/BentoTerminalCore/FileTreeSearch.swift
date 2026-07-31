@@ -29,8 +29,9 @@ public struct FileTreeEntry: Sendable, Equatable {
     }
 }
 
-/// Client-chosen bounds for a tree listing. Sources (and the daemon behind
-/// the relay one) enforce these mechanically; the policy lives here.
+/// Client-chosen bounds for a tree listing. Each source enforces these
+/// mechanically as it walks; the policy lives here, so a slow SFTP link and a
+/// local FileManager walk are held to the same budget.
 public struct TreeListRequest: Sendable {
     public var maxDepth = 4
     public var maxEntries = 2000
