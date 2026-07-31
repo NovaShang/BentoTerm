@@ -905,7 +905,44 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(surfaceBackgroundChanged(_:)),
             name: .ghosttySurfaceBackgroundChanged, object: nil)
-        // Only the FIRST window owns the saved frame — it's the one opening onto an
+
+        // Toolbar: <session> ⌄ | [window tabs] | New ⌄ | ⋯ — the centre hosts the
+        // current session's tmux WINDOWS as a Finder-style segmented
+        // `NSToolbarItemGroup`; sessions live in the named button's menu on the
+        // left. That gives tmux's three levels three fixed places (session /
+        // window / pane) instead of leaving the middle one homeless.
+        toolbar.onSelectSegment = { [weak self] idx in self?.segmentPicked(idx) }
+        // Open sessions raise their tab; a dormant one opens as a new tab.
+        toolbar.onSelectSession = { key in BentoTerminalWindow.focusOrOpen(sessionKey: key) }
+        toolbar.onOpenSearch = { [weak self] in
+            guard let self else { return }
+            self.tab.paneHost?.presentCommandPalette(from: self.toolbar.searchAnchor)
+        }
+        toolbar.onNewAgent = { BentoTerminalWindow.onNewAgentSession?() }
+        toolbar.onNewTerminal = { BentoTerminalWindow.newSessionTab() }
+        toolbar.onNewPlainShell = { BentoTerminalWindow.newWindowNoTmux() }
+        toolbar.onNewSSHHost = { BentoTerminalWindow.newSSHWindow(host: $0) }
+        toolbar.onNewRemoteTmuxHost = { BentoTerminalWindow.newTmuxWindow(host: $0) }
+        toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
+        toolbar.onCloseWindow = { [weak self] in self?.activeTab?.viewModel.closeWindow() }
+        toolbar.onSetSizingMode = { [weak self] mode in
+            self?.activeTab?.viewModel.setSizingMode(mode)
+            self?.rebuildTabBar()
+        }
+        toolbar.onSelectMode = { [weak self] mode in self?.requestMode(mode) }
+        toolbar.onKillSession = { [weak self] in self?.killActiveSession() }
+        toolbar.onDetach = { [weak self] in self?.detachActiveSession() }
+        // A plain tab vanishes with its window — there's nothing to reconnect.
+        toolbar.onCloseTab = { [weak self] in self?.window.close() }
+        toolbar.onRenameSession = { [weak self] in self?.presentRenameSheet() }
+        toolbar.onWindowMenu = { [weak self] index in self?.windowMenuItems(forSegment: index) }
+        toolbar.hostWindow = win
+        win.onRightClick = { [weak toolbar] point in
+            toolbar?.handleRightClick(atWindowPoint: point) ?? false
+        }
+        win.toolbar = toolbar.makeToolbar()
+        win.toolbarStyle = .unified
+        // Restore size + position, but only for the window that opens into an
         // empty screen — the rest join its tab group (which shares one frame) or
         // cascade beside it, and AppKit refuses a duplicate autosave name anyway.
         if !BentoTerminalWindow.hasOpenWindows {
