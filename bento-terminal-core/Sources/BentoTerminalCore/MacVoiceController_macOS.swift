@@ -77,6 +77,7 @@ public final class MacVoiceController: ObservableObject {
             // Re-transcribe the full clip with a better model, then preview/edit
             // before sending. (Left swipe still does NL→shell-command.) The preview
             // batches the captured PCM itself, so just stop capture here.
+            TelemetryService.shared.record(.voiceSwipeRightPreview)
             let streamed = session.currentTranscript
             session.cancel()
             isRecording = false
@@ -95,6 +96,9 @@ public final class MacVoiceController: ObservableObject {
             indicator.cancel()
             self.isRecording = false
             guard !text.isEmpty else { return }
+            TelemetryService.shared.record(.voiceSend)
+            TelemetryService.shared.record(.voiceFirstSend)
+            if dir == .left { TelemetryService.shared.record(.voiceSwipeLeftLLM) }
             self.onResult?(VoiceInputResult(text: text, direction: dir))
         }
     }
@@ -117,6 +121,8 @@ public final class MacVoiceController: ObservableObject {
         showPreview = false
         previewLoading = false
         guard !text.isEmpty else { return }
+        TelemetryService.shared.record(.voiceSend)
+        TelemetryService.shared.record(.voiceFirstSend)
         onResult?(VoiceInputResult(text: text, direction: .up))
     }
 

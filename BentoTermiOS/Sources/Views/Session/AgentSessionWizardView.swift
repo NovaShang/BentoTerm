@@ -67,6 +67,7 @@ struct AgentSessionWizardView: View {
             .bentoForm()
             .navigationTitle("New Agent Session")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { TelemetryService.shared.record(.agentWizardLaunched) }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -103,6 +104,7 @@ struct AgentSessionWizardView: View {
             agentCommand: resolvedAgentCommand ?? "",
             layout: layout
         )
+        TelemetryService.shared.record(.workspaceCreated)
         dismiss()
         onLaunch(spec)
     }

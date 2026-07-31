@@ -23,7 +23,7 @@ Modern coding is several agents working in parallel while you review, unblock, a
 
 - **Hold and speak, anywhere in the terminal.** Release to drop the transcript in; slide to send as-is, refine it with a better model, or turn plain language into a shell command.
 - **Recognition that knows your screen.** Vocabulary is biased by on-screen context, and mixed Chinese/English input just works.
-- **Your choice of engine.** Apple on-device recognition needs no setup at all; OpenAI and Qwen realtime ASR work with your own API key.
+- **Zero configuration.** Voice works out of the box through the Bento relay. Bring your own API keys if you prefer direct calls — Apple on-device, OpenAI, and Qwen engines are all supported.
 
 ## Sessions that outlive everything
 
@@ -53,8 +53,8 @@ To use a remote machine, it needs `sshd` running and `tmux` installed. Getting t
 ## Privacy
 
 - **No accounts.** Nothing to sign up for.
-- **No analytics.** Bento counts nothing and phones home to nothing. There is no server of ours for it to phone.
-- **Voice audio** goes directly from your machine to the speech provider you configured, using your own key. Apple's on-device recognizer is the default and never leaves the machine at all. Terminal output never leaves your machine except to power the features you invoke.
+- **Telemetry is off by default** and strictly opt-in — a closed set of feature counters, no terminal content, ever.
+- **Voice audio** goes to the speech provider through the Bento relay (keys live server-side); with your own key it goes directly to the provider. Terminal output never leaves your machine except to power the features you invoke.
 
 ## Under the hood
 

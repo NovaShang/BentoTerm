@@ -140,10 +140,10 @@ Link: `Read the architecture notes →` (README#under-the-hood)
 
 **H2:** Yours, on your machine
 
-No accounts — nothing to sign up for, and no analytics: Bento counts nothing
-and phones home to nothing, because there is no server of ours to phone. Voice
-audio goes directly from your machine to the speech provider, with your own
-key — or stays on-device, which is the default. Terminal output never leaves
+No accounts — nothing to sign up for. Telemetry is off by default and
+strictly opt-in: a closed set of feature counters, never terminal content.
+Voice audio goes to the speech provider through the Bento relay (keys live
+server-side), or directly with your own key. Terminal output never leaves
 your machine except to power the features you invoke.
 
 ## 11. FAQ
@@ -154,7 +154,9 @@ your machine except to power the features you invoke.
 - **Do I need to know tmux?** No. It's bundled and invisible. If you *do* use
   tmux, Bento attaches to your existing sessions seamlessly.
 - **Intel Macs?** Not currently — Apple Silicon, macOS 14+.
-- **What does it cost?** The app is free and open source (Apache-2.0).
+- **What does it cost?** The app is free and open source (Apache-2.0). Hosted
+  conveniences (like the zero-config voice relay) are free while in beta;
+  optional paid services may come later. BYOK always stays free.
 - **Can I reach a machine behind NAT?** That's on you — Bento speaks plain
   SSH, so use a VPN, Tailscale, or a jump host in your `~/.ssh/config`.
 - **When is iOS coming?** TestFlight beta is in preparation — join the
@@ -189,8 +191,8 @@ Bento 🍱 · GitHub · Releases · README (中文) · Apache-2.0 · Built by
 
 - Host: Cloudflare Pages; static, no framework needed.
 - Waitlist: needs a backend route (KV or D1, email + timestamp, rate-limited)
-  — no third-party form service, consistent with the privacy story. The relay
-  worker that used to host this is gone, so this needs a new home.
+  — no third-party form service, consistent with the privacy story. The voice
+  relay at relay.bentoai.dev is the obvious host now that one exists again.
 - Download button hits the `releases/latest/download/...` permalink — no
   per-release page edits needed.
 - Analytics: Cloudflare's built-in only. No third-party trackers — the privacy

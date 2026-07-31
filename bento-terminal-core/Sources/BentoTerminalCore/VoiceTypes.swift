@@ -27,68 +27,11 @@ public struct VoiceInputResult: Sendable {
 /// Which ASR engine a recording uses, from the `speech_engine` user setting.
 /// `openai` = OpenAI Realtime; `qwen` = Alibaba DashScope Qwen realtime (best
 /// 中文 / 中英混说 accuracy), both streaming and driven through `RealtimeASR`.
-///
-/// Apple is the only engine that runs with no configuration — it is on-device,
-/// so it is the default. The two cloud engines are bring-your-own-key: Bento
-/// operates no server, so audio goes from this machine straight to the provider
-/// on the user's own credentials, or it does not go at all.
-public enum SpeechEngineKind: String, Sendable, CaseIterable {
+public enum SpeechEngineKind: String, Sendable {
     case apple, openai, qwen
     public static func current() -> SpeechEngineKind {
         let raw = UserDefaults.standard.string(forKey: "speech_engine") ?? "apple"
         return SpeechEngineKind(rawValue: raw) ?? .apple
-    }
-
-    /// UserDefaults key holding the user's own API key for this engine.
-    /// nil = runs on-device and needs no credentials.
-    public var apiKeyDefaultsKey: String? {
-        switch self {
-        case .apple:  return nil
-        case .openai: return "openai_api_key"
-        case .qwen:   return "dashscope_api_key"
-        }
-    }
-
-    /// The key the user has stored for this engine ("" = none, on-device engines
-    /// included).
-    public var apiKey: String {
-        guard let key = apiKeyDefaultsKey else { return "" }
-        return (UserDefaults.standard.string(forKey: key) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// False when the engine needs a key the user has not supplied — it cannot
-    /// transcribe anything and must not be reached for.
-    public var isConfigured: Bool { apiKeyDefaultsKey == nil || !apiKey.isEmpty }
-
-    /// Name of the credential this engine needs, for UI that has to say so.
-    public var credentialName: String {
-        switch self {
-        case .apple:  return ""
-        case .openai: return "OpenAI API key"
-        case .qwen:   return "DashScope API key"
-        }
-    }
-
-    /// User-facing explanation of why this engine cannot run right now, or nil
-    /// when it can. Shown at the moment of selection AND raised instead of a
-    /// recording, so nobody discovers the gap as a network error mid-utterance.
-    public var unavailableReason: String? {
-        guard !isConfigured else { return nil }
-        #if os(iOS)
-        let location = "Settings → Speech Recognition"
-        #else
-        let location = "Settings → Voice"
-        #endif
-        return "\(displayName) needs your own \(credentialName). Add it in \(location), or switch to Apple (on-device)."
-    }
-
-    public var displayName: String {
-        switch self {
-        case .apple:  return "Apple (on-device)"
-        case .openai: return "OpenAI Realtime"
-        case .qwen:   return "Qwen realtime"
-        }
     }
 }
 

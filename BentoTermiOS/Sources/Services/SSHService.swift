@@ -89,6 +89,7 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
             self.client = sshClient
             mutableState.withLock { $0.state = .connected }
             dlog("SSH connected successfully")
+            Task { @MainActor in TelemetryService.shared.record(.sshDirectConnected) }
 
             // Identify this client so the disconnect callback can tell whether
             // it's still the active client. Otherwise an old client's delayed

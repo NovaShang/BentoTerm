@@ -5,19 +5,20 @@ import Foundation
 /// streaming realtime model because it sees the whole clip at once. Backs the
 /// right-swipe "transcribe → preview → edit → send" flow.
 ///
-/// Bring-your-own-key, like the realtime engines it mirrors: the user's own
-/// `openai_api_key` / `dashscope_api_key` posts straight to the provider. With
-/// no key there is nowhere to send the clip, so this returns nil and the caller
-/// keeps whatever the realtime engine already streamed.
+/// Zero-config by default: posts raw WAV to the bundled relay, which injects the
+/// key and forces the model (same pattern as the ASR mint). If the user set their
+/// own `openai_api_key`, posts the multipart form straight to OpenAI (BYOK).
 public final class BatchTranscriptionService: @unchecked Sendable {
     public static let shared = BatchTranscriptionService()
     private let session = URLSession(configuration: .default)
 
+    private static let relayURL = URL(string: "https://relay.bentoai.dev/v1/audio/transcriptions")!
     private static let directURL = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
     private static let model = "gpt-4o-transcribe"
     // Qwen batch (DashScope multimodal) — used when the Qwen engine is selected so
     // batch re-transcription matches the realtime engine instead of falling back
-    // to OpenAI.
+    // to OpenAI. Relay normalizes the response to `{ text }`; direct is BYOK.
+    private static let qwenRelayURL = URL(string: "https://relay.bentoai.dev/v1/asr/qwen/transcribe")!
     private static let qwenDirectURL = URL(string: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation")!
 
     public init() {}
@@ -35,21 +36,29 @@ public final class BatchTranscriptionService: @unchecked Sendable {
         return await transcribeOpenAI(wav: wav, language: language)
     }
 
-    /// OpenAI `gpt-4o-transcribe` batch — multipart form straight to OpenAI on
-    /// the user's key.
+    /// OpenAI `gpt-4o-transcribe` batch (relay zero-config, or BYOK direct).
     private func transcribeOpenAI(wav: Data, language: String) async -> String? {
-        let key = SpeechEngineKind.openai.apiKey
-        guard !key.isEmpty else {
-            dlog("[batch-asr] no OpenAI key — skipping batch refinement")
-            return nil
-        }
+        let key = (UserDefaults.standard.string(forKey: "openai_api_key") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let boundary = "bento-\(UUID().uuidString)"
-        var request = URLRequest(url: Self.directURL)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = Self.multipart(wav: wav, language: language, boundary: boundary)
+        var request: URLRequest
+        if key.isEmpty {
+            // Zero-config: raw WAV to the relay; it builds the multipart + injects key.
+            var comps = URLComponents(url: Self.relayURL, resolvingAgainstBaseURL: false)!
+            if !language.isEmpty { comps.queryItems = [URLQueryItem(name: "language", value: language)] }
+            request = URLRequest(url: comps.url!)
+            request.httpMethod = "POST"
+            request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
+            request.httpBody = wav
+        } else {
+            // BYOK: multipart form straight to OpenAI.
+            let boundary = "bento-\(UUID().uuidString)"
+            request = URLRequest(url: Self.directURL)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Self.multipart(wav: wav, language: language, boundary: boundary)
+        }
         request.timeoutInterval = 30
 
         do {
@@ -69,31 +78,41 @@ public final class BatchTranscriptionService: @unchecked Sendable {
         }
     }
 
-    /// Qwen `qwen3-asr-flash` batch via DashScope multimodal ASR — the native
-    /// DashScope request, posted directly on the user's key.
+    /// Qwen `qwen3-asr-flash` batch via DashScope multimodal ASR. Zero-config posts
+    /// `{ audio, language?, corpus? }` to the relay (which injects the key and
+    /// returns `{ text }`); BYOK posts the native DashScope request directly.
     private func transcribeQwen(wav: Data, language: String, corpus: String) async -> String? {
-        let key = SpeechEngineKind.qwen.apiKey
-        guard !key.isEmpty else {
-            dlog("[batch-asr] no DashScope key — skipping batch refinement")
-            return nil
-        }
         let b64 = wav.base64EncodedString()
+        let key = (UserDefaults.standard.string(forKey: "dashscope_api_key") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let direct = !key.isEmpty
 
-        var request = URLRequest(url: Self.qwenDirectURL)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var asrOptions: [String: Any] = ["enable_lid": true, "enable_itn": false]
-        if !language.isEmpty { asrOptions["language"] = language }
-        let payload: [String: Any] = [
-            "model": "qwen3-asr-flash",
-            "input": ["messages": [
-                ["role": "system", "content": [["text": corpus]]],
-                ["role": "user", "content": [["audio": "data:audio/wav;base64,\(b64)"]]],
-            ]],
-            "parameters": ["asr_options": asrOptions],
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        var request: URLRequest
+        if direct {
+            request = URLRequest(url: Self.qwenDirectURL)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            var asrOptions: [String: Any] = ["enable_lid": true, "enable_itn": false]
+            if !language.isEmpty { asrOptions["language"] = language }
+            let payload: [String: Any] = [
+                "model": "qwen3-asr-flash",
+                "input": ["messages": [
+                    ["role": "system", "content": [["text": corpus]]],
+                    ["role": "user", "content": [["audio": "data:audio/wav;base64,\(b64)"]]],
+                ]],
+                "parameters": ["asr_options": asrOptions],
+            ]
+            request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        } else {
+            request = URLRequest(url: Self.qwenRelayURL)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            var payload: [String: Any] = ["audio": b64]
+            if !language.isEmpty { payload["language"] = language }
+            if !corpus.isEmpty { payload["corpus"] = corpus }
+            request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        }
         request.timeoutInterval = 30
 
         do {
@@ -104,7 +123,9 @@ public final class BatchTranscriptionService: @unchecked Sendable {
                 return nil
             }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-            let trimmed = (Self.parseDashScope(json) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            // Relay returns { text }; direct returns the native DashScope shape.
+            let text = direct ? Self.parseDashScope(json) : (json["text"] as? String)
+            let trimmed = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         } catch {
             dlog("[batch-asr] qwen error: \(error)")

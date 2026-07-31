@@ -21,9 +21,9 @@ struct SettingsView: View {
     @AppStorage("llm_enabled") private var llmEnabled = true
     @AppStorage("llm_api_key") private var llmKey = ""
     @AppStorage("llm_model") private var llmModel = "gpt-4o-mini"
-    @AppStorage("llm_endpoint") private var llmEndpoint = "https://api.openai.com/v1/chat/completions"
     @State private var showThemeImporter = false
     @State private var importError: String?
+    @ObservedObject private var telemetry = TelemetryService.shared
 
     private let fontFamilies: [(token: String, label: String)] = [
         ("sf-mono", "SF Mono"), ("menlo", "Menlo"),
@@ -51,9 +51,9 @@ struct SettingsView: View {
         Form {
             Section {
                 Picker("Engine", selection: $speechEngine) {
-                    Text(engineLabel(.apple, "Apple (on-device)")).tag("apple")
-                    Text(engineLabel(.openai, "OpenAI Realtime")).tag("openai")
-                    Text(engineLabel(.qwen, "Qwen (中文 / 中英混说)")).tag("qwen")
+                    Text("Apple (on-device)").tag("apple")
+                    Text("OpenAI Realtime").tag("openai")
+                    Text("Qwen (中文 / 中英混说)").tag("qwen")
                 }
                 Picker("Language", selection: $speechLocale) {
                     Text("Auto").tag("auto")
@@ -62,10 +62,10 @@ struct SettingsView: View {
                     Text("日本語").tag("ja-JP")
                 }
                 if speechEngine == "openai" {
-                    SecureField("OpenAI API key (required)", text: $openaiKey)
+                    SecureField("OpenAI API key (optional)", text: $openaiKey)
                 }
                 if speechEngine == "qwen" {
-                    SecureField("DashScope API key (required)", text: $dashscopeKey)
+                    SecureField("DashScope API key (optional)", text: $dashscopeKey)
                     Toggle("Bias from on-screen text", isOn: $asrAutoContext)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Custom vocabulary (names, jargon — one per line or comma-separated)")
@@ -75,37 +75,20 @@ struct SettingsView: View {
                             .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
                     }
                 }
-                // The unconfigured case is stated here, where the choice is made,
-                // rather than surfacing as a failed connection mid-utterance.
-                if let reason = selectedEngine.unavailableReason {
-                    Label(reason, systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             } header: { Text("Speech") } footer: {
-                Text(speechFooter)
+                Text(speechEngine == "qwen"
+                     ? "Qwen realtime (qwen3-asr-flash) — best for Chinese and Chinese-English mixed speech. Uses the bundled relay unless you add a DashScope key."
+                     : "Apple runs on-device (no key). OpenAI Realtime uses the bundled relay unless you add a key.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
             Section {
                 Toggle("Convert speech → shell command", isOn: $llmEnabled)
                 if llmEnabled {
-                    SecureField("API key (required)", text: $llmKey)
-                    // Model and endpoint are the user's to pick: it is their key
-                    // and their bill, and the endpoint only has to be
-                    // OpenAI-compatible, so nothing here should be pinned.
+                    SecureField("LLM API key", text: $llmKey)
                     Picker("Model", selection: $llmModel) {
                         Text("gpt-4o-mini").tag("gpt-4o-mini")
                         Text("gpt-4o").tag("gpt-4o")
-                        Text("gpt-4.1-mini").tag("gpt-4.1-mini")
-                        Text("gpt-4.1").tag("gpt-4.1")
-                    }
-                    TextField("Endpoint", text: $llmEndpoint)
-                        .font(.caption.monospaced())
-                    if let reason = LLMService.shared.unavailableReason {
-                        Label(reason, systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             } header: { Text("AI command") } footer: {
@@ -114,27 +97,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-    }
-
-    private var selectedEngine: SpeechEngineKind {
-        SpeechEngineKind(rawValue: speechEngine) ?? .apple
-    }
-
-    /// Flag an engine in the picker that cannot run yet, so the constraint is
-    /// visible before it is chosen rather than after.
-    private func engineLabel(_ engine: SpeechEngineKind, _ name: String) -> String {
-        engine.isConfigured ? name : "\(name) — needs key"
-    }
-
-    private var speechFooter: String {
-        switch selectedEngine {
-        case .apple:
-            return "Apple's on-device recognizer. Nothing leaves the Mac and no key is needed; accuracy varies by language."
-        case .openai:
-            return "OpenAI Realtime, on your own OpenAI key. Audio goes from this Mac straight to OpenAI and is billed to you — Bento runs no server and proxies nothing."
-        case .qwen:
-            return "Qwen realtime (qwen3-asr-flash) — best for Chinese and Chinese-English mixed speech. Runs on your own DashScope key, straight from this Mac to DashScope."
-        }
     }
 
     // MARK: - Terminal (font + theme)
@@ -263,6 +225,28 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section {
+                Toggle("Share anonymous usage statistics", isOn: Binding(
+                    get: { telemetry.enabled },
+                    set: { telemetry.enabled = $0 }
+                ))
+                DisclosureGroup("What gets counted") {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(TelemetryEvent.allCases, id: \.rawValue) { event in
+                            Text(event.rawValue)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("No terminal content, commands, transcripts, paths, or hostnames — ever. Just the event names above, tied to a random ID that is deleted when you turn this off. Events go straight to Bento's own endpoint; no third-party SDKs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }

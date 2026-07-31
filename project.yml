@@ -105,8 +105,8 @@ targets:
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Bento uses speech recognition to convert voice to text and shell commands."
         PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.mac
         MACOSX_DEPLOYMENT_TARGET: "14.0"
-        # App version surfaced in Finder/About (CFBundleShortVersionString).
-        # Bump alongside release tags.
+        # App version surfaced in Finder/About and reported by Telemetry
+        # (CFBundleShortVersionString). Bump alongside release tags.
         MARKETING_VERSION: "0.1.1"
         CURRENT_PROJECT_VERSION: 1
         CODE_SIGN_STYLE: Automatic
