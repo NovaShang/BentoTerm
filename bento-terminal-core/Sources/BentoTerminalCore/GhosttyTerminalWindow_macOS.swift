@@ -154,11 +154,28 @@ public enum BentoTerminalWindow {
     /// Show/hide the preview dock (pins survive a hide). ⌥⌘P and the palette.
     public static func togglePreviewDock() { frontmostManager()?.togglePreviewDock() }
 
+    /// `BENTO_OPEN_SESSIONS` says "open exactly these, and nothing else".
+    ///
+    /// The app delegate honours that when it launches, but the restore path has
+    /// a second entrance — `applicationShouldHandleReopen`, which fires on a
+    /// Dock click and on any activation that finds no visible window — and that
+    /// one went straight to `openMainWindow()`. A run started with the hook set
+    /// could therefore still end up attaching to whatever the user had open,
+    /// which is the one thing the hook exists to prevent, and it is not
+    /// hypothetical: it happened during this work, attaching a test build to
+    /// the live session the developer was using and resizing it. Checked here
+    /// rather than at the delegate so every route into restore is covered by
+    /// the same answer.
+    static var sessionRestoreSuppressed: Bool {
+        ProcessInfo.processInfo.environment["BENTO_OPEN_SESSIONS"] != nil
+    }
+
     public static func openMainWindow() {
         if let m = frontmostManager() {
             m.bringToFront()
             return
         }
+        guard !sessionRestoreSuppressed else { return }
         var last = (UserDefaults.standard.stringArray(forKey: lastSessionsKey) ?? [])
             .filter { !$0.isEmpty }
         // Reopening means RECONNECTING. Every window here goes up via
