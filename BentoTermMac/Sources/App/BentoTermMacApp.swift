@@ -14,7 +14,7 @@ struct BentoTermMacApp: App {
         // what keeps the Shell menu (and ⌘N) alive now that the MenuBarExtra
         // scene it used to hang off is gone.
         Settings {
-            SettingsView().environmentObject(appDelegate.bento)
+            SettingsView()
         }
         // The "Shell" menu drives the libghostty tiled terminal. Items dispatch
         // through the responder chain (BentoPaneAction) to the focused
@@ -110,8 +110,8 @@ struct TerminalCommands: Commands {
     }
 }
 
-/// Windows manages the small set of secondary, single-purpose windows (Pair /
-/// Wizard / Devices / First run). They are opened via AppKit rather than as
+/// Windows manages the small set of secondary, single-purpose windows (Wizard /
+/// First run). They are opened via AppKit rather than as
 /// SwiftUI `Window` scenes because they are transient and app-triggered, not
 /// restorable places the user navigates to — and because the terminal windows
 /// they sit alongside are AppKit-owned too, so one window story is simpler than
@@ -119,25 +119,19 @@ struct TerminalCommands: Commands {
 /// count as "the app's last window" in a way that changes lifecycle, and
 /// `applicationShouldTerminateAfterLastWindowClosed` is false anyway.
 enum Windows {
-    enum Kind { case pair, wizard, devices, firstRun }
+    enum Kind { case wizard, firstRun }
 
     @MainActor
-    static func show(_ kind: Kind, env: BentoCLI) {
+    static func show(_ kind: Kind) {
         let title: String
         let content: AnyView
         switch kind {
-        case .pair:
-            title = "Pair iPhone"
-            content = AnyView(PairingWindow().environmentObject(env))
         case .wizard:
             title = "New agent session"
-            content = AnyView(AgentWizardWindow().environmentObject(env))
-        case .devices:
-            title = "Paired devices"
-            content = AnyView(DevicesWindow().environmentObject(env))
+            content = AnyView(AgentWizardWindow())
         case .firstRun:
             title = "Welcome to BentoTerm"
-            content = AnyView(FirstRunWindow().environmentObject(env))
+            content = AnyView(FirstRunWindow())
         }
         let host = NSHostingController(rootView: content)
         let window = NSWindow(contentViewController: host)

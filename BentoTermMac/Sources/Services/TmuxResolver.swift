@@ -1,14 +1,8 @@
 import Foundation
 
 /// TmuxResolver picks which tmux binary the Mac app (and any other Swift
-/// callers) should spawn. Policy mirrors desktop/internal/tmuxresolver:
-/// prefer the user's own tmux when it's recent enough, else fall back to a
-/// bundled binary we ship inside the .app.
-///
-/// We deliberately re-implement the logic in Swift rather than shelling out
-/// to `bento doctor` because the app wants this resolution at startup
-/// to power the agent wizard — before the daemon is even guaranteed to be
-/// running.
+/// callers) should spawn: prefer the user's own tmux when it's recent enough,
+/// else fall back to a bundled binary we ship inside the .app.
 enum TmuxResolver {
     /// Minimum tmux version we accept as "system". Anything older falls
     /// back to bundled. 3.2 is where control-mode notifications became
@@ -141,17 +135,11 @@ enum TmuxResolver {
         ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"]
     }
 
-    /// Probe order for bundled tmux. The Mac app puts helpers inside
-    /// Contents/MacOS/helpers/ (avoiding the APFS case-insensitive clash
-    /// between the Swift `Bento` executable and the Go `bento` CLI), so
-    /// the bundled tmux lives there too.
+    /// Probe order for bundled tmux. The Mac app keeps its helper binaries in
+    /// Contents/MacOS/helpers/, so that is where the bundled tmux lands; the
+    /// bare Contents/MacOS is only a fallback for older layouts.
     private static func defaultBundledDirs() -> [String] {
-        var dirs: [String] = []
         let macOS = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS")
-        dirs.append(macOS.appendingPathComponent("helpers").path)
-        dirs.append(macOS.path)
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        dirs.append(home.appendingPathComponent(".bento/bin").path)
-        return dirs
+        return [macOS.appendingPathComponent("helpers").path, macOS.path]
     }
 }

@@ -283,8 +283,8 @@ enum TmuxCLI {
         let errPipe = Pipe()
         proc.standardOutput = outPipe
         proc.standardError = errPipe
-        // terminationHandler + continuation (same shape as BentoCLI.run)
-        // instead of waitUntilExit, which parks a cooperative-pool thread —
+        // terminationHandler + continuation instead of waitUntilExit, which
+        // would park a cooperative-pool thread for the whole run —
         // the app fans these out per-session every refresh tick.
         return try await withCheckedThrowingContinuation { cont in
             proc.terminationHandler = { p in

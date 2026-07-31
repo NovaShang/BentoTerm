@@ -1,22 +1,19 @@
 import SwiftUI
 import AppKit
 import AVFoundation
-import CoreImage
-import CoreImage.CIFilterBuiltins
 import BentoTerminalCore
 
 /// FirstRunWindow is the macOS onboarding wizard (design doc §4): a five-step
 /// environment-preparation flow shown on first launch INSTEAD of dropping the
 /// user at an app they haven't set up yet. Its two jobs are the design doc's
-/// two: get the environment actually ready (daemon, agent, account), and teach
-/// the concepts the user will need (host vs. remote, agents, workspaces).
+/// two: get the environment actually ready (an agent, a first workspace), and
+/// teach the concepts the user will need (host vs. remote, agents, workspaces).
 ///
 /// Gate: `UserDefaults firstRunCompleted_v1`, forced by BENTO_FORCE_FIRST_RUN=1
 /// for testing. Skipping counts as completing (pros hate being taught).
 struct FirstRunWindow: View {
     static let completedKey = "firstRunCompleted_v1"
 
-    @EnvironmentObject var bento: BentoCLI
     @Environment(\.dismiss) private var dismiss
 
     private enum Step: Int { case welcome, checklist, workspace, voice, done }
@@ -29,7 +26,6 @@ struct FirstRunWindow: View {
     // Checklist state. Presets come from the CORE AgentPreset (it carries the
     // install catalog); the app's local AgentPreset remains the wizard's
     // launch picker.
-    @State private var daemonOK = false
     @State private var agentPreset: BentoTerminalCore.AgentPreset?
     @State private var checkingAgent = true
     @State private var chosenAgent: BentoTerminalCore.AgentPreset = .claudeCode
@@ -93,7 +89,7 @@ struct FirstRunWindow: View {
             }
             ArchitectureDiagramView(accent: .green)
                 .padding(.horizontal, 12)
-            Text("This Mac is the host — it runs the tmux server your agents live in. Every device you connect from, including a phone you pair later, is just another tmux client.")
+            Text("This Mac is the host — it runs the tmux server your agents live in. Anything you connect from, here or over SSH, is just another tmux client.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -108,20 +104,7 @@ struct FirstRunWindow: View {
     private var checklist: some View {
         VStack(alignment: .leading, spacing: 18) {
             stepHeader("Check this Mac",
-                       "Three things make this Mac an agent host. Anything already in place is checked off for you; only what's missing needs a minute.")
-
-            checklistRow(
-                ok: daemonOK,
-                pending: false,
-                title: "BentoTerm background service",
-                detail: daemonOK
-                    ? "Running — it keeps the connection to your phone alive, in the background, whether or not BentoTerm is open."
-                    : "Starting… if this never turns green, click Retry."
-            ) {
-                if !daemonOK {
-                    Button("Retry") { Task { await startDaemonAndRefresh() } }
-                }
-            }
+                       "One thing makes this Mac an agent host: an agent to run. If you already have one it's checked off for you; otherwise installing it takes a minute.")
 
             checklistRow(
                 ok: agentPreset != nil,
@@ -358,38 +341,14 @@ struct FirstRunWindow: View {
     private var done: some View {
         VStack(alignment: .leading, spacing: 18) {
             stepHeader("You're set up",
-                       "Your session is live. Two ways to level up from here:")
+                       "Your session is live. One way to level up from here:")
 
             doneCard(
                 symbol: "square.grid.2x2",
                 title: "Open a second agent",
                 detail: "Agents work in parallel — one writes code while another researches. Each gets its own pane."
             ) {
-                Button("New agent session…") { Windows.show(.wizard, env: bento) }
-            }
-
-            doneCard(
-                symbol: "iphone",
-                title: "Put BentoTerm in your pocket",
-                detail: "Install BentoTerm on your iPhone or iPad and pair it — then command these same agents from the sofa, or anywhere."
-            ) {
-                HStack(alignment: .top, spacing: 16) {
-                    if let qr = QRCodeImage.make("https://bento.novashang.com/ios", size: 96) {
-                        Image(nsImage: qr)
-                            .interpolation(.none)
-                            .resizable()
-                            .frame(width: 96, height: 96)
-                            .padding(4)
-                            .background(Color.white)
-                            .cornerRadius(6)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("1. Scan to get the app\n2. In the app choose “I have a Mac”\n3. Show it the pairing code:")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                        Button("Show pairing code…") { Windows.show(.pair, env: bento) }
-                    }
-                }
+                Button("New agent session…") { Windows.show(.wizard) }
             }
 
             HStack(spacing: 8) {
@@ -411,7 +370,7 @@ struct FirstRunWindow: View {
                         .font(.system(size: 12))
                 }
                 .toggleStyle(.checkbox)
-                Text("No terminal content, commands, transcripts, paths, or hostnames — ever. Events go through the same Bento relay; no third-party SDKs. Change anytime in Settings.")
+                Text("No terminal content, commands, transcripts, paths, or hostnames — ever. Events go straight to Bento's own endpoint; no third-party SDKs. Change anytime in Settings.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -569,17 +528,10 @@ struct FirstRunWindow: View {
     // MARK: - Actions
 
     private func refreshChecklist() async {
-        daemonOK = await bento.status() != nil
-        if !daemonOK { await startDaemonAndRefresh() }
         checkingAgent = true
         agentPreset = await AgentDetector.firstInstalled()
         nodeFound = await AgentDetector.commandExists("node")
         checkingAgent = false
-    }
-
-    private func startDaemonAndRefresh() async {
-        try? await bento.startDaemon(relay: nil)
-        daemonOK = await bento.status() != nil
     }
 
     private func pickDirectory() {
@@ -671,22 +623,5 @@ enum AgentDetector {
                 cont.resume(returning: false)
             }
         }
-    }
-}
-
-// MARK: - QR helper
-
-enum QRCodeImage {
-    static func make(_ string: String, size: CGFloat) -> NSImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(string.utf8)
-        filter.correctionLevel = "M"
-        guard let ci = filter.outputImage else { return nil }
-        let scale = size / max(ci.extent.width, 1)
-        let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let rep = NSCIImageRep(ciImage: scaled)
-        let img = NSImage(size: rep.size)
-        img.addRepresentation(rep)
-        return img
     }
 }

@@ -4,10 +4,8 @@ import Foundation
 import ServiceManagement
 import SwiftUI
 
-/// AppDelegate owns:
-///   - starting the daemon on launch (stopping it is explicit — see
-///     applicationWillTerminate)
-///   - the background polling timer that refreshes status + tmux sessions
+/// AppDelegate owns the background polling timer that refreshes the tmux
+/// session list.
 ///
 /// The poll is not cosmetic and must not be mistaken for leftover menu-bar
 /// machinery: `refresh()` feeds `BentoTerminalWindow.setServerSessions(...)`,
@@ -16,8 +14,6 @@ import SwiftUI
 /// on the server get "reopened" as fresh empty ones.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
-    let bento = BentoCLI()
-    @Published var status: DaemonStatus?
     @Published var tmuxSessions: [TmuxSession] = []
     /// Windows per session, fetched alongside the session list so the
     /// menu's submenu can render without a per-open async fetch (NSMenu
@@ -45,9 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Wire the terminal toolbar's app-target actions (the New Agent wizard
         // and the Settings scene) into the core window code via its hooks.
-        BentoTerminalWindow.onNewAgentSession = { [weak self] in
-            guard let self else { return }
-            Windows.show(.wizard, env: self.bento)
+        BentoTerminalWindow.onNewAgentSession = {
+            Windows.show(.wizard)
         }
         BentoTerminalWindow.onOpenSettings = { [weak self] in
             self?.openSettings()
@@ -61,61 +56,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
         }
         // Opt-in telemetry (no-op unless the user enabled the Settings toggle):
-        // count today as an active day, and route batches through the same
-        // relay the daemon uses if the user configured a custom one.
-        let configuredRelay = bento.currentRelayURL()
-        if !configuredRelay.isEmpty {
-            TelemetryService.relayBaseURLOverride = configuredRelay
-        }
+        // count today as an active day.
         TelemetryService.shared.appBecameActive()
 
         Task { [weak self] in
             guard let self else { return }
-            try? await self.bento.startDaemon(relay: nil)
             await self.refresh()
             self.startPolling()
             // Test hook: open a specific secondary window directly
-            // (BENTO_OPEN_WINDOW=pair|wizard|devices|firstRun), for
-            // screenshot-driven verification without UI scripting. This one DOES
-            // suppress the terminal window — the point of the hook is to get a
-            // clean screenshot of exactly one window.
+            // (BENTO_OPEN_WINDOW=wizard|firstRun), for screenshot-driven
+            // verification without UI scripting. This one DOES suppress the
+            // terminal window — the point of the hook is to get a clean
+            // screenshot of exactly one window.
             if let name = ProcessInfo.processInfo.environment["BENTO_OPEN_WINDOW"] {
                 switch name {
-                case "pair": Windows.show(.pair, env: self.bento)
-                case "wizard": Windows.show(.wizard, env: self.bento)
-                case "devices": Windows.show(.devices, env: self.bento)
+                case "wizard": Windows.show(.wizard)
                 case "plain": BentoTerminalWindow.newWindowNoTmux()
-                default: Windows.show(.firstRun, env: self.bento)
+                default: Windows.show(.firstRun)
                 }
                 return
             }
             // Always open the terminal window on launch — including a launch at
             // login. An app with a Dock icon that starts with zero windows just
             // looks broken; there is no menu-bar item to explain where it went.
-            // Done after the daemon is up so the local tmux server is ready.
             BentoTerminalWindow.openMainWindow()
-            // First launch → the onboarding wizard owns the stage (design doc
-            // §4.1): environment checklist, first workspace, first voice
-            // command, pairing hand-off. It comes up IN FRONT OF the terminal
-            // window rather than instead of it, so dismissing it leaves the user
-            // somewhere. BENTO_FORCE_FIRST_RUN=1 re-triggers it for testing
-            // without clearing defaults.
+            // First launch → the onboarding wizard owns the stage: environment
+            // checklist, first workspace, first voice command. It comes up IN
+            // FRONT OF the terminal window rather than instead of it, so
+            // dismissing it leaves the user somewhere. BENTO_FORCE_FIRST_RUN=1
+            // re-triggers it for testing without clearing defaults.
             let firstRunPending = !UserDefaults.standard.bool(forKey: FirstRunWindow.completedKey)
                 || ProcessInfo.processInfo.environment["BENTO_FORCE_FIRST_RUN"] == "1"
             if firstRunPending {
-                Windows.show(.firstRun, env: self.bento)
+                Windows.show(.firstRun)
             }
         }
     }
 
-    /// Quitting takes down the GUI, NOT the background service.
-    ///
-    /// This used to SIGTERM the daemon on the way out, which welded the two
-    /// lifecycles together and defeated the point of having a daemon at all:
-    /// the relay exists so the phone can reach this Mac while nobody is sitting
-    /// at it. Quit the window half and the phone lost the Mac with it. The
-    /// daemon is a separate, launchd-managed process now — this app is its
-    /// control surface, not its container.
+    /// Quitting takes down the GUI only. Nothing else of ours is running: the
+    /// tmux server owns the sessions and outlives us, so quitting is a detach.
     func applicationWillTerminate(_ notification: Notification) {
         TelemetryService.shared.flush()
     }
@@ -258,7 +237,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func refresh() async {
-        status = await bento.status()
         let sessions = await TmuxCLI.listSessions()
         tmuxSessions = sessions
         // Drive the terminal window's tab strip with the full session list.

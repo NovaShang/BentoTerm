@@ -6,13 +6,9 @@ import UniformTypeIdentifiers
 /// SettingsView is the content of the app's Settings scene. macOS renders it
 /// in the canonical "preferences window" chrome with toolbar + grouped form.
 struct SettingsView: View {
-    @EnvironmentObject var bento: BentoCLI
     @ObservedObject private var themeStore = ThemeStore.shared
-    @State private var relayURL: String = ""
     @State private var launchAtLogin: Bool = LoginItem.isEnabled
     @State private var loginErr: String?
-    @State private var applying = false
-    @State private var applied = false
     @State private var preferredTerminal: TerminalAppKind = TerminalAppKind.preferred
     @AppStorage("terminal_font_size") private var fontSize: Double = 13
     @AppStorage("terminal_font_family") private var fontFamily: String = "sf-mono"
@@ -46,8 +42,6 @@ struct SettingsView: View {
                 .tabItem { Label("Terminal", systemImage: "terminal") }
             voiceTab
                 .tabItem { Label("Voice", systemImage: "mic") }
-            relayTab
-                .tabItem { Label("Relay", systemImage: "network") }
             aboutTab
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
@@ -275,7 +269,7 @@ struct SettingsView: View {
             } header: {
                 Text("Privacy")
             } footer: {
-                Text("No terminal content, commands, transcripts, paths, or hostnames — ever. Just the event names above, tied to a random ID that is deleted when you turn this off. Events go through the same Bento relay; no third-party SDKs.")
+                Text("No terminal content, commands, transcripts, paths, or hostnames — ever. Just the event names above, tied to a random ID that is deleted when you turn this off. Events go straight to Bento's own endpoint; no third-party SDKs.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -290,37 +284,6 @@ struct SettingsView: View {
         return preferredTerminal.supportsTmuxControlMode
             ? "Bento attaches with `tmux -CC` so \(preferredTerminal.displayName) renders each tmux pane as a native window."
             : "Bento attaches with plain `tmux attach`; \(preferredTerminal.displayName) shows the standard tmux UI."
-    }
-
-    private var relayTab: some View {
-        Form {
-            Section {
-                TextField("Relay URL", text: $relayURL, prompt: Text(BentoCLI.defaultRelayURL))
-            } footer: {
-                Text("Leave blank to use the default Cloudflare-hosted relay. " +
-                     "The daemon restarts to pick up the new URL.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                HStack {
-                    Spacer()
-                    if applied {
-                        Label("Applied", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.caption)
-                    }
-                    Button("Apply") {
-                        Task { await applyRelay() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(applying)
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .onAppear { loadCurrent() }
     }
 
     private var aboutTab: some View {
@@ -338,18 +301,5 @@ struct SettingsView: View {
         }
         .padding(.vertical, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func loadCurrent() {
-        relayURL = bento.currentRelayURL()
-    }
-
-    private func applyRelay() async {
-        applying = true
-        applied = false
-        defer { applying = false }
-        try? await bento.stopDaemon()
-        try? await bento.startDaemon(relay: relayURL.isEmpty ? nil : relayURL)
-        applied = true
     }
 }
