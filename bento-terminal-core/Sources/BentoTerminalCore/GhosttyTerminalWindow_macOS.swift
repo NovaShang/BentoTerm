@@ -260,6 +260,19 @@ public enum BentoTerminalWindow {
         let names = managers.map(\.tab)
             .filter { !$0.isPlain && $0.id.isLocal }
             .map(\.sessionKey)
+        // Never write the list empty. "No reconnectable tab is open right now"
+        // is not the same statement as "there is nothing to reconnect", and
+        // this function cannot tell them apart — it is called from window
+        // creation too, so opening a plain no-tmux terminal as your only window
+        // used to silently wipe the record. That became a common path the
+        // moment New Terminal without tmux was made the launcher's default
+        // action: ⌘N ⏎ would cost you your restore list.
+        //
+        // Refusing to write empty is safe because a stale name cannot survive
+        // being used: `openMainWindow` prunes the list against the sessions the
+        // server actually still has before reopening anything, so the list
+        // shrinks there instead — at the one moment we know the truth.
+        guard !names.isEmpty else { return }
         UserDefaults.standard.set(names, forKey: lastSessionsKey)
     }
 
