@@ -1,5 +1,4 @@
 import SwiftUI
-import ServiceManagement
 import BentoTerminalCore
 import UniformTypeIdentifiers
 
@@ -7,8 +6,6 @@ import UniformTypeIdentifiers
 /// in the canonical "preferences window" chrome with toolbar + grouped form.
 struct SettingsView: View {
     @ObservedObject private var themeStore = ThemeStore.shared
-    @State private var launchAtLogin: Bool = LoginItem.isEnabled
-    @State private var loginErr: String?
     @State private var preferredTerminal: TerminalAppKind = TerminalAppKind.preferred
     @AppStorage("terminal_font_size") private var fontSize: Double = 13
     @AppStorage("terminal_font_family") private var fontFamily: String = "sf-mono"
@@ -249,29 +246,6 @@ struct SettingsView: View {
 
     private var generalTab: some View {
         Form {
-            Section {
-                Toggle("Launch BentoTerm at login", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, newValue in
-                        do {
-                            try LoginItem.setEnabled(newValue)
-                            loginErr = nil
-                        } catch {
-                            loginErr = (error as NSError).localizedDescription
-                            launchAtLogin = LoginItem.isEnabled
-                        }
-                    }
-            } footer: {
-                if let loginErr {
-                    Label(loginErr, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                } else {
-                    Text("BentoTerm will open automatically after every login.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
             Section {
                 Picker("Open tmux sessions in", selection: $preferredTerminal) {
                     ForEach(TerminalAppKind.allInstalled) { kind in

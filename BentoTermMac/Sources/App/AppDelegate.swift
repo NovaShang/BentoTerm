@@ -1,7 +1,6 @@
 import AppKit
 import BentoTerminalCore
 import Foundation
-import ServiceManagement
 import SwiftUI
 
 /// AppDelegate owns the background polling timer that refreshes the tmux
@@ -248,20 +247,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         tmuxWindows = fresh
     }
 
-}
-
-/// LoginItem wraps the macOS 13+ Service Management API so the toggle in
-/// Settings stays a one-liner from the View side.
-enum LoginItem {
-    static var isEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
-    }
-
-    static func setEnabled(_ on: Bool) throws {
-        if on {
-            try SMAppService.mainApp.register()
-        } else {
-            try SMAppService.mainApp.unregister()
-        }
-    }
 }
