@@ -149,11 +149,6 @@ public enum BentoTerminalWindow {
         openPlain(title: "Terminal")
     }
 
-    /// Drop to a pure menubar (accessory) app when the window is gone.
-    static func updateActivationPolicy() {
-        if managers.isEmpty { NSApp.setActivationPolicy(.accessory) }
-    }
-
     public static func newWindow(session: String = defaultSessionName) {
         open(choice: .createOrAttach(name: session), title: titleFor(session))
     }
@@ -242,8 +237,13 @@ public enum BentoTerminalWindow {
             // would replace the user's session with a fresh default. Same for
             // ⌘Q, which closes every window in turn — the set at that moment is
             // exactly what should come back.
+            // NOTE: the activation policy is NOT touched here. BentoTerm is an
+            // ordinary app — it stays `.regular` with its Dock icon even with no
+            // windows left, which is how you get back in. Dropping to
+            // `.accessory` (what the menu-bar build did) would now leave a
+            // process with no Dock icon, no menu-bar item and no window: alive,
+            // invisible and unquittable.
             if !managers.isEmpty && !isTerminating { persistOpenSessions() }
-            updateActivationPolicy()
         }
         // Join the frontmost window's group only when tabs are what the user
         // wants; otherwise this stands alone. Either way `tabbingIdentifier` is
@@ -265,7 +265,6 @@ public enum BentoTerminalWindow {
     }
 
     private static func open(choice: TmuxStartChoice, title: String) {
-        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
         let key = SessionTab.key(for: choice)
         if let existing = manager(for: key) {
             existing.bringToFront()
@@ -278,7 +277,6 @@ public enum BentoTerminalWindow {
     /// A plain (no-tmux) tab: never deduped — each is a new terminal — and never
     /// persisted, so closing it is final.
     static func openPlain(title: String, command: [String]? = nil) {
-        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
         var n = 1
         var key = title
         while manager(for: key) != nil { n += 1; key = "\(title) \(n)" }
@@ -673,7 +671,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // The CURRENT effective theme's background — it follows appearanceMode /
         // systemIsDark LIVE. Deliberately NOT `GhosttyRuntime.effectiveBackgroundRGB()`
         // (the base ghostty config): that config is built ONCE at runtime init,
-        // and a menubar app resolves the OS appearance late (defaulting to aqua
+        // and the OS appearance can resolve late (defaulting to aqua
         // early), so a dark launch baked the LIGHT theme (0xFFFFFF) into the base
         // config and never rebuilt — leaving the title bar white in dark mode
         // even across relaunches. The live `reportedChromeColor` (a pane's actual
@@ -810,10 +808,13 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     @objc func newWindowForTab(_ sender: Any?) { BentoTerminalWindow.newSessionTab() }
 
     func bringToFront() {
-        // Agent (LSUIElement) apps that just flipped to `.regular` don't always
-        // get key/front on the first `activate`; `orderFrontRegardless` shows the
-        // window even while the app is still inactive, so it can't open *behind*
-        // whatever the user was using when they clicked the icon.
+        // `orderFrontRegardless` used to be here because an LSUIElement app that
+        // had just flipped to `.regular` didn't reliably get key on the first
+        // `activate`, and the window could open *behind* whatever the user was
+        // in. That flip is gone — the app is always `.regular` — but this is
+        // still reached from places where BentoTerm is not the active app (the
+        // Dock icon, a URL/reopen, the toolbar's session menu acting on another
+        // window), and the ordering guarantee is exactly what those want.
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()

@@ -69,7 +69,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     private var renderInFlight = false
     /// Dirty flag: the display link only draws when something changed, instead of
     /// an unconditional 60fps redraw of every surface (which kept the GPU and this
-    /// queue busy all day on an idle menubar app — battery drain). Set true by any
+    /// queue busy all day on an idle background app — battery drain). Set true by any
     /// dirty source (ghostty's RENDER action, output, resize, focus) and consumed
     /// when a draw is scheduled. Starts true so the first frames draw (which also
     /// poll ghostty's grid size to start the pty — see reportSizeIfNeeded).

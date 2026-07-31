@@ -1,12 +1,12 @@
 import Foundation
 
-/// TmuxResolver picks which tmux binary the menubar (and any other Swift
+/// TmuxResolver picks which tmux binary the Mac app (and any other Swift
 /// callers) should spawn. Policy mirrors desktop/internal/tmuxresolver:
 /// prefer the user's own tmux when it's recent enough, else fall back to a
 /// bundled binary we ship inside the .app.
 ///
 /// We deliberately re-implement the logic in Swift rather than shelling out
-/// to `bento doctor` because the menubar wants this resolution at startup
+/// to `bento doctor` because the app wants this resolution at startup
 /// to power the agent wizard — before the daemon is even guaranteed to be
 /// running.
 enum TmuxResolver {

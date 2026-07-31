@@ -7,7 +7,7 @@ import BentoTerminalCore
 
 /// FirstRunWindow is the macOS onboarding wizard (design doc §4): a five-step
 /// environment-preparation flow shown on first launch INSTEAD of dropping the
-/// user at a menubar icon they can't find. Its two jobs are the design doc's
+/// user at an app they haven't set up yet. Its two jobs are the design doc's
 /// two: get the environment actually ready (daemon, agent, account), and teach
 /// the concepts the user will need (host vs. remote, agents, workspaces).
 ///
@@ -27,7 +27,7 @@ struct FirstRunWindow: View {
         .flatMap(Int.init).flatMap(Step.init) ?? .welcome
 
     // Checklist state. Presets come from the CORE AgentPreset (it carries the
-    // install catalog); the menubar's local AgentPreset remains the wizard's
+    // install catalog); the app's local AgentPreset remains the wizard's
     // launch picker.
     @State private var daemonOK = false
     @State private var agentPreset: BentoTerminalCore.AgentPreset?
@@ -115,7 +115,7 @@ struct FirstRunWindow: View {
                 pending: false,
                 title: "BentoTerm background service",
                 detail: daemonOK
-                    ? "Running — it keeps the connection to your phone alive. Lives quietly in the menu bar."
+                    ? "Running — it keeps the connection to your phone alive, in the background, whether or not BentoTerm is open."
                     : "Starting… if this never turns green, click Retry."
             ) {
                 if !daemonOK {
@@ -393,9 +393,9 @@ struct FirstRunWindow: View {
             }
 
             HStack(spacing: 8) {
-                Image(systemName: "menubar.arrow.up.rectangle")
+                Image(systemName: "dock.rectangle")
                     .foregroundStyle(.secondary)
-                Text("BentoTerm lives in your **menu bar** (top-right of the screen). Close every window — agents keep working in the background. Revisit this guide anytime: menu bar → Help.")
+                Text("BentoTerm stays in your **Dock**. Close every window — agents keep working in the background, and clicking the Dock icon (or ⌘N) brings your session right back.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -6,52 +6,38 @@ struct BentoTermMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuContent(app: appDelegate)
-                .environmentObject(appDelegate.bento)
-        } label: {
-            // A small wrapper so the always-present menu-bar label can bridge an
-            // AppKit request (the terminal toolbar's ⚙) to SwiftUI's reliable
-            // `openSettings` action — `showSettingsWindow:` doesn't fire in a
-            // MenuBarExtra app.
-            MenubarLabel()
-        }
-        .menuBarExtraStyle(.menu)
-        // The "Shell" menu drives the libghostty tiled terminal. Items dispatch
-        // through the responder chain (BentoPaneAction) to the focused
-        // GhosttyTiledPaneHost. SwiftUI owns the main menu in a MenuBarExtra
-        // app, so the menu must be declared here rather than via NSApp.mainMenu.
-        .commands { TerminalCommands() }
-
+        // BentoTerm is an ordinary Mac app: Dock icon, main menu, windows owned
+        // by AppKit (BentoTerminalWindow). There is no SwiftUI scene for the
+        // terminal itself, so `Settings` is the only declared scene — and it is
+        // what carries the main menu. `.commands` contributes to NSApp.mainMenu
+        // app-wide regardless of which scene declares it; attaching it here is
+        // what keeps the Shell menu (and ⌘N) alive now that the MenuBarExtra
+        // scene it used to hang off is gone.
         Settings {
             SettingsView().environmentObject(appDelegate.bento)
         }
+        // The "Shell" menu drives the libghostty tiled terminal. Items dispatch
+        // through the responder chain (BentoPaneAction) to the focused
+        // GhosttyTiledPaneHost, because our terminal windows are plain AppKit
+        // windows with no NSWindowController of their own.
+        .commands { TerminalCommands() }
     }
 }
 
-extension Notification.Name {
-    /// Posted by the terminal toolbar's ⚙ to open the SwiftUI Settings scene.
-    static let bentoOpenSettings = Notification.Name("bentoOpenSettings")
-}
-
-/// The always-present menu-bar label. It holds SwiftUI's `openSettings` action
-/// and triggers it when the AppKit toolbar posts `.bentoOpenSettings`.
-struct MenubarLabel: View {
-    @Environment(\.openSettings) private var openSettings
-
-    var body: some View {
-        // Template image — macOS tints to match the dark/light menu bar.
-        Image("MenubarIcon")
-            .onReceive(NotificationCenter.default.publisher(for: .bentoOpenSettings)) { _ in
-                openSettings()
-                NSApp.activate(ignoringOtherApps: true)
-            }
-    }
-}
-
-/// The Shell menu for Bento terminal windows (split / zoom / navigate / close).
+/// The Shell menu for Bento terminal windows (split / zoom / navigate / close),
+/// plus File → New Window.
 struct TerminalCommands: Commands {
     var body: some Commands {
+        // ⌘N is the reflex key for "give me a window" in every Mac app, and it
+        // is the only way back in once the last window is closed (besides the
+        // Dock icon) — the app deliberately stays running. Same semantics the
+        // old menu-bar "Open BentoTerm" had: reopen the last session rather than
+        // create a nameless new one.
+        CommandGroup(replacing: .newItem) {
+            Button("New Window") { BentoTerminalWindow.openMainWindow() }
+                .keyboardShortcut("n", modifiers: .command)
+        }
+
         CommandMenu("Shell") {
             Button("Command Palette…") { BentoTerminalWindow.presentCommandPalette() }
                 .keyboardShortcut("p", modifiers: .command)
@@ -124,10 +110,14 @@ struct TerminalCommands: Commands {
     }
 }
 
-/// Windows manages the small set of secondary windows the menubar can spawn
-/// for Pair / Wizard / Devices. We open them via AppKit so we don't fight
-/// SwiftUI Scene plumbing for menubar apps (regular Window scenes need a
-/// Dock icon, which we don't have).
+/// Windows manages the small set of secondary, single-purpose windows (Pair /
+/// Wizard / Devices / First run). They are opened via AppKit rather than as
+/// SwiftUI `Window` scenes because they are transient and app-triggered, not
+/// restorable places the user navigates to — and because the terminal windows
+/// they sit alongside are AppKit-owned too, so one window story is simpler than
+/// two. They deliberately carry no NSWindowController: closing one must not
+/// count as "the app's last window" in a way that changes lifecycle, and
+/// `applicationShouldTerminateAfterLastWindowClosed` is false anyway.
 enum Windows {
     enum Kind { case pair, wizard, devices, firstRun }
 

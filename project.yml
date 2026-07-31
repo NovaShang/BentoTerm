@@ -88,7 +88,6 @@ targets:
         # them distinct inside Xcode.
         PRODUCT_NAME: BentoTerm
         GENERATE_INFOPLIST_FILE: true
-        INFOPLIST_KEY_LSUIElement: true       # menubar-only, no Dock icon
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_CFBundleDisplayName: "BentoTerm"
         # Voice input touches the mic + (Apple engine) speech recognition. Without

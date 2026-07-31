@@ -7,8 +7,11 @@ import UserNotifications
 /// `TerminalEnvironment` callbacks). Two signals:
 ///   - a `UNUserNotificationCenter` banner on the rising edge (0 → >0 awaiting)
 ///     for a session — so you get pinged when you're in another app;
-///   - the Dock badge = total awaiting panes across open terminal sessions
-///     (best-effort: an LSUIElement app may not show a persistent Dock tile).
+///   - the Dock badge = total awaiting panes across open terminal sessions.
+///     This is now a first-class signal: BentoTerm is an ordinary app with a
+///     persistent Dock tile, so the count is visible even with every window
+///     closed (it used to be best-effort — an LSUIElement app has no tile).
+///     `clearBadge()` on activation keeps it from going stale.
 ///
 /// This mirrors the iOS path (which drives a Live Activity off the same
 /// callbacks) — same detection, platform-appropriate surfacing.

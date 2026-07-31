@@ -234,7 +234,7 @@ struct SettingsView: View {
                         .foregroundStyle(.orange)
                         .font(.caption)
                 } else {
-                    Text("BentoTerm will appear in your menu bar after every login.")
+                    Text("BentoTerm will open automatically after every login.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -330,7 +330,7 @@ struct SettingsView: View {
                 .frame(width: 96, height: 96)
             Text("BentoTerm")
                 .font(.title2).bold()
-            Text("Mac menubar companion for the BentoTerm iOS app.")
+            Text("A tmux-native terminal for the Mac.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

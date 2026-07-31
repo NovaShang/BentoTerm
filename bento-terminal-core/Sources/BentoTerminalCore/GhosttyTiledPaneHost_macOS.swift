@@ -1394,9 +1394,11 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 }
 
 /// Selectors for the pane actions above, so SwiftUI `.commands` (or any menu)
-/// can dispatch them through the responder chain to the focused host. SwiftUI
-/// owns `NSApp.mainMenu` in a `MenuBarExtra` app, so we declare the menu with
-/// `.commands` and route each command here rather than installing an NSMenu.
+/// can dispatch them through the responder chain to the focused host. The
+/// terminal windows are plain AppKit `NSWindow`s with no `NSWindowController`
+/// and no SwiftUI scene behind them, so a command has no view hierarchy to
+/// target directly — the responder chain is how it finds whichever pane host is
+/// focused, including inside a background tab's window.
 public enum BentoPaneAction {
     public static let splitVertically = #selector(GhosttyTiledPaneHost.splitPaneVertically(_:))
     public static let splitHorizontally = #selector(GhosttyTiledPaneHost.splitPaneHorizontally(_:))

@@ -9,10 +9,11 @@ import SwiftUI
 ///     applicationWillTerminate)
 ///   - the background polling timer that refreshes status + tmux sessions
 ///
-/// Polling lives here, NOT in MenuContent, because the `MenuBarExtra` content
-/// view only materializes while the menu is open. A poll loop attached to the
-/// content view would freeze whenever the dropdown is closed — which is most
-/// of the time.
+/// The poll is not cosmetic and must not be mistaken for leftover menu-bar
+/// machinery: `refresh()` feeds `BentoTerminalWindow.setServerSessions(...)`,
+/// which backs the window's tab strip AND the filter `openMainWindow()` uses to
+/// decide which remembered sessions still exist. Without it, sessions that died
+/// on the server get "reopened" as fresh empty ones.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     let bento = BentoCLI()
@@ -28,6 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var appearanceObservation: NSKeyValueObservation?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // SwiftUI has built NSApp.mainMenu by now; take ⌘W back (see below).
+        reclaimClosePaneShortcut()
+
         // Apply the saved light/dark preference before any window appears, and
         // keep it in sync when the user changes it or (in follow-system mode) the
         // OS appearance flips.
@@ -45,10 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             guard let self else { return }
             Windows.show(.wizard, env: self.bento)
         }
-        BentoTerminalWindow.onOpenSettings = {
-            // Route through SwiftUI's openSettings (via MenubarLabel) — the
-            // AppKit `showSettingsWindow:` selector is a no-op in MenuBarExtra apps.
-            NotificationCenter.default.post(name: .bentoOpenSettings, object: nil)
+        BentoTerminalWindow.onOpenSettings = { [weak self] in
+            self?.openSettings()
         }
         // Kill a session reliably via a one-shot `tmux kill-session`, then refresh
         // so the strip reflects it immediately (don't wait for the 5s poll).
@@ -72,13 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             try? await self.bento.startDaemon(relay: nil)
             await self.refresh()
             self.startPolling()
-            // First launch → the onboarding wizard owns the stage (design doc
-            // §4.1): environment checklist, first workspace, first voice
-            // command, pairing hand-off. BENTO_FORCE_FIRST_RUN=1 re-triggers
-            // it for testing without clearing defaults.
             // Test hook: open a specific secondary window directly
             // (BENTO_OPEN_WINDOW=pair|wizard|devices|firstRun), for
-            // screenshot-driven verification without UI scripting.
+            // screenshot-driven verification without UI scripting. This one DOES
+            // suppress the terminal window — the point of the hook is to get a
+            // clean screenshot of exactly one window.
             if let name = ProcessInfo.processInfo.environment["BENTO_OPEN_WINDOW"] {
                 switch name {
                 case "pair": Windows.show(.pair, env: self.bento)
@@ -89,18 +89,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 }
                 return
             }
+            // Always open the terminal window on launch — including a launch at
+            // login. An app with a Dock icon that starts with zero windows just
+            // looks broken; there is no menu-bar item to explain where it went.
+            // Done after the daemon is up so the local tmux server is ready.
+            BentoTerminalWindow.openMainWindow()
+            // First launch → the onboarding wizard owns the stage (design doc
+            // §4.1): environment checklist, first workspace, first voice
+            // command, pairing hand-off. It comes up IN FRONT OF the terminal
+            // window rather than instead of it, so dismissing it leaves the user
+            // somewhere. BENTO_FORCE_FIRST_RUN=1 re-triggers it for testing
+            // without clearing defaults.
             let firstRunPending = !UserDefaults.standard.bool(forKey: FirstRunWindow.completedKey)
                 || ProcessInfo.processInfo.environment["BENTO_FORCE_FIRST_RUN"] == "1"
             if firstRunPending {
                 Windows.show(.firstRun, env: self.bento)
-                return
-            }
-            // Open the terminal window on a user-initiated launch (done after the
-            // daemon is up so the local tmux server is ready). When the app is
-            // started at login the menubar lives quietly in the background — the
-            // user opens the window by clicking the icon (applicationShouldHandleReopen).
-            if !LoginItem.isEnabled {
-                BentoTerminalWindow.openMainWindow()
             }
         }
     }
@@ -111,9 +114,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// lifecycles together and defeated the point of having a daemon at all:
     /// the relay exists so the phone can reach this Mac while nobody is sitting
     /// at it. Quit the window half and the phone lost the Mac with it. The
-    /// daemon is a separate, launchd-managed process now — the menubar is its
-    /// control surface, not its container, and "Stop background service" is how
-    /// you shut it down on purpose.
+    /// daemon is a separate, launchd-managed process now — this app is its
+    /// control surface, not its container.
     func applicationWillTerminate(_ notification: Notification) {
         TelemetryService.shared.flush()
     }
@@ -126,10 +128,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return .terminateNow
     }
 
-    /// Clicking the app icon while the menubar app is already running (Dock,
-    /// Launchpad, or re-launching the .app) → open/focus the terminal window with
-    /// the last session, creating the default session if there was none.
+    /// Clicking the Dock icon (or re-launching the .app) with no windows → open
+    /// the terminal window with the last session, creating the default session if
+    /// there was none. With windows already up, do nothing beyond the default
+    /// unhide/activate: a Dock click is "show me the app", not "give me another
+    /// window", and the app now gets one of these on every Dock click.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        guard !hasVisibleWindows else { return true }
         BentoTerminalWindow.openMainWindow()
         return true
     }
@@ -156,14 +161,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         ThemeStore.shared.updateSystemIsDark(ThemeStore.detectSystemIsDark())
     }
 
+    /// Open the Settings scene, for the terminal toolbar's ⚙.
+    ///
+    /// This fires the App menu's own Settings… item rather than sending
+    /// `showSettingsWindow:` down the responder chain. That selector is what the
+    /// documentation points you at, and it does nothing here: SwiftUI backs its
+    /// Settings item with a private `menuAction:` on a callback object, not with
+    /// the AppKit selector, so `NSApp.sendAction` finds no responder and fails
+    /// silently. The item is found by its ⌘, key equivalent so a localized title
+    /// can't break it.
+    ///
+    /// (Under the old MenuBarExtra build this bridge was even more indirect —
+    /// the only handler was an `onReceive` on the menu-bar label view, which is
+    /// why deleting that label would have made the ⚙ a silent no-op.)
+    func openSettings() {
+        guard let appMenu = NSApp.mainMenu?.items.first?.submenu,
+              let idx = appMenu.items.firstIndex(where: {
+                  $0.keyEquivalent == "," && $0.keyEquivalentModifierMask == .command
+              })
+        else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        appMenu.performActionForItem(at: idx)
+    }
+
+    /// Give ⌘W back to Shell → Close Pane.
+    ///
+    /// SwiftUI synthesises a File → Close (`performClose:`, ⌘W) for us, and when
+    /// two menu items want the same key equivalent it silently strips the one
+    /// declared in `.commands` — so "Close Pane" came up with no shortcut at all
+    /// and ⌘W closed the whole window instead of the focused pane. Panes are the
+    /// thing you close constantly here; the window is ⌘⇧W, exactly as Terminal
+    /// splits ⌘W / ⌘⇧W between tab and window.
+    ///
+    /// This has to be AppKit surgery: the group that generates Close isn't one
+    /// of the `CommandGroupPlacement`s you can replace.
+    private func reclaimClosePaneShortcut() {
+        guard let mainMenu = NSApp.mainMenu else { return }
+        for top in mainMenu.items {
+            guard let sub = top.submenu else { continue }
+            for item in sub.items where item.action == #selector(NSWindow.performClose(_:)) {
+                item.keyEquivalent = ""
+                item.keyEquivalentModifierMask = []
+            }
+            for item in sub.items where item.title == "Close Pane" {
+                item.keyEquivalent = "w"
+                item.keyEquivalentModifierMask = .command
+            }
+        }
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
         // User is looking at the app now — clear the awaiting Dock badge.
         MacAwaitingNotifier.shared.clearBadge()
         TelemetryService.shared.appBecameActive()
     }
 
-    /// Menubar (accessory) app: never auto-quit just because a terminal window
-    /// closed — the app lives as long as the menubar item does.
+    /// Closing the last window does NOT quit — Terminal.app behavior, chosen
+    /// deliberately. The app stays in the Dock; clicking its icon or ⌘N brings a
+    /// window back with the last session. Quitting is an explicit ⌘Q, and it is
+    /// only ever a detach: the tmux sessions outlive it either way.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -189,12 +245,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// makes the `+` button appear on the tab bar in the first place.
     @objc func newWindowForTab(_ sender: Any?) {
         BentoTerminalWindow.newSessionTab()
-    }
-
-
-    @objc private func attachSessionFlat(_ sender: NSMenuItem) {
-        guard let name = sender.representedObject as? String else { return }
-        Task { try? await TmuxCLI.attach(session: name) }
     }
 
 

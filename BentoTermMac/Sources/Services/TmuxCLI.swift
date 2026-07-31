@@ -1,7 +1,7 @@
 import Foundation
 import BentoTerminalCore
 
-/// TmuxCLI shells out to a tmux binary. The menubar app never proxies the
+/// TmuxCLI shells out to a tmux binary. The Mac app never proxies the
 /// tmux protocol — the agent wizard builds a command sequence and `exec`s
 /// it. Binary resolution (system vs bundled) lives in TmuxResolver.
 enum TmuxCLI {
@@ -285,7 +285,7 @@ enum TmuxCLI {
         proc.standardError = errPipe
         // terminationHandler + continuation (same shape as BentoCLI.run)
         // instead of waitUntilExit, which parks a cooperative-pool thread —
-        // the menubar fans these out per-session every refresh tick.
+        // the app fans these out per-session every refresh tick.
         return try await withCheckedThrowingContinuation { cont in
             proc.terminationHandler = { p in
                 let outData = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()

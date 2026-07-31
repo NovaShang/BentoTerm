@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Bento Menubar shells out to the `bento` CLI, `tmux`, and Terminal.app.
+    <!-- BentoTerm shells out to the `bento` CLI, `tmux`, and Terminal.app.
          We do NOT sandbox so that Process can invoke arbitrary binaries on the
          user's PATH (tmux, claude-code, etc.) and write to ~/.bento/. -->
     <key>com.apple.security.app-sandbox</key>

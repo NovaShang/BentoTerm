@@ -68,7 +68,7 @@ public final class TelemetryService: ObservableObject {
     private static let maxBufferedEvents = 50 // matches the relay's batch cap
 
     /// Apps that resolve their relay URL outside UserDefaults (the macOS
-    /// menubar app reads the daemon's config.json) can install the resolved
+    /// app reads the daemon's config.json) can install the resolved
     /// value here at launch. Falls back to the `relayURL` UserDefaults
     /// override (iOS test hook), then the production default.
     public static var relayBaseURLOverride: String?
