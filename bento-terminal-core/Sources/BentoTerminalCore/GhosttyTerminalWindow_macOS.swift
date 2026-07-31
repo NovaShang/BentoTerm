@@ -127,8 +127,12 @@ public enum BentoTerminalWindow {
     }
 
     /// Open (or focus) the terminal window — the behavior when the app icon is
-    /// clicked. With no window yet, reconnect the session(s) that were open when
-    /// it last closed; if there were none, create the default session.
+    /// clicked, and at launch.
+    ///
+    /// With no window yet: reconnect the session(s) that were open when the app
+    /// last quit — unless the user emptied the screen by hand during THIS run,
+    /// in which case the launcher comes up instead (see
+    /// `closedEverythingByHand`). With nothing to reconnect, also the launcher.
     /// Close the terminal window (sessions keep running on the server; the next
     /// open reconnects them). The red traffic-light button does the same.
     public static func closeMainWindow() { frontmostManager()?.requestClose() }
@@ -188,12 +192,22 @@ public enum BentoTerminalWindow {
         ProcessInfo.processInfo.environment["BENTO_OPEN_SESSIONS"] != nil
     }
 
+    /// Set when the user closes the last session window by hand while the app
+    /// stays alive. Cleared the moment a session window exists again, so it
+    /// only ever describes "right now, on purpose, there is nothing open".
+    /// `isTerminating` guards ⌘Q, which also empties `managers`.
+    private static var closedEverythingByHand = false
+
     public static func openMainWindow() {
         if let m = frontmostManager() {
             m.bringToFront()
             return
         }
         guard !sessionRestoreSuppressed else { return }
+        if closedEverythingByHand {
+            openLauncherWindow()
+            return
+        }
         var last = (UserDefaults.standard.stringArray(forKey: lastSessionsKey) ?? [])
             .filter { !$0.isEmpty }
         // Reopening means RECONNECTING. Every window here goes up via
@@ -386,6 +400,7 @@ public enum BentoTerminalWindow {
     @discardableResult
     private static func addWindow(for tab: SessionTab,
                                   adopting shell: TerminalSessionWindow? = nil) -> TerminalWindowManager {
+        closedEverythingByHand = false
         let m = TerminalWindowManager(tab: tab, adopting: shell)
         m.onEmpty = { [weak m] in
             managers.removeAll { $0 === m }
@@ -405,6 +420,16 @@ public enum BentoTerminalWindow {
             // process with no Dock icon, no menu-bar item and no window: alive,
             // invisible and unquittable.
             if !managers.isEmpty && !isTerminating { persistOpenSessions() }
+            // Closing your way down to nothing, by hand, while the app keeps
+            // running, is a decision — and it is a different decision from
+            // quitting. Quitting and coming back says "I was in the middle of
+            // something"; clearing the screen and then clicking the Dock icon
+            // says "I tidied up, now show me what there is". So the reopen list
+            // is kept (⌘Q still restores it on the next cold start) but this
+            // run stops replaying it, and the Dock icon brings up the launcher
+            // instead. Nothing is lost by asking: those sessions are still
+            // running and the launcher lists them as its first section.
+            if managers.isEmpty && !isTerminating { closedEverythingByHand = true }
         }
         // Join the frontmost window's group only when tabs are what the user
         // wants; otherwise this stands alone. Either way `tabbingIdentifier` is
