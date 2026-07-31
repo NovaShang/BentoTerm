@@ -94,6 +94,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // read here — see
                 // `BentoTerminalWindow.killFrontmostSessionSkippingConfirmation`
                 // for why a hook is needed at all.
+                //
+                // DEBUG-only, unlike its siblings. Every other BENTO_* hook
+                // opens or creates; this one DESTROYS, and an env var that
+                // deletes tmux sessions has no business existing in a shipping
+                // binary. Its blast radius is already small — it can only reach
+                // a session BENTO_OPEN_SESSIONS just named, since that branch
+                // suppresses the normal restore — but "small" is the wrong bar
+                // for irreversible.
+                #if DEBUG
                 if let after = ProcessInfo.processInfo.environment["BENTO_TEST_KILL_SESSION_AFTER"],
                    let seconds = Double(after) {
                     Task { @MainActor in
@@ -101,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         BentoTerminalWindow.killFrontmostSessionSkippingConfirmation()
                     }
                 }
+                #endif
                 return
             }
             // Test hook: create a session exactly the way the Agent wizard does
