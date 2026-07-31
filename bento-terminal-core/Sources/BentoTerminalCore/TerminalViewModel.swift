@@ -794,6 +794,28 @@ public final class TerminalViewModel: ObservableObject {
         // it's slow (fresh login shell runs the full zshrc first).
         let sawGreeting = await tmuxService.awaitControlMode(timeout: .seconds(12))
         if !sawGreeting {
+            // No greeting, and the transport IS the tmux invocation: there is
+            // no shell on the far side to have been slow, so tmux is not coming
+            // and everything below would be commands written into a closed pty.
+            //
+            // What used to happen instead is the reason this branch exists.
+            // Pointing at a host with no tmux — the single likeliest first-run
+            // mistake, since the product's premise is "any sshd plus tmux" —
+            // left the window blank for 12 seconds and then "proceeded anyway"
+            // into `tmux ready: 0 panes, 0 windows`: an empty session window
+            // that answered nothing, forever, with each later command burning
+            // its own 10s timeout. The remote had said exactly what was wrong
+            // (`tmux: command not found`) in the first 50ms and the control-mode
+            // parser had dropped it as unparseable.
+            //
+            // A login-shell transport keeps the old tolerance: there the wait is
+            // genuinely racing a slow `.zshrc`, and the shell is still usable.
+            if transport.startsInTmuxControlMode {
+                dlog("tmux -CC never greeted — the remote command did not start tmux")
+                failWithRemoteDiagnosis(
+                    fallback: "Couldn’t start tmux on \(host.name).")
+                return
+            }
             dlog("tmux -CC greeting not seen within 12s — proceeding anyway")
         }
 
@@ -1577,6 +1599,18 @@ public final class TerminalViewModel: ObservableObject {
     /// send timed out, on a connection already broken enough that the session
     /// is unreachable anyway) before anything is torn down.
     public func killSession() async {
+        // Declare the intent BEFORE the kill, not after.
+        //
+        // Killing a session usually kills the client attached to it, and over
+        // ssh that ends the whole `ssh -t host "tmux -CC …"` command — so the
+        // pty reaches EOF while we are still awaiting tmux's reply, several
+        // hundred milliseconds before `disconnect()` below would have set this.
+        // In that window an EOF reads as a dropped link, and the recovery it
+        // triggers is `new-session -A`, which CREATES: Kill Session would
+        // reconnect and hand back a brand-new empty session of the same name on
+        // the same host. The flag is what tells the failure path this teardown
+        // was asked for.
+        userInitiatedDisconnect = true
         if usingTmux, let name = activeTmuxSessionName {
             let resp = await tmuxService.send(.killSession(name: name), timeout: .seconds(5))
             // tmux commonly kills the client along with the session, so a
@@ -1810,18 +1844,70 @@ public final class TerminalViewModel: ObservableObject {
             return
         }
         let recoverable: Bool
+        // What to say when we have nothing better. A failure before the session
+        // exists is a bring-up problem and reads as one; "the connection was
+        // lost" would describe a session that never started.
+        var fallback = message
         switch phase {
-        case .tmuxReady, .shellReady, .starting:
+        case .tmuxReady, .shellReady:
             recoverable = true
+        case .starting:
+            // `.starting` means the session has not come up yet. For a login
+            // shell that is a blip during launch and worth retrying — the shell
+            // is real, tmux is merely late.
+            //
+            // For a transport that IS the tmux invocation it means the remote
+            // command died before tmux ever greeted: no tmux on the host, an
+            // alias that doesn't resolve, a connection refused. None of those
+            // get better by being retried every 15 seconds, and the loop would
+            // bury the one useful thing we have — what the remote actually
+            // said — under an endless "reconnecting". Report it instead.
+            recoverable = !transport.startsInTmuxControlMode
+            if !recoverable { fallback = "Couldn’t start tmux on \(host.name)." }
         case .sshConnecting, .choosingSession, .suspended, .ended:
             recoverable = false
         }
         guard recoverable else {
-            errorMessage = message
-            showError = true
+            failWithRemoteDiagnosis(fallback: fallback)
             return
         }
         scheduleReconnect()
+    }
+
+    /// Surface a bring-up failure, preferring whatever the far side said over
+    /// our own guess at it.
+    ///
+    /// `ssh` and the remote shell write the actual diagnosis to stderr —
+    /// `tmux: command not found`, `Could not resolve hostname`, `Permission
+    /// denied (publickey)`, a host-key warning — and it arrives on the same pty
+    /// as the control-mode stream. The parser drops it, being unparseable
+    /// protocol, so every one of those failures used to present as the same
+    /// blank window. `outputBeforeControlMode` keeps it; this is where it is
+    /// spent.
+    private func failWithRemoteDiagnosis(fallback: String) {
+        // First diagnosis wins. The pty's EOF and the greeting timeout describe
+        // the same failure from two ends, and the EOF gets there ~12s earlier;
+        // letting the later one through would only overwrite it with a vaguer
+        // version of itself.
+        guard !showError else { return }
+        let remote = tmuxService.outputBeforeControlMode
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        dlog("session bring-up failed: \(fallback) | remote said: \(remote.isEmpty ? "<nothing>" : remote)")
+        errorMessage = remote.isEmpty ? fallback : "\(fallback)\n\n\(remote)"
+        showError = true
+        phase = .ended
+        // Stop retrying. This verdict can be reached from inside the reconnect
+        // loop (an attempt that got a connection but no tmux), and the loop's
+        // policy is otherwise to retry every 15s forever — correct for a
+        // network that might come back, wrong for a host that has no tmux on
+        // it, where it would just spawn an ssh a minute behind a dialog the
+        // user has already read. Cancelling is safe from within: the loop
+        // checks `Task.isCancelled` each pass, and its own `defer` clears
+        // `reconnectTask`.
+        reconnectTask?.cancel()
+        isReconnecting = false
+        statePollingTask?.cancel()
+        statePollingTask = nil
     }
 
     /// Start a reconnect loop. Idempotent: a no-op while one is already running,

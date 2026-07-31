@@ -15,6 +15,9 @@ public final class LocalPtyTransport: TerminalTransport, @unchecked Sendable {
 
     private let _isLocalLink: Bool
     private let _startsInTmuxControlMode: Bool
+    /// Set by `disconnect()` so the pty's own EOF, which follows, is recognised
+    /// as the tear-down we asked for rather than a link that dropped.
+    private var tearingDown = false
 
     /// A pty on this machine is only a *local link* when what runs in it stays
     /// on this machine. This used to be hardcoded `true`, which was fine while
@@ -41,7 +44,34 @@ public final class LocalPtyTransport: TerminalTransport, @unchecked Sendable {
         self._isLocalLink = isLocalLink
         self._startsInTmuxControlMode = startsInTmuxControlMode
         pty.onData = { [weak self] data in self?.onDataReceived?(data) }
-        pty.onExit = { [weak self] in self?.setState(.disconnected) }
+        pty.onExit = { [weak self] in self?.handlePtyExit() }
+    }
+
+    /// The pty's child is gone. What that MEANS depends on what was running in
+    /// it, and reporting the same thing for both cost ~22 seconds of a frozen
+    /// window every time an ssh link dropped.
+    ///
+    /// When the pty holds a login shell, its exit is the shell ending — the
+    /// user typed `exit`, or the local `tmux -CC` client detached. Nothing
+    /// failed, and nothing should be reconnected.
+    ///
+    /// When the transport carried the `tmux -CC` invocation itself, the pty IS
+    /// the connection: `ssh` exiting means the link is gone, and it is the only
+    /// definitive, immediate signal we get. Without it the loss was noticed
+    /// only by the poll watchdog — two consecutive 10s command timeouts, so
+    /// ~22s of a window that still painted the last frame and silently answered
+    /// nothing (measured against a real host: link cut at 10:29:31, reconnect
+    /// began at 10:29:53). `.disconnected` is not that signal, because nothing
+    /// acts on it; `.failed` is the state `TerminalViewModel` recovers from.
+    ///
+    /// A tear-down we asked for is excluded, since `disconnect()` closes the fd
+    /// and the read source can still deliver the resulting EOF afterwards.
+    private func handlePtyExit() {
+        guard !tearingDown, _startsInTmuxControlMode else {
+            setState(.disconnected)
+            return
+        }
+        setState(.failed("The connection to the terminal was lost."))
     }
 
     public func connect(host: Host) async {
@@ -63,6 +93,7 @@ public final class LocalPtyTransport: TerminalTransport, @unchecked Sendable {
     public func resize(cols: Int, rows: Int) { pty.resize(cols: cols, rows: rows) }
 
     public func disconnect() {
+        tearingDown = true
         pty.stop()
         setState(.disconnected)
     }

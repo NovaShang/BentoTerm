@@ -52,7 +52,31 @@ public final class TmuxControlMode: @unchecked Sendable {
         /// `reset()` so each new connection discards exactly one block.
         var greetingConsumed = false
         var controlModeWaiters: [PendingBoolEntry] = []
+        /// Whatever arrived on this connection BEFORE control mode started.
+        ///
+        /// On a healthy connection this is empty or a scrap of shell echo, and
+        /// nothing reads it. It matters when the greeting never comes, because
+        /// then these lines are the entire explanation: `tmux: command not
+        /// found` from a host that hasn't got tmux, `ssh: Could not resolve
+        /// hostname`, a refused connection, a host-key complaint. They are not
+        /// protocol, so the parser has always dropped them on the floor — and
+        /// the resulting failure had nothing to say for itself.
+        ///
+        /// Bounded, because a login shell that never reaches tmux can print
+        /// without limit (a chatty MOTD, a shell that drops to an interactive
+        /// prompt); the diagnosis is in the first few lines either way.
+        var preGreetingLines: [String] = []
     }
+
+    /// Lines received before control mode started — see `preGreetingLines`.
+    /// Empty once tmux has greeted, which is the normal case.
+    public var outputBeforeControlMode: String {
+        responseLock.withLock { $0.preGreetingLines.joined(separator: "\n") }
+    }
+
+    /// Cap on `preGreetingLines`, in lines and in characters per line.
+    private static let maxPreGreetingLines = 12
+    private static let maxPreGreetingLineLength = 200
 
     private struct PendingBoolEntry {
         let id: UInt64
@@ -255,6 +279,7 @@ public final class TmuxControlMode: @unchecked Sendable {
             state.currentBlock = nil
             state.pendingFireAndForget = 0
             state.greetingConsumed = false
+            state.preGreetingLines.removeAll()
             return (o, w)
         }
         if !orphans.isEmpty || !waiters.isEmpty {
@@ -511,7 +536,21 @@ public final class TmuxControlMode: @unchecked Sendable {
             }
         }
 
+        recordIfBeforeControlMode(cleaned)
         parseLine(cleaned)
+    }
+
+    /// Keep non-protocol lines that arrive before the greeting, so a connection
+    /// that never reaches control mode can say why. See `preGreetingLines`.
+    private func recordIfBeforeControlMode(_ line: String) {
+        let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A `%` line is protocol, not diagnosis, even out here.
+        guard !text.isEmpty, !text.hasPrefix("%") else { return }
+        responseLock.withLock { state in
+            guard !state.greetingConsumed,
+                  state.preGreetingLines.count < Self.maxPreGreetingLines else { return }
+            state.preGreetingLines.append(String(text.prefix(Self.maxPreGreetingLineLength)))
+        }
     }
 
     /// Parse `%output` directly from raw bytes, preserving UTF-8 integrity.

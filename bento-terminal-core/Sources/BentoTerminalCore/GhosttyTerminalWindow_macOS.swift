@@ -638,6 +638,9 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     /// Toolbar bindings to the *active* tab's VM (re-subscribed on switch).
     private var activeCancellables = Set<AnyCancellable>()
+    /// One failure alert per window — the view model can re-publish `showError`
+    /// and the sheet must not stack.
+    private var failureAlertShown = false
     /// Per-tab subscriptions (agent dots + tab titles), keyed by tab identity.
     private var tabCancellables: [ObjectIdentifier: Set<AnyCancellable>] = [:]
 
@@ -1188,7 +1191,43 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
                     generation: generation, names: tab.viewModel.availableTmuxSessions)
             }
             .store(in: &bag)
+        // A session that could not be brought up at all.
+        //
+        // `showError` has existed on the view model for as long as iOS has had
+        // an alert bound to it; on macOS nothing was ever bound, so the flag
+        // was raised into a void. The visible result was a window that simply
+        // sat there — most reliably when the ssh host had no tmux, where the
+        // remote's own `tmux: command not found` was already in hand and still
+        // nobody was told. Reported as "the app crashed", because a window that
+        // does nothing forever is indistinguishable from one.
+        tab.viewModel.$showError
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self, weak tab] show in
+                guard show, let self, let tab else { return }
+                self.presentSessionFailure(tab: tab)
+            }
+            .store(in: &bag)
         tabCancellables[ObjectIdentifier(tab)] = bag
+    }
+
+    /// Show why a session never came up, and close the window with it — there
+    /// is nothing behind this window to go back to.
+    private func presentSessionFailure(tab: SessionTab) {
+        guard let window, !failureAlertShown else { return }
+        failureAlertShown = true
+        let alert = NSAlert()
+        alert.messageText = "Couldn’t open “\(tab.id.displayName)”"
+        // The view model puts the remote's own stderr in here when it has it
+        // (see `failWithRemoteDiagnosis`) — that text is the whole point of the
+        // alert, so it is shown verbatim rather than summarised away.
+        alert.informativeText = tab.viewModel.errorMessage
+            ?? "The session could not be started."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window) { [weak self] _ in
+            self?.window?.close()
+        }
     }
 
     private func unsubscribe(_ tab: SessionTab) {
