@@ -125,9 +125,9 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
-  # arm64-only Mac menubar app. Currently unsigned — first-launch on a
+  # arm64-only Mac app. Currently unsigned — first-launch on a
   # foreign Mac shows the Gatekeeper warning until D (notarize) lands.
-  menubar:
+  mac-app:
     needs: resolve-tag
     # The codebase needs Xcode 26 (macos-15's Xcode 16.x fails to compile
     # it — that broke the v0.1.0 first attempt). macos-26 ships Xcode 26.x
@@ -210,8 +210,8 @@ jobs:
         # bundle; we sign the helpers explicitly in the next step before
         # re-sealing the outer bundle.
         run: |
-          xcodebuild -project Bento.xcodeproj \
-            -scheme BentoMenubar \
+          xcodebuild -project BentoTerm.xcodeproj \
+            -scheme BentoTermMac \
             -configuration Release \
             -derivedDataPath build \
             ONLY_ACTIVE_ARCH=NO ARCHS=arm64 \
@@ -239,7 +239,7 @@ jobs:
           codesign --force --options=runtime --timestamp \
             --keychain "${KEYCHAIN_PATH}" \
             --sign "${SIGN_IDENTITY}" \
-            --entitlements BentoMenubar/Resources/BentoMenubar.entitlements \
+            --entitlements BentoTermMac/Resources/BentoTermMac.entitlements \
             "$app"
           # Sanity check: codesign --verify exits non-zero if anything is
           # mis-signed, mis-sealed, or has a broken nested signature.
@@ -315,12 +315,12 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: menubar
+          name: mac-app
           path: artifacts/*
           if-no-files-found: error
 
   publish:
-    needs: [resolve-tag, desktop, menubar]
+    needs: [resolve-tag, desktop, mac-app]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

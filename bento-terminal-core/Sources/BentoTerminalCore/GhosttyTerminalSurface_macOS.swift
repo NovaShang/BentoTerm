@@ -7,7 +7,7 @@ import GhosttyKit
 /// as the iOS surface (`TerminalSurface`): host feeds remote/pty bytes via
 /// `feed`, the engine emits encoded keystrokes back through the runtime's
 /// `write_to_host` callback. The view is a CAMetalLayer that libghostty renders
-/// into. Mac code (BentoMenubar terminal window) uses it through the protocol,
+/// into. Mac code (BentoTermMac terminal window) uses it through the protocol,
 /// identically to iOS.
 public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputClient {
 

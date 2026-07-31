@@ -76,8 +76,8 @@ Mac 应用完全自包含。`bento` CLI + daemon（`brew install NovaShang/bento
 
 | 目录 | 内容 |
 |---|---|
-| `Bento/` | iOS / iPadOS 应用 |
-| `BentoMenubar/` | macOS 应用 |
+| `BentoTermiOS/` | iOS / iPadOS 应用 |
+| `BentoTermMac/` | macOS 应用 |
 | `bento-terminal-core/` | 共享 Swift 核心：渲染（libghostty）、agent 状态检测、语音、会话逻辑 |
 | `swift-tmux/` | tmux control mode（`-CC`）协议客户端 |
 | `desktop/` | Go 主机端 daemon + `bento` CLI（配对、relay 客户端、内嵌 SSH 服务器）|
@@ -90,10 +90,10 @@ Mac 应用完全自包含。`bento` CLI + daemon（`brew install NovaShang/bento
 
 ```sh
 git clone https://github.com/NovaShang/bento.git && cd bento
-xcodebuild -project Bento.xcodeproj -scheme BentoMenubar -configuration Release build
+xcodebuild -project BentoTerm.xcodeproj -scheme BentoTermMac -configuration Release build
 ```
 
-`BentoMenubar` scheme 是 macOS 应用；`Bento` scheme 是 iOS。改过 `project.yml` 的话，用 [XcodeGen](https://github.com/yonaskolb/XcodeGen) 重新生成工程。
+`BentoTermMac` scheme 是 macOS 应用；`BentoTermiOS` scheme 是 iOS。改过 `project.yml` 的话，用 [XcodeGen](https://github.com/yonaskolb/XcodeGen) 重新生成工程。
 
 ## 许可证
 

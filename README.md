@@ -76,8 +76,8 @@ Two design rules shape everything:
 
 | Directory | What it is |
 |---|---|
-| `Bento/` | iOS / iPadOS app |
-| `BentoMenubar/` | macOS app |
+| `BentoTermiOS/` | iOS / iPadOS app |
+| `BentoTermMac/` | macOS app |
 | `bento-terminal-core/` | Shared Swift core: rendering (libghostty), agent state detection, voice, session logic |
 | `swift-tmux/` | tmux control-mode (`-CC`) protocol client |
 | `desktop/` | Go host-side daemon + `bento` CLI (pairing, relay client, embedded SSH server) |
@@ -90,10 +90,10 @@ You need Xcode 16+ and Go 1.23+ (the Mac app embeds the Go daemon at build time)
 
 ```sh
 git clone https://github.com/NovaShang/bento.git && cd bento
-xcodebuild -project Bento.xcodeproj -scheme BentoMenubar -configuration Release build
+xcodebuild -project BentoTerm.xcodeproj -scheme BentoTermMac -configuration Release build
 ```
 
-The `BentoMenubar` scheme is the macOS app; the `Bento` scheme is iOS. If you change `project.yml`, regenerate the project with [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+The `BentoTermMac` scheme is the macOS app; the `BentoTermiOS` scheme is iOS. If you change `project.yml`, regenerate the project with [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
 ## License
 

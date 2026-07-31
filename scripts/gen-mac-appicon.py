@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 SVG = ROOT / "docs" / "bento-icon.svg"
-OUT = ROOT / "BentoMenubar" / "Resources" / "Assets.xcassets" / "AppIcon.appiconset"
+OUT = ROOT / "BentoTermMac" / "Resources" / "Assets.xcassets" / "AppIcon.appiconset"
 
 CANVAS = 1024          # full icon canvas
 BODY = 824             # Apple icon-grid body (≈80% of canvas)

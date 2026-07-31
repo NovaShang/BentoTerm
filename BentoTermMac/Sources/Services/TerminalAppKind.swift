@@ -32,7 +32,7 @@ enum TerminalAppKind: String, CaseIterable, Identifiable, Codable {
     /// for the AppleScript `tell application id "…"` form.
     var bundleID: String {
         switch self {
-        case .bento:    return Bundle.main.bundleIdentifier ?? "com.bento.term.menubar"
+        case .bento:    return Bundle.main.bundleIdentifier ?? "com.bento.term.mac"
         case .terminal: return "com.apple.Terminal"
         case .iTerm:    return "com.googlecode.iterm2"
         case .ghostty:  return "com.mitchellh.ghostty"

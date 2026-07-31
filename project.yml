@@ -1,4 +1,4 @@
-name: Bento
+name: BentoTerm
 options:
   bundleIdPrefix: com.bento.term
   deploymentTarget:
@@ -26,13 +26,13 @@ packages:
     path: bento-terminal-core
 
 targets:
-  Bento:
+  BentoTermiOS:
     type: application
     platform: iOS
     sources:
-      - Bento/Sources
-      - Bento/Resources
-      - Bento/Assets.xcassets
+      - BentoTermiOS/Sources
+      - BentoTermiOS/Resources
+      - BentoTermiOS/Assets.xcassets
     dependencies:
       - package: SwiftTerm
       - package: Citadel
@@ -51,41 +51,41 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: "Bento uses the camera to scan the pairing QR code shown by your Mac."
         ITSAppUsesNonExemptEncryption: false
         GENERATE_INFOPLIST_FILE: true
-        INFOPLIST_FILE: Bento/Info.plist
+        INFOPLIST_FILE: BentoTermiOS/Info.plist
         CODE_SIGN_STYLE: Automatic
-        # User-facing app name is BentoTerm; the Xcode target stays `Bento`
-        # (renaming it would churn every scheme, script and CI reference).
+        # User-facing app name is BentoTerm; the Xcode target is BentoTermiOS
+        # so it does not collide with the macOS target's product name.
         PRODUCT_NAME: BentoTerm
         INFOPLIST_KEY_CFBundleDisplayName: "BentoTerm"
         PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.app
 
-  BentoTests:
+  BentoTermTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - BentoTests/Sources
+      - BentoTermTests/Sources
     dependencies:
-      - target: Bento
+      - target: BentoTermiOS
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
-        # xcodegen derives TEST_HOST from the *target* name (Bento), but the
-        # product is named BentoTerm — spell it out or the host app is missing.
+        # xcodegen derives TEST_HOST from the *target* name (BentoTermiOS), but
+        # the product is named BentoTerm — spell it out or the host app is missing.
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BentoTerm.app/BentoTerm"
 
-  BentoMenubar:
+  BentoTermMac:
     type: application
     platform: macOS
     sources:
-      - BentoMenubar/Sources
-      - BentoMenubar/Resources/Assets.xcassets
+      - BentoTermMac/Sources
+      - BentoTermMac/Resources/Assets.xcassets
     dependencies:
       - package: BentoTerminalCore
     settings:
       base:
-        # User-facing product name is "BentoTerm" (matching the iOS app);
-        # the internal target name stays BentoMenubar to avoid Xcode-level
-        # collision with the iOS Bento target.
+        # Both platform targets ship the same user-facing product name,
+        # "BentoTerm"; the target names (BentoTermMac / BentoTermiOS) keep
+        # them distinct inside Xcode.
         PRODUCT_NAME: BentoTerm
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_LSUIElement: true       # menubar-only, no Dock icon
@@ -96,14 +96,14 @@ targets:
         # accesses the mic — the "hold right-click to record → crash" (BUG-017).
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Bento needs microphone access for voice input to terminal."
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Bento uses speech recognition to convert voice to text and shell commands."
-        PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.menubar
+        PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.mac
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         # App version surfaced in Finder/About and reported by Telemetry
         # (CFBundleShortVersionString). Bump alongside release tags.
         MARKETING_VERSION: "0.1.1"
         CURRENT_PROJECT_VERSION: 1
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_ENTITLEMENTS: BentoMenubar/Resources/BentoMenubar.entitlements
+        CODE_SIGN_ENTITLEMENTS: BentoTermMac/Resources/BentoTermMac.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     postCompileScripts:
       - name: "Embed Go binaries (bento + bento-daemon) + bundled tmux"

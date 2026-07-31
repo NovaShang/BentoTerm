@@ -39,7 +39,7 @@ cd "$REPO"
 
 DD="$REPO/.dd-ios"
 APP_ID="com.bento.term.app"
-SCHEME="Bento"
+SCHEME="BentoTermiOS"
 MAESTRO="$HOME/.maestro/bin/maestro"
 FALLBACK_SIM="FD4977E4-DBF4-4A39-B4FB-BE81B4017856"   # iPad Air 11-inch (M4)
 LA_SPAM='Failed to start aggregate Live Activity'      # sim-only noise, filtered by default
@@ -96,11 +96,11 @@ cmd_build() {
   local logf="$DD/last-build.log"
   set +e
   if [[ "${BENTO_VERBOSE:-}" == "1" ]]; then
-    xcodebuild -project Bento.xcodeproj -scheme "$SCHEME" -configuration Debug \
+    xcodebuild -project BentoTerm.xcodeproj -scheme "$SCHEME" -configuration Debug \
       -destination "id=$SIM_ID" -derivedDataPath "$DD" build "$@" | tee "$logf"
     local rc=${PIPESTATUS[0]}
   else
-    xcodebuild -project Bento.xcodeproj -scheme "$SCHEME" -configuration Debug \
+    xcodebuild -project BentoTerm.xcodeproj -scheme "$SCHEME" -configuration Debug \
       -destination "id=$SIM_ID" -derivedDataPath "$DD" build "$@" > "$logf" 2>&1
     local rc=$?
   fi

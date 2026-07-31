@@ -11,7 +11,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
-SOURCES=(Bento/Sources BentoMenubar/Sources bento-terminal-core/Sources)
+SOURCES=(BentoTermiOS/Sources BentoTermMac/Sources bento-terminal-core/Sources)
 
 # term<TAB>why
 BANNED=$(cat <<'EOF'

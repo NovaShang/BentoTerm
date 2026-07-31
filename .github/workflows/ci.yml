@@ -59,10 +59,10 @@ jobs:
         working-directory: desktop
         run: make ci
 
-  # macOS-only Xcode build for the menubar app. Kept separate so a broken
+  # macOS-only Xcode build for the Mac app. Kept separate so a broken
   # Xcode setup doesn't gate Go tests on Linux.
-  menubar:
-    name: menubar app (xcodebuild)
+  mac-app:
+    name: mac app (xcodebuild)
     # The codebase needs Xcode 26. macos-latest still maps to macos-15
     # (Xcode 16.x), which is why this job was red for weeks — pin the
     # macos-26 image (Xcode 26.x) explicitly until -latest catches up.
@@ -98,8 +98,8 @@ jobs:
       # -scheme, not -target: the legacy target build fails to resolve
       # the local SwiftTmux package dependency (reproduced locally on
       # Xcode 26); scheme builds resolve the package graph correctly.
-      - name: xcodebuild BentoMenubar
+      - name: xcodebuild BentoTermMac
         run: |
-          xcodebuild -project Bento.xcodeproj \
-            -scheme BentoMenubar -configuration Debug \
+          xcodebuild -project BentoTerm.xcodeproj \
+            -scheme BentoTermMac -configuration Debug \
             CODE_SIGNING_ALLOWED=NO build

@@ -1,7 +1,7 @@
 import Foundation
 
 /// AgentPreset is the menu of "well-known" coding agents the wizard offers.
-/// Mirrors BentoMenubar/Services/TmuxCLI.swift — keep both in sync.
+/// Mirrors BentoTermMac/Sources/Services/TmuxCLI.swift — keep both in sync.
 public enum AgentPreset: String, CaseIterable, Identifiable {
     case claudeCode = "Claude Code"
     case opencode = "OpenCode"

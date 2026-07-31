@@ -29,10 +29,10 @@ step "bento-terminal-core tests" swift test --package-path bento-terminal-core
 
 if [ "${1:-}" = "--apps" ]; then
     step "macOS app builds" xcodebuild build \
-        -project Bento.xcodeproj -scheme BentoMenubar -configuration Debug \
+        -project BentoTerm.xcodeproj -scheme BentoTermMac -configuration Debug \
         -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO -quiet
     step "iOS app builds" xcodebuild build \
-        -project Bento.xcodeproj -scheme Bento -configuration Debug \
+        -project BentoTerm.xcodeproj -scheme BentoTermiOS -configuration Debug \
         -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO -quiet
 else
     printf '\n(skipping Xcode app builds — pass --apps to include them)\n'

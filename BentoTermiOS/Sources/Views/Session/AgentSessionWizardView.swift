@@ -1,7 +1,7 @@
 import SwiftUI
 import BentoTerminalCore
 
-/// iOS counterpart to BentoMenubar's AgentWizardWindow. Users pick a
+/// iOS counterpart to BentoTermMac's AgentWizardWindow. Users pick a
 /// session name, working directory, agent command, and pane layout; the
 /// caller wires the resulting AgentSpec into a `createAgent` start choice.
 struct AgentSessionWizardView: View {
