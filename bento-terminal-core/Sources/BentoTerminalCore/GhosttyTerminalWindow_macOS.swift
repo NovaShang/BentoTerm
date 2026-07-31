@@ -155,12 +155,36 @@ public enum BentoTerminalWindow {
 
     /// Open a brand-new uniquely-named tmux session as a tab (the tab-bar `+`).
     public static func newSessionTab() {
+        newWindow(session: nextSessionName())
+    }
+
+    /// File → New Window (⌘N). Always a NEW standalone window with a NEW
+    /// session — never a tab, never "front the window you already have".
+    ///
+    /// ⌘N means "one more of these" in every Mac app, so it deliberately
+    /// ignores `newSessionPlacement`: that preference answers "where does a new
+    /// SESSION land", and the user asking for a window has already answered it.
+    /// Reopen-the-last-session lives on the Dock icon and on launch
+    /// (`openMainWindow`), which is where restore semantics belong.
+    public static func newSessionWindow() {
+        forceStandaloneWindow = true
+        defer { forceStandaloneWindow = false }
+        newWindow(session: nextSessionName())
+    }
+
+    /// Lowest unused `session-N`. tmux is the real authority on the namespace,
+    /// but these are the ones we have windows for, which is what avoids
+    /// silently attaching to somebody else's session.
+    private static func nextSessionName() -> String {
         let open = openSessionKeys
         var n = max(open.count + 1, 2)
         var name = "session-\(n)"
         while open.contains(name) { n += 1; name = "session-\(n)" }
-        newWindow(session: name)
+        return name
     }
+
+    /// Set only for the duration of one `newSessionWindow()` call.
+    private static var forceStandaloneWindow = false
 
     public static func newWindow(agent spec: AgentSpec) {
         open(choice: .createAgent(spec: spec), title: titleFor(spec.sessionName))
@@ -209,6 +233,9 @@ public enum BentoTerminalWindow {
 
     /// Whether the NEXT session should join the current tab group.
     static var shouldOpenAsTab: Bool {
+        // ⌘N overrides the preference for exactly one window — see
+        // `newSessionWindow()`.
+        if forceStandaloneWindow { return false }
         switch newSessionPlacement {
         case .tab:    return true
         case .window: return false

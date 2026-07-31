@@ -28,13 +28,13 @@ struct BentoTermMacApp: App {
 /// plus File → New Window.
 struct TerminalCommands: Commands {
     var body: some Commands {
-        // ⌘N is the reflex key for "give me a window" in every Mac app, and it
-        // is the only way back in once the last window is closed (besides the
-        // Dock icon) — the app deliberately stays running. Same semantics the
-        // old menu-bar "Open BentoTerm" had: reopen the last session rather than
-        // create a nameless new one.
+        // ⌘N is the reflex key for "give me one more of these" in every Mac
+        // app, so it always makes a new standalone window with a new session —
+        // never a no-op when a window is already up, and never a tab.
+        // Reopen-the-last-session is a RESTORE gesture and lives where restore
+        // gestures belong: the Dock icon and launch (`openMainWindow`).
         CommandGroup(replacing: .newItem) {
-            Button("New Window") { BentoTerminalWindow.openMainWindow() }
+            Button("New Window") { BentoTerminalWindow.newSessionWindow() }
                 .keyboardShortcut("n", modifiers: .command)
         }
 
