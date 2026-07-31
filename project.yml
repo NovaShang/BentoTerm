@@ -105,28 +105,27 @@ targets:
         CODE_SIGN_ENTITLEMENTS: BentoTermMac/Resources/BentoTermMac.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     postCompileScripts:
-      - name: "Embed Go binaries (bento + bento-daemon) + bundled tmux"
+      - name: "Embed bundled tmux"
         script: |
           set -e
-          # Xcode's PATH is minimal; add Homebrew so `go` and `make` resolve.
+          # Xcode's PATH is minimal; add Homebrew so `gh` (used by
+          # fetch-bundled-tmux.sh to pull the pinned release) resolves.
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-          ( cd "$SRCROOT/desktop" && make build )
-          # Helpers live in a `helpers/` subdir rather than straight in
-          # Contents/MacOS: it keeps the Go `bento` CLI clear of the Swift
-          # executable (APFS is case-insensitive) and gives each a distinct
-          # path that TmuxResolver / BentoCLI can look up.
+          # Idempotent and non-fatal: if the release or `gh` is missing the
+          # script exits 0 and we fall through to the warning below.
+          "$SRCROOT/scripts/fetch-bundled-tmux.sh" || true
+          # tmux is the app's one embedded helper. It lives in a `helpers/`
+          # subdir rather than straight in Contents/MacOS so it has a stable
+          # path distinct from the Swift executable (APFS is case-insensitive)
+          # — TmuxResolver looks here first, and LocalPty appends helpers/ to
+          # the login-shell PATH so a bare `tmux` resolves to it too. Without
+          # it, a Mac with no system tmux cannot start a session at all.
+          # A user's own tmux still wins.
           DEST="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/helpers"
           mkdir -p "$DEST"
-          cp -f "$SRCROOT/desktop/bin/bento"        "$DEST/"
-          cp -f "$SRCROOT/desktop/bin/bento-daemon" "$DEST/"
-          # Bundle tmux so tmux -CC (the tiled multi-pane sessions) works on
-          # Macs with no system tmux. TmuxResolver already looks here first,
-          # and LocalPty appends helpers/ to the login-shell PATH so a bare
-          # `tmux` resolves to this too. `make build` runs fetch-bundled-tmux
-          # above, so the slot binary is present. A user's own tmux still wins.
           slot="darwin-$(uname -m)"   # arm64 host -> tmux-darwin-arm64
-          if [ -f "$SRCROOT/desktop/bin/bundled/tmux-$slot" ]; then
-            cp -f "$SRCROOT/desktop/bin/bundled/tmux-$slot" "$DEST/tmux"
+          if [ -f "$SRCROOT/bundled-tmux/tmux-$slot" ]; then
+            cp -f "$SRCROOT/bundled-tmux/tmux-$slot" "$DEST/tmux"
             chmod +x "$DEST/tmux"
           else
             echo "warning: no bundled tmux for $slot; app will need a system tmux" >&2

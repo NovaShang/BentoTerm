@@ -5,7 +5,7 @@
 #   Downloads tmux + libevent source tarballs, builds tmux statically linked
 #   against libevent (libevent is the only awkward dep — ncurses is stable
 #   enough across distros and macOS that we link it dynamically). Outputs:
-#       desktop/bin/bundled/tmux-<os>-<arch>
+#       bundled-tmux/tmux-<os>-<arch>
 #
 # Why static libevent
 #   libevent versioning varies between distros (Ubuntu LTS lags Homebrew by
@@ -15,8 +15,9 @@
 #
 # When to run
 #   Not part of every dev build. Run once per release, commit the resulting
-#   binaries (or upload to a release artifact and have CI fetch them). The
-#   Mac app's postCompile script copies them into Contents/MacOS/helpers/.
+#   binaries to a release artifact and have CI + dev builds fetch them with
+#   scripts/fetch-bundled-tmux.sh. The Mac app's postCompile script copies
+#   the host-slot binary into BentoTerm.app/Contents/MacOS/helpers/tmux.
 #
 # Cross-compiling
 #   This script only builds for the *host* OS/arch. To produce all targets
@@ -29,7 +30,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Versions live in one file so build + fetch + release tag never drift.
 # shellcheck disable=SC1091
 source "$ROOT/scripts/bundled-tmux.version"
-OUT_DIR="$ROOT/desktop/bin/bundled"
+OUT_DIR="$ROOT/bundled-tmux"
 WORK_DIR="${WORK_DIR:-$ROOT/.build/tmux}"
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -92,8 +93,8 @@ tar xzf "tmux-$TMUX_VERSION.tar.gz"
   #
   # --disable-utf8proc: tmux 3.5+ requires an explicit yes/no here. We say
   # no because the bundle should stay dep-free; wide-char/grapheme width
-  # handling is done in the iOS client (SwiftTerm), not in the daemon's
-  # tmux. Revisit if direct local tmux use needs better CJK width.
+  # handling is done client-side, not by tmux itself. Revisit if direct
+  # local tmux use needs better CJK width.
   configure_flags="--disable-utf8proc"
   if [ "$os" = "linux" ]; then
     configure_flags="$configure_flags --enable-static"

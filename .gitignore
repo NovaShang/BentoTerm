@@ -32,8 +32,10 @@ Profile.profraw
 # Maestro test screenshots
 tests/maestro/*.png
 
-# Stray binary from old experiment — proxy now lives in relay/ Worker
-desktop/bento-asr-proxy
+# Prebuilt tmux pulled by scripts/fetch-bundled-tmux.sh and embedded into
+# BentoTerm.app/Contents/MacOS/helpers/tmux by the postCompile script.
+/bundled-tmux/
+
 .dd-ios/
 .dd-mac/
 .dd-ios-device/

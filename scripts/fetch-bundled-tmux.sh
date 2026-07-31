@@ -9,7 +9,7 @@
 # back to system tmux, so a missing bundle is not a hard build failure.
 #
 # Environment overrides:
-#   BUNDLED_TMUX_DIR   where to write the binary (default: desktop/bin/bundled)
+#   BUNDLED_TMUX_DIR   where to write the binary (default: bundled-tmux/)
 #   GITHUB_REPO        which repo to fetch from (default: derived from `git remote`)
 #   GH                 path to gh CLI (default: `gh` on PATH)
 
@@ -19,7 +19,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/scripts/bundled-tmux.version"
 
-OUT_DIR="${BUNDLED_TMUX_DIR:-$ROOT/desktop/bin/bundled}"
+OUT_DIR="${BUNDLED_TMUX_DIR:-$ROOT/bundled-tmux}"
 GH_BIN="${GH:-gh}"
 
 # Detect host os/arch and map to the asset name format the release uses.

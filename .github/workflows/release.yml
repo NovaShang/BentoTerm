@@ -1,23 +1,18 @@
-# Tag-triggered release: cross-compile bento-daemon + bento CLI for each
-# supported (os, arch) slot, build the Mac app (arm64-only), and
-# upload everything as assets on a GitHub release tagged from the workflow
+# Tag-triggered release: build, sign and notarize the Mac app (arm64-only)
+# and upload it as an asset on a GitHub release tagged from the workflow
 # trigger.
 #
 # Triggers
 #   - push of a tag matching v* (e.g. v0.1.0). CI cuts a release immediately.
 #   - workflow_dispatch: manual button, takes a `tag` input. Useful for
-#     re-running a single failed slot — the publish step uses --clobber.
+#     re-running a failed build — the publish step uses --clobber.
 #
 # Layout of release assets
-#   bento-darwin-arm64.tar.gz   daemon + cli + bundled tmux for Apple Silicon
-#   bento-linux-x86_64.tar.gz   same shape for Linux amd64
-#   bento-linux-arm64.tar.gz    same shape for Linux arm64
-#   BentoTerm-macos-arm64.zip       the Mac app (unsigned for now)
+#   BentoTerm-macos-arm64.zip   the Mac app (Developer ID signed, notarized)
 #   *.sha256                    side-car checksum for each archive
 #
 # Intel Mac is intentionally omitted: GH-hosted Intel runners are queue-
 # starved post-deprecation and Intel-Mac users currently aren't a target.
-# The CLI is platform-agnostic in source — anyone can `go build` locally.
 
 name: release
 
@@ -49,82 +44,6 @@ jobs:
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-  # daemon + cli per (os, arch) slot, bundled with the matching prebuilt
-  # tmux pulled from build-bundled-tmux's release.
-  desktop:
-    needs: resolve-tag
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            slot: darwin-arm64
-            goos: darwin
-            goarch: arm64
-          - os: ubuntu-22.04
-            slot: linux-x86_64
-            goos: linux
-            goarch: amd64
-          - os: ubuntu-22.04-arm
-            slot: linux-arm64
-            goos: linux
-            goarch: arm64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-          cache: true
-          cache-dependency-path: desktop/go.sum
-
-      # Pull the matching bundled tmux from build-bundled-tmux's release.
-      # Missing is non-fatal (resolver falls back to system tmux), so we
-      # don't gate the release on it.
-      - name: Fetch bundled tmux
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: scripts/fetch-bundled-tmux.sh || true
-
-      - name: Build daemon + cli
-        working-directory: desktop
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: '0'
-        run: |
-          go build -ldflags='-s -w -X main.version=${{ needs.resolve-tag.outputs.tag }}' \
-            -o bin/bento-daemon ./cmd/bento-daemon
-          go build -ldflags='-s -w -X main.version=${{ needs.resolve-tag.outputs.tag }}' \
-            -o bin/bento ./cmd/bento
-
-      - name: Package
-        run: |
-          set -e
-          slot="${{ matrix.slot }}"
-          stage=$(mktemp -d)
-          # bento + bento-daemon sit flat (straight into PATH); the optional
-          # bundled tmux goes under bundled/ so it stays off PATH and never
-          # shadows the user's own tmux. `bento tmux` resolves to it.
-          cp desktop/bin/bento-daemon "$stage/bento-daemon"
-          cp desktop/bin/bento        "$stage/bento"
-          if [ -f "desktop/bin/bundled/tmux-$slot" ]; then
-            mkdir -p "$stage/bundled"
-            cp "desktop/bin/bundled/tmux-$slot" "$stage/bundled/tmux"
-            chmod +x "$stage/bundled/tmux"
-          fi
-          mkdir -p artifacts
-          tar -C "$stage" -czf "artifacts/bento-$slot.tar.gz" .
-          (cd artifacts && shasum -a 256 "bento-$slot.tar.gz" > "bento-$slot.tar.gz.sha256")
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-${{ matrix.slot }}
-          path: artifacts/*
-          if-no-files-found: error
-
   # arm64-only Mac app. Currently unsigned — first-launch on a
   # foreign Mac shows the Gatekeeper warning until D (notarize) lands.
   mac-app:
@@ -137,19 +56,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-          cache: true
-          cache-dependency-path: desktop/go.sum
-
       - name: Install xcodegen
         run: brew install xcodegen
 
+      # Not best-effort any more: the bundled tmux is what lets the app start
+      # a session on a Mac with no system tmux, so a release without it is
+      # broken for exactly the users who download a release. fetch-bundled-
+      # tmux.sh exits 0 on a missing release, so assert the file afterwards.
       - name: Fetch bundled tmux
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: scripts/fetch-bundled-tmux.sh || true
+        run: |
+          set -e
+          scripts/fetch-bundled-tmux.sh
+          test -x bundled-tmux/tmux-darwin-arm64 \
+            || { echo "ERROR: bundled tmux missing — refusing to ship an app that needs a system tmux" >&2; exit 1; }
 
       - name: Generate Xcode project
         run: xcodegen
@@ -205,9 +126,9 @@ jobs:
 
       # ---- build --------------------------------------------------------
       - name: Build BentoTerm.app (Release, signed)
-        # postCompileScript copies the Go binaries + bundled tmux into
+        # postCompileScript copies the bundled tmux into
         # BentoTerm.app/Contents/MacOS/helpers. xcodebuild signs the Swift
-        # bundle; we sign the helpers explicitly in the next step before
+        # bundle; we sign the helper explicitly in the next step before
         # re-sealing the outer bundle.
         run: |
           xcodebuild -project BentoTerm.xcodeproj \
@@ -221,13 +142,25 @@ jobs:
             OTHER_CODE_SIGN_FLAGS="--keychain ${KEYCHAIN_PATH}" \
             build
 
+      # The postCompileScript is the only thing putting tmux in the bundle and
+      # it warns rather than fails, so assert here — a release .app without
+      # helpers/tmux cannot start a session on a Mac lacking system tmux.
+      - name: Verify embedded helpers
+        run: |
+          set -e
+          helpers="build/Build/Products/Release/BentoTerm.app/Contents/MacOS/helpers"
+          test -x "$helpers/tmux" || { echo "ERROR: $helpers/tmux missing" >&2; exit 1; }
+          ls -l "$helpers"
+
       - name: Sign embedded helpers + re-seal bundle
         run: |
           set -e
           app="build/Build/Products/Release/BentoTerm.app"
-          # Inner first: each Go binary + bundled tmux. Hardened runtime is
-          # required for notarization; --timestamp pins a secure timestamp
-          # which is what staples to.
+          # Inner first: the bundled tmux (currently the only helper, but the
+          # loop stays general). Hardened runtime is required for
+          # notarization; --timestamp pins a secure timestamp, which is what
+          # staples to. An empty helpers/ dir makes the glob literal, hence
+          # the `[ -f ]` guard.
           for f in "$app/Contents/MacOS/helpers/"*; do
             [ -f "$f" ] || continue
             codesign --force --options=runtime --timestamp \
@@ -320,7 +253,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [resolve-tag, desktop, mac-app]
+    needs: [resolve-tag, mac-app]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -342,75 +275,3 @@ jobs:
               --generate-notes
           fi
           gh release upload "$tag" artifacts/* --clobber
-
-  # Rewrite Formula/bento-terminal.rb with the new version + sha256 of each
-  # released tarball, then push a commit back to main. Brew users get the
-  # updated formula on `brew update` without anyone touching the file by
-  # hand. Pushing a tag is the only way to trigger this; pre-release
-  # branches don't touch the formula.
-  update-formula:
-    needs: [resolve-tag, publish]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Rewrite Formula/bento-terminal.rb
-        run: |
-          set -e
-          tag="${{ needs.resolve-tag.outputs.tag }}"
-          version="${tag#v}"
-
-          sha_darwin_arm64="$(awk '{print $1}' < artifacts/bento-darwin-arm64.tar.gz.sha256)"
-          sha_linux_x86_64="$(awk '{print $1}' < artifacts/bento-linux-x86_64.tar.gz.sha256)"
-          sha_linux_arm64="$(awk '{print $1}'  < artifacts/bento-linux-arm64.tar.gz.sha256)"
-
-          formula=Formula/bento-terminal.rb
-          # Bump the formula's version line.
-          sed -i -E "s/^  version \"[^\"]+\"/  version \"$version\"/" "$formula"
-          # Bump every release-tarball URL to the new tag.
-          sed -i -E "s|releases/download/v[^/]+/bento-|releases/download/$tag/bento-|g" "$formula"
-
-          # Rewrite each sha256. We rely on the slot-specific URL appearing
-          # immediately above its sha256 line (which is how we wrote the
-          # template); the awk script tracks "last URL seen" and only
-          # rewrites the next sha256 once.
-          awk -v sd="$sha_darwin_arm64" -v lx="$sha_linux_x86_64" -v la="$sha_linux_arm64" '
-            /bento-darwin-arm64\.tar\.gz"/ { next_sha = sd }
-            /bento-linux-x86_64\.tar\.gz"/ { next_sha = lx }
-            /bento-linux-arm64\.tar\.gz"/  { next_sha = la }
-            /sha256 "/ && next_sha != "" {
-              sub(/"[0-9a-f]+"/, "\"" next_sha "\"")
-              next_sha = ""
-            }
-            { print }
-          ' "$formula" > "$formula.new"
-          mv "$formula.new" "$formula"
-
-          echo "----- new $formula -----"
-          cat "$formula"
-
-      - name: Commit + push
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          # Only commit if something actually changed (re-runs are no-ops).
-          if git diff --quiet Formula/bento-terminal.rb; then
-            echo "Formula already up to date, nothing to do."
-            exit 0
-          fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/bento-terminal.rb
-          git commit -m "Formula/bento-terminal: bump to ${{ needs.resolve-tag.outputs.tag }}"
-          git push origin main

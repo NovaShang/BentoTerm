@@ -3,19 +3,17 @@
 Terminal output is full of file paths. This feature recognizes them and lets
 you peek at the file without leaving the session — on iOS (tap → chip →
 sheet) and macOS (⌘hover underline → ⌘click panel, also on the right-click
-menu). Works across local / direct-SSH / relay panes, inside and outside
-tmux.
+menu). Works across local and SSH panes, inside and outside tmux.
 
 ## Architecture
 
 Detection is **entirely client-side** (transport-independence rule: the
-daemon stays dumb plumbing). Fetch is a per-transport "dumb pipe":
+transport stays dumb plumbing). Fetch is a per-transport "dumb pipe":
 
 | Pane | Fetch path |
 |---|---|
 | macOS (all panes on this base) | `LocalFileSource` — direct FileManager |
 | iOS direct SSH | `CitadelSFTPFileSource` — SFTP subsystem channel on the existing Citadel connection (any sshd serves it) |
-| iOS relay | `RelayFileSource` — one-shot `bento-file` subsystem channel on the same SSH-over-WSS session (daemon: `desktop/internal/sshserver/filefetch.go`) |
 
 ### Detection pipeline (bento-terminal-core)
 
@@ -42,22 +40,6 @@ plain panes use ghostty's grid columns.
 - non-tmux: the surface's OSC 7 report (`GHOSTTY_ACTION_PWD`, now handled in
   GhosttyRuntime → `surface.reportedPwd`). Remote shells without shell
   integration don't emit it → only absolute/`~` paths resolve there.
-
-### `bento-file` subsystem protocol (relay)
-
-Client opens a session channel, requests subsystem `bento-file`, writes ONE
-JSON line, reads one JSON header line + raw bytes; daemon closes the channel.
-The channel lifecycle is fully independent of the shell — a failed fetch can
-never touch the reconnect state machine.
-
-```
-→ {"op":"stat"|"read","path":"…","cwd":"/abs/or/empty","max_bytes":N}\n
-← {"ok":true,"path":"/resolved","size":N,"is_dir":b,"is_regular":b,
-   "mtime":unix,"data_len":N,"truncated":b}\n<data bytes…>
-```
-
-Old daemons reply `false` to the subsystem request → the client shows
-"update the Mac app". Hard read cap 32 MiB server-side.
 
 ## UX
 
@@ -87,10 +69,7 @@ Old daemons reply `false` to the subsystem request → the client shows
   (PWD action), `PaneViewModel.currentWorkingDirectory()`.
 - iOS app: `Services/FilePreviewSources.swift`, `Views/Terminal/
   PathPreviewUI.swift`, wiring in `TerminalContainerVC` +
-  `TerminalWrapperView`, `SSHService.filePreviewSource()`,
-  `BentoRelayClient.fetchFile`.
-- Daemon: `desktop/internal/sshserver/filefetch.go` + `subsystem` case in
-  `server.go` (needs a daemon restart to pick up).
+  `TerminalWrapperView`, `SSHService.filePreviewSource()`.
 
 ## Known gaps / follow-ups
 
@@ -100,5 +79,5 @@ Old daemons reply `false` to the subsystem request → the client shows
 - Directory tap shows an info card; a listing view is a v2 candidate.
 - macOS ssh-subprocess panes (quick-connect, not on this base yet) have no
   fetch path — wire a `ControlMaster`-backed source when that lands.
-- End-to-end validation on a real device/relay pending (unit tests cover
+- End-to-end validation on a real device pending (unit tests cover
   detection + wrap math).

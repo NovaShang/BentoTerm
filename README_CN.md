@@ -23,14 +23,13 @@
 
 - **在终端任何位置按住说话。**松手即注入转写文本；滑动可以原样发送、让更强的模型润色，或把大白话直接变成 shell 命令。
 - **认得你屏幕的语音识别。**识别词表会根据屏幕上下文动态偏置，中英混说毫无压力。
-- **零配置。**语音开箱即用（走 Bento relay）；想直连也可以自带 API key——Apple 本地、OpenAI、Qwen 三种引擎都支持。
+- **引擎任选。**Apple 本地识别完全不用配置；OpenAI 和 Qwen 实时 ASR 用你自己的 API key。
 
 ## 比一切都活得久的会话
 
 - 工作区放在**持久化 tmux 会话**里（tmux 已内置，无需安装）。退出 app，agent 继续干活。
 - **已经在用 tmux？**Bento 直接接入你现有的 tmux 服务器——此刻的会话、窗口、pane 原样呈现，其他 tmux 客户端照常工作、完全同步。
-- **SSH 快速连接**直接读你现有的 `~/.ssh/config`，纯 SSH 连接也是全功能——服务器端什么都不用装。
-- **iOS 版（TestFlight 即将开放）：**扫码配对、端到端加密、无账号。跑到一半合上笔记本，掏出手机接着回答你的 agent。
+- **SSH 快速连接**直接读你现有的 `~/.ssh/config`，纯 SSH 连接也是全功能。远程机器只需要跑着 `sshd`、装了 `tmux`——不需要 agent，不需要 daemon，什么都不用装。
 
 ## 会读自己输出的终端
 
@@ -47,13 +46,15 @@
 2. 解压，把 `BentoTerm.app` 拖进 `/Applications`。应用已签名并经过公证——打开不会有任何警告。
 3. 首次启动会引导你创建第一个 agent 会话，没装的 agent 也提供一键安装命令。
 
-Mac 应用完全自包含。`bento` CLI + daemon（`brew install NovaShang/bento/bento-terminal`）只在你想让无界面的 Linux 主机也能被即将到来的 iOS 应用访问时才需要。
+Mac 应用完全自包含——tmux 已内置，不需要额外装任何东西。
+
+要用远程机器，那台机器只需要跑着 `sshd`、装了 `tmux`。至于怎么让它从你这边连得上（NAT、VPN、Tailscale、跳板机），由你和你的 `~/.ssh/config` 决定；Bento 不提供 relay，也没有主机端组件。
 
 ## 隐私
 
-- **无账号。**没有任何要注册的东西；配对就是唯一的身份层。
+- **无账号。**没有任何要注册的东西。
 - **遥测默认关闭**，严格 opt-in——只有一组封闭的功能计数器，永远不含终端内容。
-- **语音音频**经 Bento relay 转发给语音服务商（key 存在服务端）；用自己的 key 则直连服务商。除了你主动调用的功能，终端输出永远不离开你的机器。
+- **语音音频**用你自己的 key，从你的机器直连语音服务商。除了你主动调用的功能，终端输出永远不离开你的机器。
 
 ## 技术选型与架构
 
@@ -63,14 +64,13 @@ Mac 应用完全自包含。`bento` CLI + daemon（`brew install NovaShang/bento
 | 多路复用 | tmux control mode（`-CC`），tmux 已内置，协议客户端是我们自己写的、测试覆盖严密的 [`swift-tmux`](swift-tmux/) |
 | 应用层 | 端到端原生 Swift——macOS 用 AppKit/SwiftUI，iOS 用 UIKit/SwiftUI——都是共享核心 [`bento-terminal-core`](bento-terminal-core/) 之上的薄壳 |
 | Agent 状态检测 | 纯客户端启发式：基于 pane 输出、标题、进程信息的逐 agent 画像——不需要 SDK 钩子，不需要 agent 配合 |
-| SSH | macOS 直接用系统 OpenSSH（所以 `~/.ssh/config`、ControlMaster、跳板机开箱即用）；iOS 内嵌 [Citadel](https://github.com/orlandos-nl/Citadel)（SwiftNIO SSH）|
-| 远程可达性 | Go daemon + Cloudflare Worker relay：配对、端到端加密传输、ASR/LLM 代理——详见 [docs/relay-protocol.md](docs/relay-protocol.md) |
+| SSH | macOS 直接用系统 OpenSSH，所以 `~/.ssh/config`、ControlMaster、跳板机开箱即用；远程主机只需要 `sshd` + `tmux` |
 | 语音 | `SpeechEngine` 抽象层，下接 Apple 本地、OpenAI、Qwen 实时 ASR，带屏幕上下文词表偏置 |
 
 两条贯穿一切的设计原则：
 
 1. **tmux 是唯一事实源。**应用只渲染和编辑 tmux 状态，从不私藏副本。所以会话比应用活得久，任何其他 tmux 客户端看到的都和 Bento 一致。
-2. **传输层保持愚蠢，客户端保持聪明。**纯本地 shell 或原生 SSH 就是全功能；daemon/relay 只解决"够得着"。Agent 检测和终端智能永远不上服务端。
+2. **传输层保持愚蠢，客户端保持聪明。**纯本地 shell 或原生 SSH 就是全功能。Agent 检测和终端智能完全在客户端，永远不上服务端。
 
 ## 仓库结构
 
@@ -80,13 +80,11 @@ Mac 应用完全自包含。`bento` CLI + daemon（`brew install NovaShang/bento
 | `BentoTermMac/` | macOS 应用 |
 | `bento-terminal-core/` | 共享 Swift 核心：渲染（libghostty）、agent 状态检测、语音、会话逻辑 |
 | `swift-tmux/` | tmux control mode（`-CC`）协议客户端 |
-| `desktop/` | Go 主机端 daemon + `bento` CLI（配对、relay 客户端、内嵌 SSH 服务器）|
-| `relay/` | Cloudflare Worker relay（配对、传输、ASR/LLM 代理）|
-| `docs/` | PRD、设计文档、[relay 协议](docs/relay-protocol.md)、bug tracker |
+| `docs/` | PRD、设计文档、bug tracker |
 
 ## 从源码构建
 
-需要 Xcode 16+ 和 Go 1.23+（Mac 应用在构建时内嵌 Go daemon）。GhosttyKit——打包成 xcframework 的 libghostty——会作为 Swift Package 二进制依赖自动拉取。
+需要 Xcode 26+。GhosttyKit——打包成 xcframework 的 libghostty——会作为 Swift Package 二进制依赖自动拉取。构建阶段脚本会跑 `scripts/fetch-bundled-tmux.sh`，拉取 `scripts/bundled-tmux.version` 里钉住的预编译 tmux，内嵌到 `BentoTerm.app/Contents/MacOS/helpers/tmux`；该脚本需要 `gh` CLI，没有的话应用会退回系统 tmux。
 
 ```sh
 git clone https://github.com/NovaShang/bento.git && cd bento

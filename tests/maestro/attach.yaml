@@ -1,12 +1,12 @@
 appId: com.bento.term.app
-# Attach to a KNOWN-SAFE tmux session on the paired Mac, landing in the terminal.
+# Attach to a KNOWN-SAFE tmux session on the saved host Mac, landing in the terminal.
 #
 #   ~/.maestro/bin/maestro --device <sim> test tests/maestro/attach.yaml            # → bento
 #   ~/.maestro/bin/maestro --device <sim> test -e SESSION=voltreality attach.yaml
 #
 # NEVER pass SESSION=main — that is the user's live working session.
 # Default is the dedicated throwaway `bentotest` (create it once via new-session.yaml).
-# Assumes the Mac is already paired (user pairs once; pairing survives reinstalls).
+# Assumes the SSH host is already saved (user adds it once; it survives reinstalls).
 env:
   SESSION: bentotest
 ---
@@ -20,7 +20,7 @@ env:
 - extendedWaitUntil:
     visible: "New tmux session"
     timeout: 15000
-# Relay reconnect can transiently fail on a cold launch ("Failed to connect").
+# Reconnect can transiently fail on a cold launch ("Failed to connect").
 # Dismiss the error and refresh; also refresh if the list is just slow to load.
 - runFlow:
     when:

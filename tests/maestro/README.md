@@ -5,16 +5,16 @@ Driver script: [`scripts/ios-dev.sh`](../../scripts/ios-dev.sh).
 
 ## Why it works
 
-Pairing is done **once by the user**. `simctl install` over the same bundle id
-preserves the app's data container (`Documents/`, `Preferences/`), so
-`relay-daemons.json` and the paired Mac survive every rebuild. → rebuild / reinstall /
-relaunch freely; the app auto-reconnects over the relay. (The data-container *UUID*
-can change on reinstall; the driver re-resolves it every call, so that's transparent.)
+Host setup is done **once by the user**. `simctl install` over the same bundle id
+preserves the app's data container (`Documents/`, `Preferences/`), so the saved SSH
+host survives every rebuild. → rebuild / reinstall / relaunch freely; the app
+reconnects on its own. (The data-container *UUID* can change on reinstall; the driver
+re-resolves it every call, so that's transparent.)
 
 ## The loop
 
 ```sh
-scripts/ios-dev.sh doctor         # sim + install + pairing + log state
+scripts/ios-dev.sh doctor         # sim + install + host + log state
 scripts/ios-dev.sh run            # build (Debug, incremental ~40s) + install + relaunch
 scripts/ios-dev.sh shot           # screenshot → /tmp/bento_shot.png   (Read it)
 scripts/ios-dev.sh log [N]        # last N debug.log lines, Live-Activity spam filtered
@@ -50,7 +50,7 @@ scripts/ios-dev.sh attach            # = maestro attach.yaml, SESSION=bentotest
 
 ## Driving the terminal: use tmux, not Maestro keystrokes
 
-The paired Mac is **this machine**, so `bentotest` is a real local tmux session.
+The saved host Mac is **this machine**, so `bentotest` is a real local tmux session.
 Inject input from the Mac side and observe how the app renders it:
 
 ```sh
@@ -71,7 +71,7 @@ On the session picker, the green **Create** pill exposes no a11y label, so
 
 ## Hard rules
 
-- **Never drive pairing.** The user pairs; it persists. No Maestro pairing steps.
+- **Never re-add the host.** The user adds it once; it persists. No Maestro host-setup steps.
 - **Never attach to / send to `main`.** That is the user's live working session; the
   driver refuses it. Use the dedicated throwaway `bentotest` (what the user chose);
   `bento` and `voltreality` are the user's own and off-limits for typing.

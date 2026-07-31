@@ -86,8 +86,8 @@ jobs:
         with:
           name: bundled-tmux-${{ matrix.slot }}
           path: |
-            desktop/bin/bundled/tmux-${{ matrix.slot }}
-            desktop/bin/bundled/tmux-${{ matrix.slot }}.sha256
+            bundled-tmux/tmux-${{ matrix.slot }}
+            bundled-tmux/tmux-${{ matrix.slot }}.sha256
           if-no-files-found: error
 
   publish:

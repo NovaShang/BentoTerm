@@ -1,5 +1,12 @@
 # Telemetry
 
+> **Status: the sink described below no longer exists.** The Cloudflare Worker
+> relay (`relay/`) was deleted when Bento shrank to a plain-SSH tool, and it
+> was the only endpoint client batches were ever POSTed to. Everything from
+> "How it works" down describes that removed component. The client-side
+> consent model and the closed event enum are the parts still worth keeping if
+> telemetry is ever re-homed. Do not treat this as current architecture.
+
 Bento's telemetry is designed to be consistent with the product's privacy
 posture (no accounts, E2E-encrypted terminal traffic, nothing readable stored
 server-side): **no third-party SDK, a collection surface small enough to

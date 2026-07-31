@@ -1,4 +1,4 @@
-# Daily CI for the Bento daemon + CLI. Runs on every push and PR.
+# CI for the Bento apps. Runs on every push and PR.
 #
 # Critically, this workflow NEVER compiles tmux from source — it fetches the
 # prebuilt binary from the release tag pinned in scripts/bundled-tmux.version.
@@ -22,45 +22,6 @@ permissions:
   contents: read
 
 jobs:
-  desktop:
-    name: desktop (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        # macOS is where most contributors develop; Linux catches portability
-        # regressions in the daemon (it'll be the dominant production host).
-        os: [macos-14, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-          cache: true
-          cache-dependency-path: desktop/go.sum
-
-      # Cache the prebuilt tmux across runs so we don't hit the GH API for
-      # every CI invocation. Keyed on the version file so a pin bump
-      # invalidates automatically.
-      - name: Cache bundled tmux
-        uses: actions/cache@v4
-        with:
-          path: desktop/bin/bundled
-          key: bundled-tmux-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/bundled-tmux.version') }}
-
-      - name: Fetch bundled tmux
-        # GITHUB_TOKEN gives `gh release download` access without an extra login.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: scripts/fetch-bundled-tmux.sh
-
-      - name: vet + test + build
-        working-directory: desktop
-        run: make ci
-
-  # macOS-only Xcode build for the Mac app. Kept separate so a broken
-  # Xcode setup doesn't gate Go tests on Linux.
   mac-app:
     name: mac app (xcodebuild)
     # The codebase needs Xcode 26. macos-latest still maps to macos-15
@@ -70,22 +31,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-          cache: true
-          cache-dependency-path: desktop/go.sum
-
       - name: Install xcodegen
         run: brew install xcodegen
 
+      # Cache the prebuilt tmux across runs so we don't hit the GH API for
+      # every CI invocation. Keyed on the version file so a pin bump
+      # invalidates automatically.
       - name: Cache bundled tmux
         uses: actions/cache@v4
         with:
-          path: desktop/bin/bundled
+          path: bundled-tmux
           key: bundled-tmux-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/bundled-tmux.version') }}
 
       - name: Fetch bundled tmux
+        # GITHUB_TOKEN gives `gh release download` access without an extra login.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: scripts/fetch-bundled-tmux.sh

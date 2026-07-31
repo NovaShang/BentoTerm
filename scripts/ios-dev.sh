@@ -2,14 +2,14 @@
 # ios-dev.sh — self-contained iOS simulator build/drive/observe loop for Bento.
 #
 # The loop that lets Claude self-validate iOS fixes without the user retesting:
-#   build → install (keeps data, so pairing persists) → relaunch → drive → observe
+#   build → install (keeps data, so the saved host persists) → relaunch → drive → observe
 #
-# Pairing is done ONCE by the user. Reinstalling over the same bundle id preserves
-# the app's data container (Documents/, Preferences/), so relay-daemons.json and the
-# paired Mac survive every rebuild. Never drive pairing; never attach to session `main`.
+# The SSH host is added ONCE by the user. Reinstalling over the same bundle id
+# preserves the app's data container (Documents/, Preferences/), so hosts.json and the
+# saved host survive every rebuild. Never re-add the host; never attach to session `main`.
 #
 # Usage:
-#   scripts/ios-dev.sh doctor              # print sim/app/pairing state
+#   scripts/ios-dev.sh doctor              # print sim/app/host state
 #   scripts/ios-dev.sh build               # incremental Debug build → .dd-ios
 #   scripts/ios-dev.sh install             # install built .app onto the sim
 #   scripts/ios-dev.sh relaunch            # terminate + launch (fresh debug.log)
@@ -24,7 +24,7 @@
 #   scripts/ios-dev.sh pane                # dump the test tmux pane (rendering ground truth)
 #   scripts/ios-dev.sh container           # print app data container path
 #
-# The paired Mac IS this machine, so the throwaway `bentotest` tmux session can be
+# The saved host IS this machine, so the throwaway `bentotest` tmux session can be
 # driven deterministically from here (`send`/`pane`) while the app renders it — far more
 # reliable than typing into the terminal via Maestro (custom UITextInput, no soft keyboard).
 #
@@ -79,11 +79,11 @@ cmd_doctor() {
   echo "installed  : $([[ -n "$c" ]] && echo yes || echo 'NO (run: install)')"
   if [[ -n "$c" ]]; then
     echo "container  : $c"
-    local p="$c/Documents/relay-daemons.json"
+    local p="$c/Documents/hosts.json"
     if [[ -f "$p" ]]; then
-      python3 -c "import json;d=json.load(open('$p'));print('paired     :', ', '.join(x.get('label','?') for x in d) or 'none')"
+      python3 -c "import json;d=json.load(open('$p'));print('hosts      :', ', '.join(x.get('label') or x.get('name') or '?' for x in d) or 'none')"
     else
-      echo "paired     : NO relay-daemons.json (user must pair once)"
+      echo "hosts      : NO hosts.json (user must add an SSH host once)"
     fi
     echo "debug.log  : $([[ -f "$(log_file)" ]] && echo "$(wc -l < "$(log_file)" | tr -d ' ') lines" || echo missing)"
   fi
@@ -118,7 +118,7 @@ cmd_install() {
   need_boot
   local a; a="$(app_path)"
   [[ -d "$a" ]] || { echo "✗ no built app; run: build"; return 1; }
-  echo "→ installing $a (data container preserved → pairing kept)"
+  echo "→ installing $a (data container preserved → saved host kept)"
   xcrun simctl install "$SIM_ID" "$a"
   echo "✓ installed $APP_ID"
 }

@@ -131,7 +131,7 @@ Bullets:
   private copy — that's why sessions outlive the app and other tmux clients
   always agree with it.
 - **Transport stays dumb, clients stay smart.** Plain SSH gives you
-  everything; the optional daemon/relay only add reachability. Terminal
+  everything — a remote host needs only `sshd` and `tmux`. Terminal
   intelligence never moves server-side.
 
 Link: `Read the architecture notes →` (README#under-the-hood)
@@ -140,11 +140,11 @@ Link: `Read the architecture notes →` (README#under-the-hood)
 
 **H2:** Yours, on your machine
 
-No accounts — pairing is the only identity. Telemetry is off by default and
+No accounts — nothing to sign up for. Telemetry is off by default and
 strictly opt-in: a closed set of feature counters, never terminal content.
-Voice audio goes to the speech provider through the Bento relay (keys live
-server-side), or directly with your own key. Terminal output never leaves
-your machine except to power the features you invoke.
+Voice audio goes directly from your machine to the speech provider, with your
+own key. Terminal output never leaves your machine except to power the
+features you invoke.
 
 ## 11. FAQ
 
@@ -154,9 +154,9 @@ your machine except to power the features you invoke.
 - **Do I need to know tmux?** No. It's bundled and invisible. If you *do* use
   tmux, Bento attaches to your existing sessions seamlessly.
 - **Intel Macs?** Not currently — Apple Silicon, macOS 14+.
-- **What does it cost?** The app is free and open source (Apache-2.0). Hosted
-  conveniences (like the zero-config voice relay) are free while in beta;
-  optional paid services may come later. BYOK always stays free.
+- **What does it cost?** The app is free and open source (Apache-2.0).
+- **Can I reach a machine behind NAT?** That's on you — Bento speaks plain
+  SSH, so use a VPN, Tailscale, or a jump host in your `~/.ssh/config`.
 - **When is iOS coming?** TestFlight beta is in preparation — join the
   waitlist above.
 - **Where do I report bugs?** GitHub issues. The bug tracker is public — you
@@ -167,8 +167,6 @@ your machine except to power the features you invoke.
 **H2:** Your agents are already working. Stop tab-hunting them.
 
 `[Download for Mac]` — Free & open source · macOS 14+ · Apple Silicon
-`brew install NovaShang/bento/bento-terminal` shown small underneath for the
-CLI/daemon (labelled: "CLI + daemon for headless hosts").
 
 ## 13. Footer
 
@@ -189,10 +187,10 @@ Bento 🍱 · GitHub · Releases · README (中文) · Apache-2.0 · Built by
 
 # Implementation notes
 
-- Host: Cloudflare Pages (same account as relay); static, no framework needed.
-- Waitlist: add a `POST /v1/waitlist` route to the existing relay worker (KV
-  or D1, email + timestamp, rate-limited like other routes) — no third-party
-  form service, consistent with the privacy story.
+- Host: Cloudflare Pages; static, no framework needed.
+- Waitlist: needs a backend route (KV or D1, email + timestamp, rate-limited)
+  — no third-party form service, consistent with the privacy story. The relay
+  worker that used to host this is gone, so this needs a new home.
 - Download button hits the `releases/latest/download/...` permalink — no
   per-release page edits needed.
 - Analytics: Cloudflare's built-in only. No third-party trackers — the privacy
