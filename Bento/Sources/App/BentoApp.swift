@@ -26,7 +26,7 @@ struct BentoApp: App {
         // session — os_log only by default) into Documents/debug.log, so a
         // real-device incident is fully diagnosable from one file pull:
         //   xcrun devicectl device copy from --domain-type appDataContainer
-        //     --domain-identifier com.bento.app --source Documents/debug.log …
+        //     --domain-identifier com.bento.term.app --source Documents/debug.log …
         coreDlogFileSink = { DebugLogger.shared.log($0) }
     }
 

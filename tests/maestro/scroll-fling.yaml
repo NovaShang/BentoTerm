@@ -1,4 +1,4 @@
-appId: com.bento.app
+appId: com.bento.term.app
 # Inertial-scroll check. Assumes the app is ALREADY attached to a terminal
 # (run attach.yaml first) whose scrollback holds `seq 1 2000` — the numbered
 # lines make scroll distance measurable from screenshots.

@@ -1,7 +1,7 @@
 import SwiftUI
 import BentoTerminalCore
 
-/// "How Bento works" — the concept map (design doc §2), permanently
+/// "How BentoTerm works" — the concept map (design doc §2), permanently
 /// re-readable. Every coach mark the user may have dismissed lives here in
 /// long form: host and clients, agents, persistent tmux sessions, pairing,
 /// state colors, Parallel/Focus, and the voice gestures. Optional reading:
@@ -16,7 +16,7 @@ struct HowBentoWorksView: View {
     var body: some View {
         NavigationStack {
             HowBentoWorksContent()
-                .navigationTitle("How Bento works")
+                .navigationTitle("How BentoTerm works")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -31,7 +31,7 @@ struct HowBentoWorksView: View {
 struct HowBentoWorksSettingsPage: View {
     var body: some View {
         HowBentoWorksContent()
-            .navigationTitle("How Bento works")
+            .navigationTitle("How BentoTerm works")
             .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -56,7 +56,7 @@ private struct HowBentoWorksContent: View {
                     concept(
                         symbol: "clock.arrow.circlepath",
                         title: "Sessions persist",
-                        body: "A Bento session is a tmux session, living on the host. Disconnect, lock your phone, switch devices — it is exactly where you left it, and `tmux ls` on the host lists the same thing."
+                        body: "A BentoTerm session is a tmux session, living on the host. Disconnect, lock your phone, switch devices — it is exactly where you left it, and `tmux ls` on the host lists the same thing."
                     )
                     concept(
                         symbol: "qrcode",

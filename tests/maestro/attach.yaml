@@ -1,4 +1,4 @@
-appId: com.bento.app
+appId: com.bento.term.app
 # Attach to a KNOWN-SAFE tmux session on the paired Mac, landing in the terminal.
 #
 #   ~/.maestro/bin/maestro --device <sim> test tests/maestro/attach.yaml            # → bento

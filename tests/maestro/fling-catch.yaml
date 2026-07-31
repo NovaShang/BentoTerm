@@ -1,4 +1,4 @@
-appId: com.bento.app
+appId: com.bento.term.app
 # Catch-touch regression: a long-press landing while a fling is still gliding
 # must PIN the scroll, not start voice; a second press after settle must reach
 # voice normally.

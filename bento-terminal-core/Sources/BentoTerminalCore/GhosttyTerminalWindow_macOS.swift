@@ -287,7 +287,7 @@ public enum BentoTerminalWindow {
     }
 
     static func titleFor(_ session: String) -> String {
-        session == defaultSessionName ? "Bento Terminal" : "Bento · \(session)"
+        session == defaultSessionName ? "BentoTerm" : "BentoTerm · \(session)"
     }
 }
 

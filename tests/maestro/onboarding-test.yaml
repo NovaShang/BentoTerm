@@ -1,4 +1,4 @@
-appId: com.bento.app
+appId: com.bento.term.app
 # Walk the first-run welcome flow (design docs/onboarding-design.md §5):
 # welcome home (architecture diagram + three host paths) → Mac path steps →
 # Linux/WSL path steps → "How Bento works" concept page.

@@ -1,4 +1,4 @@
-appId: com.bento.app
+appId: com.bento.term.app
 # Verify the INLINE compose bar (double-tap → bar docked above the keyboard,
 # terminal stays visible — NOT a fullscreen modal). Self-contained: attaches to
 # the bentotest terminal first (via attach.yaml).

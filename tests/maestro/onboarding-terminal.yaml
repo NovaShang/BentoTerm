@@ -1,11 +1,11 @@
-appId: com.bento.app
+appId: com.bento.term.app
 # Terminal-stage onboarding verification (design docs/onboarding-design.md §5.4/§6):
 #   1. attaching to a fresh multi-pane session shows NO sizing / focus-mode
 #      dialogs (zero-modal defaults), and
 #   2. the gesture overlay (hold-to-speak / double-tap) appears once.
 #
 # Run against the paired dev sim with the tip ledger reset first:
-#   xcrun simctl spawn <sim> defaults delete com.bento.app gestureOnboardingShown_v1
+#   xcrun simctl spawn <sim> defaults delete com.bento.term.app gestureOnboardingShown_v1
 # and the throwaway session recreated Mac-side WITH a split:
 #   tmux kill-session -t bentotest; tmux new-session -d -s bentotest && tmux split-window -h -t bentotest
 ---

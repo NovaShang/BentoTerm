@@ -35,7 +35,7 @@ Logo (bento-icon.svg) · GitHub (with star count) · Changelog (→ releases) ·
 a glance. Answer with your voice — from anywhere.
 
 **CTA row:**
-- `[Download for Mac]` → https://github.com/NovaShang/bento/releases/latest/download/Bento-macos-arm64.zip
+- `[Download for Mac]` → https://github.com/NovaShang/bento/releases/latest/download/BentoTerm-macos-arm64.zip
 - caption under button: Free & open source · macOS 14+ · Apple Silicon
 - text link: `View on GitHub →`
 

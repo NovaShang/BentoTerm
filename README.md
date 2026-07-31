@@ -43,8 +43,8 @@ Modern coding is several agents working in parallel while you review, unblock, a
 
 **Requirements:** macOS 14+ on Apple Silicon.
 
-1. Download `Bento-macos-arm64.zip` from the [latest release](https://github.com/NovaShang/bento/releases/latest).
-2. Unzip and drag `Bento.app` into `/Applications`. The app is signed and notarized — it opens without warnings.
+1. Download `BentoTerm-macos-arm64.zip` from the [latest release](https://github.com/NovaShang/bento/releases/latest).
+2. Unzip and drag `BentoTerm.app` into `/Applications`. The app is signed and notarized — it opens without warnings.
 3. First run walks you through creating your first agent session, including one-command installers for any agent you don't have yet.
 
 The Mac app is fully self-contained. The `bento` CLI + daemon (`brew install NovaShang/bento/bento-terminal`) are only needed to make headless Linux hosts reachable from the upcoming iOS app.

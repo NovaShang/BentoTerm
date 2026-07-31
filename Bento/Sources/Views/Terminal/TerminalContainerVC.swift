@@ -984,7 +984,7 @@ extension TerminalContainerVC {
     /// "hold ⇧ to select" the moment the grab bites.
     private func noteMouseGrabbed() {
         guard TipCenter.shared.consume(.mouseGrabbed) else { return }
-        showToast("This app is using taps — two fingers for Bento")
+        showToast("This app is using taps — two fingers for BentoTerm")
     }
 
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {

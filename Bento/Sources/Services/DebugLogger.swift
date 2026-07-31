@@ -25,7 +25,7 @@ final class DebugLogger: @unchecked Sendable {
         fileHandle = try? FileHandle(forWritingTo: logFileURL)
         fileHandle?.seekToEndOfFile()
 
-        log("=== Bento Debug Log Started ===")
+        log("=== BentoTerm Debug Log Started ===")
     }
 
     func log(_ message: String, file: String = #fileID, line: Int = #line) {

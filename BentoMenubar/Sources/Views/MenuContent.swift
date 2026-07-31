@@ -110,7 +110,7 @@ struct MenuContent: View {
         Divider()
 
         Button(action: { NSApp.terminate(nil) }) {
-            Label("Quit Bento", systemImage: "power")
+            Label("Quit BentoTerm", systemImage: "power")
         }
         .keyboardShortcut("q")
     }
@@ -246,7 +246,7 @@ func confirmKill(session: String) -> Bool {
     NSApp.activate(ignoringOtherApps: true)
     let alert = NSAlert()
     alert.messageText = "Kill “\(session)”?"
-    alert.informativeText = "Everything running in it stops. Closing a window or quitting Bento only detaches — this does not."
+    alert.informativeText = "Everything running in it stops. Closing a window or quitting BentoTerm only detaches — this does not."
     alert.alertStyle = .warning
     alert.addButton(withTitle: "Kill Session")
     alert.addButton(withTitle: "Cancel")

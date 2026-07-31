@@ -38,7 +38,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
 DD="$REPO/.dd-ios"
-APP_ID="com.bento.app"
+APP_ID="com.bento.term.app"
 SCHEME="Bento"
 MAESTRO="$HOME/.maestro/bin/maestro"
 FALLBACK_SIM="FD4977E4-DBF4-4A39-B4FB-BE81B4017856"   # iPad Air 11-inch (M4)
@@ -55,7 +55,7 @@ resolve_sim() {
 }
 SIM_ID="$(resolve_sim)"
 
-app_path()  { echo "$DD/Build/Products/Debug-iphonesimulator/Bento.app"; }
+app_path()  { echo "$DD/Build/Products/Debug-iphonesimulator/BentoTerm.app"; }
 container() { xcrun simctl get_app_container "$SIM_ID" "$APP_ID" data 2>/dev/null; }
 log_file()  { echo "$(container)/Documents/debug.log"; }
 

@@ -218,7 +218,7 @@ struct SettingsView: View {
     private var generalTab: some View {
         Form {
             Section {
-                Toggle("Launch Bento at login", isOn: $launchAtLogin)
+                Toggle("Launch BentoTerm at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, newValue in
                         do {
                             try LoginItem.setEnabled(newValue)
@@ -234,7 +234,7 @@ struct SettingsView: View {
                         .foregroundStyle(.orange)
                         .font(.caption)
                 } else {
-                    Text("Bento will appear in your menu bar after every login.")
+                    Text("BentoTerm will appear in your menu bar after every login.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -328,9 +328,9 @@ struct SettingsView: View {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .frame(width: 96, height: 96)
-            Text("Bento")
+            Text("BentoTerm")
                 .font(.title2).bold()
-            Text("Mac menubar companion for the Bento iOS terminal.")
+            Text("Mac menubar companion for the BentoTerm iOS app.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

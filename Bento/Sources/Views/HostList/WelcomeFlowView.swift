@@ -48,7 +48,7 @@ struct WelcomeFlowView: View {
                 VStack(spacing: 10) {
                     BentoMarkHero(size: 72)
                         .shadow(color: Color.black.opacity(0.4), radius: 18, y: 8)
-                    Text("Bento")
+                    Text("BentoTerm")
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(Color.bentoInk)
                     Text("Run a team of AI agents. Speak to them.\nCommand them from anywhere.")
@@ -71,14 +71,14 @@ struct WelcomeFlowView: View {
                     pathCard(
                         symbol: "macbook",
                         title: "I have a Mac",
-                        subtitle: "Recommended — the Bento Mac app sets everything up.",
+                        subtitle: "Recommended — the BentoTerm Mac app sets everything up.",
                         prominent: true
                     ) { page = .macPath }
 
                     pathCard(
                         symbol: "server.rack",
                         title: "I have a Linux server / Windows (WSL)",
-                        subtitle: "One command installs the Bento host."
+                        subtitle: "One command installs the BentoTerm host."
                     ) { page = .linuxPath }
 
                     // Not labelled "advanced" and not last-resort: plain SSH is a
@@ -97,7 +97,7 @@ struct WelcomeFlowView: View {
                 Button {
                     showHowItWorks = true
                 } label: {
-                    Label("How does Bento work?", systemImage: "questionmark.circle")
+                    Label("How does BentoTerm work?", systemImage: "questionmark.circle")
                         .font(.system(size: 14))
                         .foregroundStyle(Color.bentoInkDim)
                 }
@@ -212,7 +212,7 @@ struct HostPathView: View {
         VStack(alignment: .leading, spacing: 12) {
             stepCard(number: 1, title: "On your Mac, open") {
                 copyRow("bento.novashang.com/mac", mono: true)
-                Text("Download and open the Bento app.")
+                Text("Download and open the BentoTerm app.")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.bentoInkDim)
             }
@@ -228,7 +228,7 @@ struct HostPathView: View {
                     .foregroundStyle(Color.bentoInkDim)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Already running Bento on your Mac? Click its menu-bar icon → “Pair new iPhone…”.")
+            Text("Already running BentoTerm on your Mac? Click its menu-bar icon → “Pair new iPhone…”.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.bentoInkMute)
                 .fixedSize(horizontal: false, vertical: true)
@@ -240,7 +240,7 @@ struct HostPathView: View {
 
     private var linuxSteps: some View {
         VStack(alignment: .leading, spacing: 12) {
-            stepCard(number: 1, title: "Install the Bento host") {
+            stepCard(number: 1, title: "Install the BentoTerm host") {
                 copyRow("curl -fsSL https://bento.novashang.com/install.sh | sh", mono: true)
                 Text("Run this on your server. Windows: run it inside WSL — Windows' built-in Linux environment.")
                     .font(.system(size: 13))
@@ -255,7 +255,7 @@ struct HostPathView: View {
             }
             stepCard(number: 3, title: "Give it an agent") {
                 copyRow("curl -fsSL https://claude.ai/install.sh | bash", mono: true)
-                Text("Agents are CLI agents that run on your host. Claude Code is the recommended one — no other software needed, and it signs into its own Anthropic account on first run. Bento also understands Codex, Gemini CLI, OpenCode and more if you prefer those.")
+                Text("Agents are CLI agents that run on your host. Claude Code is the recommended one — no other software needed, and it signs into its own Anthropic account on first run. BentoTerm also understands Codex, Gemini CLI, OpenCode and more if you prefer those.")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.bentoInkDim)
                     .fixedSize(horizontal: false, vertical: true)

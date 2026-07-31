@@ -1,10 +1,10 @@
-appId: com.bento.app
+appId: com.bento.term.app
 
 ---
 
 # Seed UserDefaults outside this flow:
-#   defaults write com.bento.app pair_prefill_daemon <UUID>
-#   defaults write com.bento.app pair_prefill_code   <6-digit>
+#   defaults write com.bento.term.app pair_prefill_daemon <UUID>
+#   defaults write com.bento.term.app pair_prefill_code   <6-digit>
 - launchApp:
     clearState: false
 

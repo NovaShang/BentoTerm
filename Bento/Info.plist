@@ -8,7 +8,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>com.bento.app</string>
+			<string>com.bento.term.app</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>bento</string>

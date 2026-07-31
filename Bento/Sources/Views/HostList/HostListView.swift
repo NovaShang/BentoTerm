@@ -228,7 +228,7 @@ struct BentoWordmark: View {
     var body: some View {
         HStack(spacing: 8) {
             BentoMark(size: 22)
-            Text("Bento")
+            Text("BentoTerm")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.bentoInk)
         }

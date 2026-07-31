@@ -84,7 +84,7 @@ struct FirstRunWindow: View {
                 .resizable()
                 .frame(width: 84, height: 84)
             VStack(spacing: 8) {
-                Text("Welcome to Bento")
+                Text("Welcome to BentoTerm")
                     .font(.system(size: 26, weight: .bold))
                 Text("Run a team of AI agents. Speak to them.\nCommand them from anywhere.")
                     .font(.system(size: 14))
@@ -113,7 +113,7 @@ struct FirstRunWindow: View {
             checklistRow(
                 ok: daemonOK,
                 pending: false,
-                title: "Bento background service",
+                title: "BentoTerm background service",
                 detail: daemonOK
                     ? "Running — it keeps the connection to your phone alive. Lives quietly in the menu bar."
                     : "Starting… if this never turns green, click Retry."
@@ -370,8 +370,8 @@ struct FirstRunWindow: View {
 
             doneCard(
                 symbol: "iphone",
-                title: "Put Bento in your pocket",
-                detail: "Install Bento on your iPhone or iPad and pair it — then command these same agents from the sofa, or anywhere."
+                title: "Put BentoTerm in your pocket",
+                detail: "Install BentoTerm on your iPhone or iPad and pair it — then command these same agents from the sofa, or anywhere."
             ) {
                 HStack(alignment: .top, spacing: 16) {
                     if let qr = QRCodeImage.make("https://bento.novashang.com/ios", size: 96) {
@@ -395,7 +395,7 @@ struct FirstRunWindow: View {
             HStack(spacing: 8) {
                 Image(systemName: "menubar.arrow.up.rectangle")
                     .foregroundStyle(.secondary)
-                Text("Bento lives in your **menu bar** (top-right of the screen). Close every window — agents keep working in the background. Revisit this guide anytime: menu bar → Help.")
+                Text("BentoTerm lives in your **menu bar** (top-right of the screen). Close every window — agents keep working in the background. Revisit this guide anytime: menu bar → Help.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

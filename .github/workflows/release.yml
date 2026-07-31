@@ -12,7 +12,7 @@
 #   bento-darwin-arm64.tar.gz   daemon + cli + bundled tmux for Apple Silicon
 #   bento-linux-x86_64.tar.gz   same shape for Linux amd64
 #   bento-linux-arm64.tar.gz    same shape for Linux arm64
-#   Bento-macos-arm64.zip       the menubar app (unsigned for now)
+#   BentoTerm-macos-arm64.zip       the menubar app (unsigned for now)
 #   *.sha256                    side-car checksum for each archive
 #
 # Intel Mac is intentionally omitted: GH-hosted Intel runners are queue-
@@ -204,9 +204,9 @@ jobs:
           echo "Signing as: ${identity}"
 
       # ---- build --------------------------------------------------------
-      - name: Build Bento.app (Release, signed)
+      - name: Build BentoTerm.app (Release, signed)
         # postCompileScript copies the Go binaries + bundled tmux into
-        # Bento.app/Contents/MacOS/helpers. xcodebuild signs the Swift
+        # BentoTerm.app/Contents/MacOS/helpers. xcodebuild signs the Swift
         # bundle; we sign the helpers explicitly in the next step before
         # re-sealing the outer bundle.
         run: |
@@ -224,7 +224,7 @@ jobs:
       - name: Sign embedded helpers + re-seal bundle
         run: |
           set -e
-          app="build/Build/Products/Release/Bento.app"
+          app="build/Build/Products/Release/BentoTerm.app"
           # Inner first: each Go binary + bundled tmux. Hardened runtime is
           # required for notarization; --timestamp pins a secure timestamp
           # which is what staples to.
@@ -262,8 +262,8 @@ jobs:
           NOTARY_KEY_P8:    ${{ secrets.APPLE_NOTARY_KEY_P8 }}
         run: |
           set -e
-          app="build/Build/Products/Release/Bento.app"
-          submit_zip="${RUNNER_TEMP}/Bento-notary.zip"
+          app="build/Build/Products/Release/BentoTerm.app"
+          submit_zip="${RUNNER_TEMP}/BentoTerm-notary.zip"
           p8="${RUNNER_TEMP}/AuthKey.p8"
           printf '%s' "${NOTARY_KEY_P8}" > "${p8}"
 
@@ -289,7 +289,7 @@ jobs:
         if: steps.notarize.outcome == 'success'
         run: |
           set -e
-          app="build/Build/Products/Release/Bento.app"
+          app="build/Build/Products/Release/BentoTerm.app"
           xcrun stapler staple "$app"
           xcrun stapler validate "$app"
 
@@ -302,10 +302,10 @@ jobs:
       - name: Package
         run: |
           set -e
-          app="build/Build/Products/Release/Bento.app"
+          app="build/Build/Products/Release/BentoTerm.app"
           mkdir -p artifacts
-          ditto -c -k --sequesterRsrc --keepParent "$app" artifacts/Bento-macos-arm64.zip
-          (cd artifacts && shasum -a 256 Bento-macos-arm64.zip > Bento-macos-arm64.zip.sha256)
+          ditto -c -k --sequesterRsrc --keepParent "$app" artifacts/BentoTerm-macos-arm64.zip
+          (cd artifacts && shasum -a 256 BentoTerm-macos-arm64.zip > BentoTerm-macos-arm64.zip.sha256)
 
       - name: Tear down signing keychain
         if: always()

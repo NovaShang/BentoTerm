@@ -43,8 +43,8 @@
 
 **要求：**macOS 14+，Apple Silicon。
 
-1. 从[最新 release](https://github.com/NovaShang/bento/releases/latest) 下载 `Bento-macos-arm64.zip`。
-2. 解压，把 `Bento.app` 拖进 `/Applications`。应用已签名并经过公证——打开不会有任何警告。
+1. 从[最新 release](https://github.com/NovaShang/bento/releases/latest) 下载 `BentoTerm-macos-arm64.zip`。
+2. 解压，把 `BentoTerm.app` 拖进 `/Applications`。应用已签名并经过公证——打开不会有任何警告。
 3. 首次启动会引导你创建第一个 agent 会话，没装的 agent 也提供一键安装命令。
 
 Mac 应用完全自包含。`bento` CLI + daemon（`brew install NovaShang/bento/bento-terminal`）只在你想让无界面的 Linux 主机也能被即将到来的 iOS 应用访问时才需要。

@@ -15,6 +15,8 @@ enum TerminalAppKind: String, CaseIterable, Identifiable, Codable {
     /// `tmux -CC`). The default — sessions open in our tiled terminal rather
     /// than bouncing out to a third-party app. The other cases remain so users
     /// who prefer iTerm2/Ghostty/etc. can still opt out.
+    /// Raw value is a persisted UserDefaults key (`preferredTerminal`), not a
+    /// label — it stays "Bento" even though the app is now called BentoTerm.
     case bento    = "Bento"
     case terminal = "Terminal"
     case iTerm    = "iTerm"
@@ -30,7 +32,7 @@ enum TerminalAppKind: String, CaseIterable, Identifiable, Codable {
     /// for the AppleScript `tell application id "…"` form.
     var bundleID: String {
         switch self {
-        case .bento:    return Bundle.main.bundleIdentifier ?? "com.bento.menubar"
+        case .bento:    return Bundle.main.bundleIdentifier ?? "com.bento.term.menubar"
         case .terminal: return "com.apple.Terminal"
         case .iTerm:    return "com.googlecode.iterm2"
         case .ghostty:  return "com.mitchellh.ghostty"
@@ -40,7 +42,7 @@ enum TerminalAppKind: String, CaseIterable, Identifiable, Codable {
 
     var displayName: String {
         switch self {
-        case .bento:    return "Bento (native)"
+        case .bento:    return "BentoTerm (native)"
         case .terminal: return "Terminal"
         case .iTerm:    return "iTerm2"
         case .ghostty:  return "Ghostty"

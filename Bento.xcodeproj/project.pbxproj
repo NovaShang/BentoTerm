@@ -700,10 +700,10 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.bento.BentoTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.BentoTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Bento.app/Bento";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BentoTerm.app/BentoTerm";
 			};
 			name = Debug;
 		};
@@ -715,6 +715,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Bento/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Bento uses the camera to scan the pairing QR code shown by your Mac.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Bento uses Face ID to protect your SSH keys.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bento needs microphone access for voice input to terminal.";
@@ -726,7 +727,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.bento.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.app;
+				PRODUCT_NAME = BentoTerm;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -740,6 +742,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Bento/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Bento uses the camera to scan the pairing QR code shown by your Mac.";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "Bento uses Face ID to protect your SSH keys.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bento needs microphone access for voice input to terminal.";
@@ -751,7 +754,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.bento.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.app;
+				PRODUCT_NAME = BentoTerm;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -767,10 +771,10 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.bento.BentoTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.BentoTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Bento.app/Bento";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BentoTerm.app/BentoTerm";
 			};
 			name = Release;
 		};
@@ -783,7 +787,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Bento;
+				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bento needs microphone access for voice input to terminal.";
@@ -794,8 +798,8 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bento.menubar;
-				PRODUCT_NAME = Bento;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.menubar;
+				PRODUCT_NAME = BentoTerm;
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -809,7 +813,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Bento;
+				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bento needs microphone access for voice input to terminal.";
@@ -820,8 +824,8 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bento.menubar;
-				PRODUCT_NAME = Bento;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.menubar;
+				PRODUCT_NAME = BentoTerm;
 				SDKROOT = macosx;
 			};
 			name = Release;

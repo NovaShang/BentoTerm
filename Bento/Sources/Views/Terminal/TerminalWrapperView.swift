@@ -649,7 +649,7 @@ struct TerminalWrapperView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This session contains a complex layout created outside Bento. Switching will flatten every pane into its own window.")
+            Text("This session contains a complex layout created outside BentoTerm. Switching will flatten every pane into its own window.")
         }
     }
 

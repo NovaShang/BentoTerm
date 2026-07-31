@@ -67,7 +67,7 @@ struct PairingWindow: View {
             successContent
         } else {
             VStack(alignment: .leading, spacing: 16) {
-                Text("On your iPhone: install Bento, choose **“I have a Mac”**, and scan this code — or use the iPhone Camera app.")
+                Text("On your iPhone: install BentoTerm, choose **“I have a Mac”**, and scan this code — or use the iPhone Camera app.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -103,7 +103,7 @@ struct PairingWindow: View {
             }
             Text("iPhone connected")
                 .font(.system(size: 22, weight: .bold))
-            Text("Open Bento on the phone — your sessions are already waiting there. This window will close itself.")
+            Text("Open BentoTerm on the phone — your sessions are already waiting there. This window will close itself.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

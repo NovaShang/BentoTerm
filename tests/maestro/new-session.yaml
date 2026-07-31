@@ -1,4 +1,4 @@
-appId: com.bento.app
+appId: com.bento.term.app
 # Create the dedicated throwaway tmux session and land in its terminal.
 # Run this ONCE; afterwards attach.yaml (SESSION=bentotest) reattaches to it.
 #   ~/.maestro/bin/maestro --device <sim> test tests/maestro/new-session.yaml

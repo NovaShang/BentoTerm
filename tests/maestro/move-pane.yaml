@@ -1,4 +1,4 @@
-appId: com.bento.app
+appId: com.bento.term.app
 # Pane menu → Move to Session: move the active pane of the CURRENT session
 # into TARGET (must already exist server-side, e.g. `tmux new-session -d -s
 # bentotest2`). Run attach.yaml first so a terminal is up. Verify Mac-side:

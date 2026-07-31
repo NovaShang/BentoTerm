@@ -137,7 +137,7 @@ final class RelayFileSource: FilePreviewSource, @unchecked Sendable {
         guard !response.data.isEmpty else {
             // An old daemon treats the unknown op as a stat: ok header, no
             // payload. A new daemon sends "[]" even for an empty directory.
-            throw FilePreviewError.unavailable("File search needs a newer Bento on the host.")
+            throw FilePreviewError.unavailable("File search needs a newer BentoTerm on the host.")
         }
         struct WireEntry: Decodable {
             let p: String

@@ -146,7 +146,7 @@ enum Windows {
             title = "Paired devices"
             content = AnyView(DevicesWindow().environmentObject(env))
         case .firstRun:
-            title = "Welcome to Bento"
+            title = "Welcome to BentoTerm"
             content = AnyView(FirstRunWindow().environmentObject(env))
         }
         let host = NSHostingController(rootView: content)

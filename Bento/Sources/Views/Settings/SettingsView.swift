@@ -221,7 +221,7 @@ struct SettingsView: View {
                     NavigationLink {
                         HowBentoWorksSettingsPage()
                     } label: {
-                        Label("How Bento works", systemImage: "questionmark.circle")
+                        Label("How BentoTerm works", systemImage: "questionmark.circle")
                     }
                     Button {
                         TipCenter.shared.resetAll()

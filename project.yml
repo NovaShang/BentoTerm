@@ -1,6 +1,6 @@
 name: Bento
 options:
-  bundleIdPrefix: com.bento
+  bundleIdPrefix: com.bento.term
   deploymentTarget:
     iOS: "17.0"
     macOS: "14.0"
@@ -53,7 +53,11 @@ targets:
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_FILE: Bento/Info.plist
         CODE_SIGN_STYLE: Automatic
-        PRODUCT_BUNDLE_IDENTIFIER: com.bento.app
+        # User-facing app name is BentoTerm; the Xcode target stays `Bento`
+        # (renaming it would churn every scheme, script and CI reference).
+        PRODUCT_NAME: BentoTerm
+        INFOPLIST_KEY_CFBundleDisplayName: "BentoTerm"
+        PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.app
 
   BentoTests:
     type: bundle.unit-test
@@ -65,6 +69,9 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
+        # xcodegen derives TEST_HOST from the *target* name (Bento), but the
+        # product is named BentoTerm — spell it out or the host app is missing.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BentoTerm.app/BentoTerm"
 
   BentoMenubar:
     type: application
@@ -76,20 +83,20 @@ targets:
       - package: BentoTerminalCore
     settings:
       base:
-        # User-facing product name is just "Bento" (matching the iOS app);
+        # User-facing product name is "BentoTerm" (matching the iOS app);
         # the internal target name stays BentoMenubar to avoid Xcode-level
         # collision with the iOS Bento target.
-        PRODUCT_NAME: Bento
+        PRODUCT_NAME: BentoTerm
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_LSUIElement: true       # menubar-only, no Dock icon
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
-        INFOPLIST_KEY_CFBundleDisplayName: "Bento"
+        INFOPLIST_KEY_CFBundleDisplayName: "BentoTerm"
         # Voice input touches the mic + (Apple engine) speech recognition. Without
         # these usage-description keys macOS TCC HARD-ABORTS the app the moment it
         # accesses the mic — the "hold right-click to record → crash" (BUG-017).
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Bento needs microphone access for voice input to terminal."
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Bento uses speech recognition to convert voice to text and shell commands."
-        PRODUCT_BUNDLE_IDENTIFIER: com.bento.menubar
+        PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.menubar
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         # App version surfaced in Finder/About and reported by Telemetry
         # (CFBundleShortVersionString). Bump alongside release tags.
@@ -105,9 +112,10 @@ targets:
           # Xcode's PATH is minimal; add Homebrew so `go` and `make` resolve.
           export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
           ( cd "$SRCROOT/desktop" && make build )
-          # APFS is case-insensitive, so the Swift `Bento` executable would
-          # collide with the Go `bento` CLI in Contents/MacOS. Put helpers in
-          # a sibling `helpers/` subdir so each binary has a distinct path.
+          # Helpers live in a `helpers/` subdir rather than straight in
+          # Contents/MacOS: it keeps the Go `bento` CLI clear of the Swift
+          # executable (APFS is case-insensitive) and gives each a distinct
+          # path that TmuxResolver / BentoCLI can look up.
           DEST="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/helpers"
           mkdir -p "$DEST"
           cp -f "$SRCROOT/desktop/bin/bento"        "$DEST/"

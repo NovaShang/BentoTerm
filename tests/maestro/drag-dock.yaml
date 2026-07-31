@@ -1,4 +1,4 @@
-appId: com.bento.app
+appId: com.bento.term.app
 # Drag-to-dock drop zones (VS Code style): drag the LEFT pane's title bar
 # onto the RIGHT pane's bottom edge band → tmux `move-pane -v`: the target
 # re-splits top/bottom and the dragged pane docks below, focused.

@@ -1,4 +1,4 @@
-appId: com.bento.app
+appId: com.bento.term.app
 ---
 - launchApp:
     clearState: false

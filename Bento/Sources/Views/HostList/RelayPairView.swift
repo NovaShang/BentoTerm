@@ -97,7 +97,7 @@ struct RelayPairView: View {
                         .padding(.vertical, 8)
                         .background(.thinMaterial, in: Capsule())
                 }
-                Text("Point at the QR code in Bento on your Mac")
+                Text("Point at the QR code in BentoTerm on your Mac")
                     .font(.callout)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
@@ -123,7 +123,7 @@ struct RelayPairView: View {
               url.scheme == "bento",
               url.host == "pair",
               let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            scanHint = "Not a Bento pairing code"
+            scanHint = "Not a BentoTerm pairing code"
             return
         }
         let items = comps.queryItems ?? []
@@ -162,7 +162,7 @@ struct RelayPairView: View {
                     }
                 }
             } footer: {
-                BentoFormFooter("Open Bento on your Mac, click the menubar icon, look under the connection status — that's the daemon ID.")
+                BentoFormFooter("Open BentoTerm on your Mac, click the menubar icon, look under the connection status — that's the daemon ID.")
             }
             .bentoSectionStyle()
 
