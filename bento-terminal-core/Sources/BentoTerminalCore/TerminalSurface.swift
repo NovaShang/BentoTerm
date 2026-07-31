@@ -57,7 +57,8 @@ public struct TerminalTheme: Equatable, Sendable {
 /// and wires the callbacks below.
 @MainActor
 public protocol TerminalSurface: AnyObject {
-    /// Feed terminal output bytes (from SSH/relay/pty) into the surface.
+    /// Feed terminal output bytes (from an SSH channel or a local pty) into the
+    /// surface.
     ///
     /// `nonisolated` because output must not have to wait for the main thread:
     /// every keystroke blocks main for ~19ms inside the input method's

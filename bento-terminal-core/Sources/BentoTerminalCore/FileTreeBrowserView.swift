@@ -6,7 +6,7 @@ import SwiftUI
 /// manager. Tapping a file calls `onOpenFile`.
 ///
 /// Transport-agnostic: everything it needs arrives through `PathPreviewContext`,
-/// so the local (macOS) and SFTP/relay (iOS) sources both work unchanged.
+/// so the local (macOS) and SFTP-over-SSH (iOS) sources both work unchanged.
 ///
 /// Today this is the iOS browser. The macOS preview dock still walks its own
 /// copy of this tree (`PreviewDock_macOS`, whose file-private `FileTreeNode`

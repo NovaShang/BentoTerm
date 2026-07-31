@@ -175,7 +175,8 @@ public final class TerminalViewModel: ObservableObject {
     let transport: TerminalTransport
     /// The live transport, exposed for app-level features that need
     /// transport-specific capabilities (path-preview's file fetch picks its
-    /// source off the concrete SSH/relay client). Core stays agnostic.
+    /// source off the concrete SSH client, which can open an SFTP channel;
+    /// a local pty cannot). Core stays agnostic.
     public var activeTransport: TerminalTransport { transport }
     let tmuxService = TmuxControlMode()
     public let stateDetection = StateDetectionService()
@@ -269,7 +270,7 @@ public final class TerminalViewModel: ObservableObject {
     /// `handleUnexpectedFailure` can't act on those (a reconnect already owns
     /// recovery), but silently dropping them let a dead attempt report success:
     /// the seed burst at the end of `reattachExistingSession` is where the
-    /// relay socket actually died on the iPad, and because `isReconnecting` was
+    /// SSH channel actually died on the iPad, and because `isReconnecting` was
     /// still true nobody noticed until the poll watchdog fired ~48s later — then
     /// the next attempt died the same way, forever. The attempt now reads this
     /// flag and retries instead.
@@ -495,7 +496,7 @@ public final class TerminalViewModel: ObservableObject {
 
         // Re-assert the surface's real grid now that the channel is connected.
         // A resize that fired while the transport was still connecting gets
-        // dropped (notably on the relay path), leaving the remote PTY a
+        // dropped — there is no channel yet to carry it — leaving the remote PTY a
         // different width than what we render — the shell drew its prompt at the
         // wrong width and only re-lays-out on SIGWINCH. Re-sending the size here
         // delivers that SIGWINCH so the prompt/TUI redraws at the rendered grid.
@@ -763,7 +764,9 @@ public final class TerminalViewModel: ObservableObject {
         startStatePolling()
         // Warm the session list so Move-to-Session menus (which resolve
         // synchronously from this cache) have targets on their FIRST open —
-        // relay attach paths skip the picker that would otherwise fill it.
+        // attaching straight to a remembered session (reconnects, and any
+        // launch that already knows the name) skips the picker that would
+        // otherwise have filled it.
         Task { await refreshTmuxSessions() }
     }
 
@@ -852,8 +855,8 @@ public final class TerminalViewModel: ObservableObject {
     // MARK: - Pane Management
 
     /// Strip tmux control-mode chatter that the parser can fold into a
-    /// `capture-pane` response when the relay splits the stream mid-line during a
-    /// session switch (see ControlMode.handleLine). Feeding those lines to the
+    /// `capture-pane` response when a transport read splits the stream mid-line
+    /// during a session switch (see ControlMode.handleLine). Feeding those lines to the
     /// surface paints raw protocol text — "%output %5 \033[…", "%begin/%end",
     /// "%layout-change …" — over the pane (BUG-007, iOS-mostly). Real captured
     /// screen content never begins with one of these exact markers, so dropping
@@ -1420,8 +1423,8 @@ public final class TerminalViewModel: ObservableObject {
         // the shell at the SAME size. Without this, a resize that fires before
         // the transport finishes connecting is lost, and startShell falls back
         // to the ideal/default size — leaving the remote PTY a different width
-        // than what's rendered (e.g. relay: PTY 80×24 vs surface 41 cols), so
-        // the prompt/TUI wraps wrong.
+        // than what's rendered (e.g. an 80×24 PTY behind a 41-column surface),
+        // so the prompt/TUI wraps wrong.
         if cols > 0, rows > 0 { lastReportedSize = (cols, rows) }
         transport.resize(cols: cols, rows: rows)
     }
@@ -1618,12 +1621,13 @@ public final class TerminalViewModel: ObservableObject {
     /// surface's binding — and its replayed history — survives the reconnect.
     @discardableResult
     private func reattachExistingSession() async -> Bool {
-        // NOTE: we do NOT call transport.disconnect() here. The relay transport
-        // tears its previous client down synchronously inside connectRelay,
-        // with that client's callbacks detached first — so a discarded client
-        // can never deliver a stale `.failed` that would spuriously re-trigger
-        // reconnect (the "constantly reconnecting" loop). Doing it via
-        // disconnect()'s deferred Task instead raced the fresh client.
+        // NOTE: we do NOT call transport.disconnect() here. Connecting already
+        // replaces the previous client, and the transport gates every client
+        // callback on "am I still the active client?" (SSHService compares
+        // ObjectIdentifier) — so a discarded client can never deliver a stale
+        // `.failed` that would spuriously re-trigger reconnect (the "constantly
+        // reconnecting" loop). Tearing down via disconnect()'s deferred Task
+        // instead raced the fresh client.
         usingTmux = false
         isTmuxReady = false
         failedDuringReattach = false
@@ -1664,7 +1668,7 @@ public final class TerminalViewModel: ObservableObject {
         }
         // `isTmuxReady` only says the attach handshake worked. The seed above
         // is the heaviest burst this connection ever carries, and on the iPad
-        // it is exactly where the relay socket kept dying — leaving a session
+        // it is exactly where the socket kept dying — leaving a session
         // that looks ready but never receives another byte. Treat a failure
         // anywhere in this attempt as a failed attempt so the loop retries now
         // rather than after the poll watchdog eventually notices.
@@ -1779,10 +1783,12 @@ public final class TerminalViewModel: ObservableObject {
             if Task.isCancelled || userInitiatedDisconnect || isInBackground { return }
             // Fast backoff (1/2/4/8s) for the first attempts, then settle into a
             // steady 15s cadence FOREVER. The old behavior gave up after 5
-            // attempts with a dead-end alert — but a relay/daemon blip (CF
-            // Durable Objects recycle naturally) can outlast any fixed budget,
-            // and the corpse screen it left was the "reconnecting 卡住" the
-            // user actually experienced. Backgrounding still cancels the loop.
+            // attempts with a dead-end alert — but the outage that strands a
+            // phone (asleep in a pocket, off Wi-Fi, roaming onto cellular) has
+            // no upper bound, so any fixed budget just guarantees a corpse
+            // screen: the "reconnecting 卡住" the user actually experienced.
+            // The tmux session is still there whenever the network returns.
+            // Backgrounding still cancels the loop.
             let delaySec = reconnectAttempt >= 5 ? 15 : 1 << (reconnectAttempt - 1)
             dlog("reconnect failed; retrying in \(delaySec)s")
             try? await Task.sleep(for: .seconds(delaySec))

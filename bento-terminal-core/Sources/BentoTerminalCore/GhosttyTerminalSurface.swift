@@ -390,7 +390,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         guard rows != 0 else { return 0 }
         copyModeScrollAccum -= CGFloat(rows) * cellH
         // Cap the burst: a flick would otherwise hand tmux a very large repeat
-        // count in one command, and over relay that lands as a visible lurch.
+        // count in one command, and over a laggy link that lands as a lurch.
         return max(-12, min(12, rows))
     }
 

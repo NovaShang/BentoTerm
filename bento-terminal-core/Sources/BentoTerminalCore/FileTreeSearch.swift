@@ -148,8 +148,8 @@ public enum PathSearchEngine {
 
 /// One bounded tree listing per (source, root), cached briefly so a burst of
 /// taps (or the chip → sheet double resolution) scans the tree once. A source
-/// that can't list (old daemon) is negative-cached so every tap doesn't
-/// re-probe it.
+/// that can't list — the `FilePreviewSource.listTree` default throws — is
+/// negative-cached so every tap doesn't re-probe it.
 public actor FileTreeIndexCache {
     public static let shared = FileTreeIndexCache()
 

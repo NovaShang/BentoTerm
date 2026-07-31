@@ -4,8 +4,8 @@ import Foundation
 /// clicked cell, for the tap-to-preview feature.
 ///
 /// Everything here is pure text + integer math — no engine, no transport — so
-/// it works identically for local / SSH / relay panes and inside or outside
-/// tmux, and is unit-testable without a surface.
+/// it works identically for local and SSH panes, inside or outside tmux, and
+/// is unit-testable without a surface.
 ///
 /// Coordinate model (same as TurnNavigator): `read_text(SCREEN)` returns
 /// LOGICAL lines — ghostty joins soft-wrapped rows back into one line — while
