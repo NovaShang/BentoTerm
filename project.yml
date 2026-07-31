@@ -29,6 +29,14 @@ targets:
   BentoTermiOS:
     type: application
     platform: iOS
+    # Spell the test action out instead of leaning on Xcode's implicit
+    # scheme auto-creation: CI runs `xcodebuild test -scheme BentoTermiOS`
+    # against a freshly generated project, and an auto-created scheme that
+    # silently forgot BentoTermTests would report green while compiling
+    # nothing. This is a shared scheme, so it is identical everywhere.
+    scheme:
+      testTargets:
+        - BentoTermTests
     sources:
       - BentoTermiOS/Sources
       - BentoTermiOS/Resources

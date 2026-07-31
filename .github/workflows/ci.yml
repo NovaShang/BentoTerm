@@ -22,8 +22,35 @@ permissions:
   contents: read
 
 jobs:
-  mac-app:
-    name: mac app (xcodebuild)
+  # Split from the app job on purpose. These tests need no Xcode project, no
+  # xcodegen and no simulator, so they finish in a couple of minutes and
+  # report a package-level regression without waiting behind a full Xcode
+  # build. Everything the app job needs is genuinely shared setup, which is
+  # why the two xcodebuild invocations stay together in one job below.
+  packages:
+    name: packages (swift test)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      # The SwiftTmux suite drives a real tmux server on a private -L socket.
+      # Without a tmux binary that whole suite quietly self-disables
+      # (`.enabled(if: LiveTmux.isAvailable)`) and CI would be green on a
+      # fraction of the tests it thinks it ran.
+      - name: Ensure tmux is installed
+        run: brew list tmux >/dev/null 2>&1 || brew install tmux
+
+      - name: Terminology check
+        run: scripts/check-terminology.sh
+
+      - name: swift test swift-tmux
+        run: swift test --package-path swift-tmux
+
+      - name: swift test bento-terminal-core
+        run: swift test --package-path bento-terminal-core
+
+  apps:
+    name: apps (xcodebuild build + test)
     # The codebase needs Xcode 26. macos-latest still maps to macos-15
     # (Xcode 16.x), which is why this job was red for weeks — pin the
     # macos-26 image (Xcode 26.x) explicitly until -latest catches up.
@@ -62,3 +89,27 @@ jobs:
           xcodebuild -project BentoTerm.xcodeproj \
             -scheme BentoTermMac -configuration Debug \
             CODE_SIGNING_ALLOWED=NO build
+
+      # `test`, not `build`: this both compiles the iOS app and runs the
+      # BentoTermTests bundle. Nothing else in CI compiles that target — when
+      # the product rename changed the Swift module name, its `@testable
+      # import` broke and CI stayed green for four commits. The scheme's test
+      # action is declared in project.yml so it can't be silently empty.
+      #
+      # The simulator is picked at runtime rather than hard-coded to a device
+      # name: the runner image's device list changes with every Xcode bump,
+      # and a stale name fails with an opaque "destination not found".
+      - name: xcodebuild test BentoTermiOS
+        run: |
+          udid=$(xcrun simctl list devices available \
+                   | grep -E '^[[:space:]]+iPhone' | head -1 \
+                   | sed -E 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/')
+          if [ -z "$udid" ]; then
+            echo "::error::no iOS simulator available on this runner"
+            exit 1
+          fi
+          echo "Using simulator $udid"
+          xcodebuild -project BentoTerm.xcodeproj \
+            -scheme BentoTermiOS -configuration Debug \
+            -destination "id=$udid" \
+            CODE_SIGNING_ALLOWED=NO test
