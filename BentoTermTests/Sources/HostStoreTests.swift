@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Bento
+@testable import BentoTerm
 import BentoTerminalCore
 
 @Suite("HostStore Tests")

@@ -4,10 +4,7 @@ import BentoTerminalCore
 struct HostListView: View {
     @EnvironmentObject private var hostStore: HostStore
     @EnvironmentObject private var sessionManager: SessionManager
-    @EnvironmentObject private var relayStore: RelayDaemonStore
     @State private var showAddHost = false
-    @State private var showRelayPair = false
-    @State private var relayPairPrefill: PendingRelayPair?
     @State private var showOnboarding = false
     @State private var showSettings = false
     @State private var editingHost: Host?
@@ -22,17 +19,10 @@ struct HostListView: View {
         }
     }
 
-    private var isCompletelyEmpty: Bool {
-        hostStore.hosts.isEmpty && relayStore.daemons.isEmpty
-    }
-
     var body: some View {
         Group {
-            if isCompletelyEmpty {
-                WelcomeFlowView(
-                    onScanPair: { showRelayPair = true },
-                    onAddSSH:   { showAddHost = true }
-                )
+            if hostStore.hosts.isEmpty {
+                WelcomeFlowView(onAddSSH: { showAddHost = true })
             } else {
                 populatedForm
             }
@@ -71,22 +61,14 @@ struct HostListView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button {
-                        showRelayPair = true
-                    } label: {
-                        Label("Pair Mac via relay…", systemImage: "macbook.and.iphone")
-                    }
-                    Button {
-                        showAddHost = true
-                    } label: {
-                        Label("Add SSH host…", systemImage: "server.rack")
-                    }
+                Button {
+                    showAddHost = true
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Color.bentoEmerald)
                 }
+                .accessibilityLabel("Add SSH host")
                 .accessibilityIdentifier("plus")
             }
         }
@@ -95,22 +77,6 @@ struct HostListView: View {
                 HostEditView(mode: .add) { host in
                     hostStore.add(host)
                 }
-            }
-        }
-        .sheet(isPresented: $showRelayPair) {
-            RelayPairView(prefill: relayPairPrefill)
-        }
-        .onChange(of: relayStore.pendingPair) { _, new in
-            guard let new else { return }
-            relayPairPrefill = new
-            showRelayPair = true
-            relayStore.pendingPair = nil
-        }
-        .onAppear {
-            if let pending = relayStore.pendingPair {
-                relayPairPrefill = pending
-                showRelayPair = true
-                relayStore.pendingPair = nil
             }
         }
         .sheet(item: $editingHost) { host in
@@ -139,26 +105,6 @@ struct HostListView: View {
                     }
                 } header: {
                     BentoFormHeader("Active")
-                }
-                .bentoSectionStyle()
-            }
-
-            if !relayStore.daemons.isEmpty {
-                Section {
-                    ForEach(relayStore.daemons) { daemon in
-                        NavigationLink(value: HostNavigation.sessions(Host.fromRelayDaemon(daemon))) {
-                            RelayDaemonRow(daemon: daemon)
-                        }
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                relayStore.delete(daemon)
-                            } label: {
-                                Label("Unpair", systemImage: "trash")
-                            }
-                        }
-                    }
-                } header: {
-                    BentoFormHeader("My Computers")
                 }
                 .bentoSectionStyle()
             }
@@ -275,38 +221,6 @@ struct HostRow: View {
                     .foregroundStyle(Color.bentoInkMute)
                     .lineLimit(1)
             }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-/// Relay/Mac row in the My Computers section.
-struct RelayDaemonRow: View {
-    let daemon: RelayDaemon
-
-    var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.bentoVeg.opacity(0.16))
-                Image(systemName: "macbook")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Color.bentoVeg)
-            }
-            .frame(width: 34, height: 34)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(daemon.displayName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.bentoInk)
-                    .lineLimit(1)
-                Text("Paired \(daemon.pairedAt, style: .relative) ago")
-                    .font(.caption)
-                    .foregroundStyle(Color.bentoInkDim)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 8)
         }
         .padding(.vertical, 4)
     }

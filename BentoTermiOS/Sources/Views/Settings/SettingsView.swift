@@ -213,7 +213,7 @@ struct SettingsView: View {
                 } header: {
                     BentoFormHeader("Privacy")
                 } footer: {
-                    BentoFormFooter("No terminal content, commands, transcripts, paths, or hostnames — ever. Just the event names above, tied to a random ID that is deleted when you turn this off. Events go through the same Bento relay; no third-party SDKs.")
+                    BentoFormFooter("No terminal content, commands, transcripts, paths, or hostnames — ever. Just the event names above, tied to a random ID that is deleted when you turn this off. Events go to Bento's own endpoint; no third-party SDKs.")
                 }
                 .bentoSectionStyle()
 

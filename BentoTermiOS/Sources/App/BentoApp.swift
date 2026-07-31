@@ -6,7 +6,6 @@ import BentoTerminalCore
 struct BentoApp: App {
     @StateObject private var hostStore = HostStore()
     @StateObject private var sessionManager = SessionManager.shared
-    @StateObject private var relayStore = RelayDaemonStore()
     @StateObject private var themeStore = ThemeStore.shared
     @Environment(\.scenePhase) private var scenePhase
 
@@ -28,6 +27,26 @@ struct BentoApp: App {
         //   xcrun devicectl device copy from --domain-type appDataContainer
         //     --domain-identifier com.bento.term.app --source Documents/debug.log …
         coreDlogFileSink = { DebugLogger.shared.log($0) }
+        Self.purgePairingLeftovers()
+    }
+
+    /// One-shot cleanup for installs that predate the removal of the paired-host
+    /// transport. The saved-host list is untouched — those were always plain SSH
+    /// hosts and still decode — but the separate list of paired computers, the
+    /// per-device private keys it minted, and its test-only endpoint override are
+    /// now unreachable by any code path. Left in place they would be an
+    /// invisible pile of credentials, so delete them rather than let them rot.
+    private static func purgePairingLeftovers() {
+        let defaults = UserDefaults.standard
+        let doneKey = "purged_pairing_leftovers_v1"
+        guard !defaults.bool(forKey: doneKey) else { return }
+        defaults.set(true, forKey: doneKey)
+
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.removeItem(at: docs.appendingPathComponent("relay-daemons.json"))
+        let keys = KeychainService.shared.deletePrivateKeys(labelPrefix: "relay-device-")
+        defaults.removeObject(forKey: "relayURL")
+        if keys > 0 { dlog("purged \(keys) orphaned device key(s) from the removed pairing flow") }
     }
 
     private static func logBundledFonts() {
@@ -60,7 +79,6 @@ struct BentoApp: App {
             }
             .environmentObject(hostStore)
             .environmentObject(sessionManager)
-            .environmentObject(relayStore)
             .preferredColorScheme(preferredScheme)
             .modifier(SystemAppearanceSync())
             .tint(Color.bentoEmerald)
@@ -81,9 +99,7 @@ struct BentoApp: App {
         }
     }
 
-    /// Handles `bento://session/<hostID>`, `bento://app`, and
-    /// `bento://pair?d=<daemonID>&c=<code>&l=<label>` (deep link emitted by
-    /// the Mac PairingWindow QR code).
+    /// Handles `bento://session/<hostID>` and `bento://app`.
     private func handleDeepLink(_ url: URL) {
         guard url.scheme == "bento" else { return }
         let host = url.host ?? ""
@@ -98,23 +114,9 @@ struct BentoApp: App {
             sessionManager.navigationPath = [.sessions(entry.host)]
         case "app":
             sessionManager.navigationPath = []
-        case "pair":
-            handlePairDeepLink(url)
         default:
             break
         }
-    }
-
-    private func handlePairDeepLink(_ url: URL) {
-        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
-        let items = comps.queryItems ?? []
-        let daemonID = items.first(where: { $0.name == "d" })?.value ?? ""
-        let rawCode = items.first(where: { $0.name == "c" })?.value ?? ""
-        let code = String(rawCode.filter(\.isNumber).prefix(6))
-        let label = items.first(where: { $0.name == "l" })?.value
-        guard !daemonID.isEmpty, code.count == 6 else { return }
-        sessionManager.navigationPath = []
-        relayStore.pendingPair = PendingRelayPair(daemonID: daemonID, code: code, label: label)
     }
 }
 

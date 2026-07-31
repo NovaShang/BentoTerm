@@ -58,6 +58,33 @@ final class KeychainService: Sendable {
         try deleteData(for: label, type: "privatekey")
     }
 
+    /// Delete every stored private key whose label starts with `prefix`.
+    /// Used once at launch to reclaim the per-device keys that the removed
+    /// pairing flow minted: nothing reads them any more, and a private key
+    /// with no owner is a liability, not a spare.
+    /// Returns the number of items removed.
+    @discardableResult
+    func deletePrivateKeys(labelPrefix prefix: String) -> Int {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let items = result as? [[String: Any]] else { return 0 }
+
+        var removed = 0
+        for item in items {
+            guard let account = item[kSecAttrAccount as String] as? String,
+                  account.hasPrefix("privatekey:\(prefix)") else { continue }
+            let label = String(account.dropFirst("privatekey:".count))
+            if (try? deletePrivateKey(label: label)) != nil { removed += 1 }
+        }
+        return removed
+    }
+
     // MARK: - Internal
 
     private func saveData(_ data: Data, for account: String, type: String) throws {

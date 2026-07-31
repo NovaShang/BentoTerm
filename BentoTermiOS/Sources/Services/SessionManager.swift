@@ -79,7 +79,7 @@ final class SessionManager: ObservableObject {
             return existing
         }
 
-        // Inject the iOS transport (SSH/relay) + platform services. The VM
+        // Inject the iOS transport (SSH) + platform services. The VM
         // itself is platform-agnostic and lives in BentoTerminalCore.
         let env = TerminalEnvironment(
             idealTerminalSize: {
@@ -147,7 +147,7 @@ final class SessionManager: ObservableObject {
 
     // MARK: - Scene phase
 
-    /// Background-grace task: keeps the process (and thus the live SSH/relay
+    /// Background-grace task: keeps the process (and thus the live SSH
     /// connection) running for a short window after backgrounding, so a quick
     /// app switch doesn't drop the connection and force a reconnect on return.
     private var bgTask: UIBackgroundTaskIdentifier = .invalid

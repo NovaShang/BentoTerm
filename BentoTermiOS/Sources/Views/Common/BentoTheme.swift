@@ -293,7 +293,7 @@ enum BentoBrand {
     static let emerald = UIColor(hex: 0x4ADE80)  // prompt / connected / cursor
     static let salmon  = UIColor(hex: 0xE89B7C)  // warm / awaiting / voice
     static let rice    = UIColor(hex: 0xF0EAD8)
-    static let veg     = UIColor(hex: 0x6FA254)  // category / relay / Mac
+    static let veg     = UIColor(hex: 0x6FA254)  // category / mark cell
     static let vegDeep = UIColor(hex: 0x4D7C3F)
     static let red     = UIColor(hex: 0xFF5A52)
 }
@@ -365,8 +365,8 @@ extension View {
             .listRowSeparatorTint(Color.bentoBorder)
     }
 
-    /// Big primary CTA (emerald fill, black ink). Used for "Pair Your Mac",
-    /// "Get started", "Launch", etc.
+    /// Big primary CTA (emerald fill, black ink). Used for "Get started",
+    /// "Launch", etc.
     func bentoPrimaryButton() -> some View {
         self.buttonStyle(BentoPrimaryButtonStyle())
     }
