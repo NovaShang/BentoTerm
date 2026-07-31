@@ -112,6 +112,25 @@ public final class TmuxControlMode: @unchecked Sendable {
         path: String? = nil,
         command: String? = nil
     ) -> String {
+        Self.launchCommandLine(
+            sessionName: sessionName, groupWith: groupWith,
+            path: path, command: command) + "\n"
+    }
+
+    /// The same launch line WITHOUT the trailing newline, for callers that hand
+    /// it to something other than a shell's stdin — notably `ssh -t <host>
+    /// "<line>"`, where the command is an argument and a newline in it would be
+    /// a second, empty command.
+    ///
+    /// One builder for both so the two can never drift: `tmux` stays a bare
+    /// word resolved by whatever PATH ends up running it, which is exactly what
+    /// makes the same string work locally and on the far side of an ssh hop.
+    public static func launchCommandLine(
+        sessionName: String? = nil,
+        groupWith: String? = nil,
+        path: String? = nil,
+        command: String? = nil
+    ) -> String {
         // The shell — not tmux — expands `~`, and this string is read by the
         // shell, so quote it for the shell (see TmuxShellQuote.path).
         let dir = path.map { " -c \(TmuxShellQuote.path($0))" } ?? ""
@@ -121,11 +140,11 @@ public final class TmuxControlMode: @unchecked Sendable {
             // A grouped session shares the source's windows; seeding a
             // directory or program would be meaningless (and tmux rejects the
             // combination), so those are deliberately not applied here.
-            return "tmux -CC new-session -A -s \(name) -t \(groupWith)\n"
+            return "tmux -CC new-session -A -s \(name) -t \(groupWith)"
         } else if let sessionName {
-            return "tmux -CC new-session -A -s \(sessionName)\(dir)\(prog)\n"
+            return "tmux -CC new-session -A -s \(sessionName)\(dir)\(prog)"
         } else {
-            return "tmux -CC new-session\(dir)\(prog)\n"
+            return "tmux -CC new-session\(dir)\(prog)"
         }
     }
 

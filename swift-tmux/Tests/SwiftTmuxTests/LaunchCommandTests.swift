@@ -85,3 +85,48 @@ struct ShellQuoteTests {
         #expect(TmuxShellQuote.path("/tmp/~x") == "'/tmp/~x'")
     }
 }
+
+/// The same launch line, built for `ssh -t <host> "<line>"` instead of for a
+/// shell's stdin.
+///
+/// Passing tmux as ssh's ARGUMENT rather than typing it after connecting is
+/// what makes a host that asks for a password or a 2FA code work at all: the
+/// typed version is gated on a fixed 500ms sleep, so on such a host the launch
+/// line — and its newline — get typed into the authentication prompt. As an
+/// argument there is no window; ssh does not run the command until
+/// authentication has finished.
+@Suite("tmux -CC launch line as an ssh argument")
+struct LaunchCommandLineTests {
+    private let svc = TmuxControlMode()
+
+    /// A newline inside an ssh argument is a second, empty command — the one
+    /// difference between the two forms, and the only one.
+    @Test func hasNoTrailingNewline() {
+        let line = TmuxControlMode.launchCommandLine(sessionName: "work")
+        #expect(!line.contains("\n"))
+        #expect(line == "tmux -CC new-session -A -s work")
+    }
+
+    /// One builder, so the local and remote launches can never drift into
+    /// creating sessions on different terms.
+    @Test func isExactlyTheTypedLineWithoutItsNewline() {
+        for (name, path, command) in [
+            ("work", nil, nil) as (String, String?, String?),
+            ("work", "~/code", nil),
+            ("work", "/tmp/my proj's dir", "claude"),
+        ] {
+            let typed = svc.launchCommand(sessionName: name, path: path, command: command)
+            let arg = TmuxControlMode.launchCommandLine(
+                sessionName: name, path: path, command: command)
+            #expect(typed == arg + "\n")
+        }
+    }
+
+    /// `tmux` stays a BARE WORD. It is resolved by the PATH of whatever shell
+    /// ends up running the line — the login shell here, or the remote user's
+    /// shell on the far side of an ssh hop — which is the entire reason one
+    /// string works on both.
+    @Test func tmuxIsNotAnAbsolutePath() {
+        #expect(TmuxControlMode.launchCommandLine(sessionName: "work").hasPrefix("tmux "))
+    }
+}
