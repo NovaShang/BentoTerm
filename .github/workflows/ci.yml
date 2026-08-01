@@ -44,7 +44,7 @@ jobs:
         run: scripts/check-terminology.sh
 
       - name: swift test swift-tmux
-        run: swift test --package-path swift-tmux
+        run: swift test --package-path Modules/BentoTmuxKit
 
       - name: swift test bento-terminal-core
         run: swift test --package-path bento-terminal-core

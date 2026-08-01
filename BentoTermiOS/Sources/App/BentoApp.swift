@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import BentoTerminalCore
+import BentoFoundationKit
 
 @main
 struct BentoApp: App {

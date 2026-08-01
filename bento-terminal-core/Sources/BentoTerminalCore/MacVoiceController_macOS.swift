@@ -1,3 +1,4 @@
+import BentoVoiceKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Combine

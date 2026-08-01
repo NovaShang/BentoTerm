@@ -2,6 +2,7 @@ import AppKit
 import BentoTerminalCore
 import Foundation
 import SwiftUI
+import BentoFoundationKit
 
 /// AppDelegate owns the background polling timer that refreshes the tmux
 /// session list.

@@ -1,7 +1,7 @@
 import Foundation
 import BentoTerminalCore
 import SwiftUI
-import SwiftTmux
+import BentoTmuxKit
 import UIKit
 
 /// Identity of a single live session = (host, tmux session name).

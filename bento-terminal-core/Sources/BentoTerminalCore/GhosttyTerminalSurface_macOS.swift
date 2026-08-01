@@ -1,3 +1,5 @@
+import BentoFilePreviewKit
+import BentoFoundationKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Carbon   // TIS* — identifies whether the input source is a plain layout
@@ -33,9 +35,6 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// the host can pre-warm the mic engine — overlapping cold-start with the hold
     /// the user is already waiting through, so recording is live by the threshold.
     public var onVoicePrewarm: (() -> Void)?
-    /// Scrollback geometry, pushed on every SCROLLBAR action. Host forwards to
-    /// `PaneViewModel.noteScrollbar` for the scroll-bookmark nav.
-    public var onScrollbar: ((_ total: UInt64, _ offset: UInt64, _ len: UInt64) -> Void)?
     public private(set) var currentSize: TerminalSurfaceSize?
 
     private var surface: ghostty_surface_t?
@@ -118,8 +117,8 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     // menu). The host attaches a `PathPreviewContext` when the pane's files are
     // reachable (local panes; remote fetch is wired per-transport); nil = off.
     public var pathPreviewContext: PathPreviewContext?
-    /// Wrap width for the visual-row math. tmux panes pass `pane.width` (the
-    /// width the proven turn-nav scan uses); nil falls back to ghostty's grid.
+    /// Wrap width for the visual-row math. tmux panes pass `pane.width`; nil
+    /// falls back to ghostty's grid.
     public var pathWrapCols: (() -> Int?)?
     private let pathHitEngine = SurfacePathHitEngine()
     private var pathHighlight: PathHighlightView?
@@ -1754,7 +1753,6 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// persists past a short settle window is a real, user-initiated scroll.
     func handleScrollbar(total: UInt64, offset: UInt64, len: UInt64) {
         lastScrollTop = Int(offset)
-        onScrollbar?(total, offset, len)
         let atBottom = offset + len >= total
         if atBottom {
             // Any real bottom cancels a pending entry and is reported at once.
@@ -1924,7 +1922,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     }
 
     /// The whole scrollback as text (one line per row, top-aligned with the
-    /// SCROLLBAR row space — see TurnNavigator). Used by the turn-scan nav.
+    /// SCROLLBAR row space).
     func readScrollback() -> String? {
         guard let surface else { return nil }
         return GhosttySel.readRegion(surface, tag: GHOSTTY_POINT_SCREEN)?.text
@@ -1996,31 +1994,13 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     }
 
     /// Scroll the history view by `lines` (negative = up/older) without touching
-    /// the engine key pipeline (so it doesn't snap to bottom). Internal so the
-    /// host can drive it for scroll-bookmark jumps.
+    /// the engine key pipeline (so it doesn't snap to bottom).
     func reviewScroll(lines: Int) {
         guard let surface else { return }
         // Match scrollWheel's sign: positive y scrolls toward older content.
         ghostty_surface_mouse_scroll(surface, 0, Double(-lines), 0)
         ghostty_surface_refresh(surface)
         setNeedsDraw()
-    }
-
-    /// Scroll the history by an EXACT number of rows (negative = up), for turn-nav
-    /// jumps. Uses HIGH-PRECISION scroll (mods bit0 = 1): dy is device pixels,
-    /// which ghostty divides by the cell height → exact rows — no wheel
-    /// multiplier and no 3-row granularity, so we land on the exact target row.
-    func scrollRows(_ rows: Int) {
-        guard let surface, rows != 0, let ch = currentSize?.cellHeightPx, ch > 0 else { return }
-        ghostty_surface_mouse_scroll(surface, 0, Double(-rows) * Double(ch), 1)
-        ghostty_surface_refresh(surface)
-        setNeedsDraw()
-    }
-
-    /// Snap the history view back to the live bottom (scroll-bookmark "return to
-    /// live"). Mirrors `scrollComposeToBottom` but is the host-facing entry point.
-    func scrollToLive() {
-        scrollComposeToBottom()
     }
 
     /// Inject a committed draft into the program's real input line via ghostty's

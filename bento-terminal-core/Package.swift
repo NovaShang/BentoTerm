@@ -35,7 +35,10 @@ let package = Package(
         .library(name: "BentoTerminalCore", targets: ["BentoTerminalCore"]),
     ],
     dependencies: [
-        .package(path: "../swift-tmux"),
+        .package(path: "../Modules/BentoTmuxKit"),
+        .package(path: "../Modules/BentoVoiceKit"),
+        .package(path: "../Modules/BentoFoundationKit"),
+        .package(path: "../Modules/BentoFilePreviewKit"),
     ],
     targets: [
         ghosttyKit,
@@ -43,12 +46,10 @@ let package = Package(
             name: "BentoTerminalCore",
             dependencies: [
                 "GhosttyKit",
-                .product(name: "SwiftTmux", package: "swift-tmux"),
-            ],
-            resources: [
-                // File-preview web renderer: template + vendored highlight.js
-                // and markdown-it (see Resources/PathPreview/LICENSES.txt).
-                .copy("Resources/PathPreview"),
+                .product(name: "BentoTmuxKit", package: "BentoTmuxKit"),
+                "BentoVoiceKit",
+                "BentoFoundationKit",
+                "BentoFilePreviewKit",
             ],
             linkerSettings: coreLinkerSettings
         ),

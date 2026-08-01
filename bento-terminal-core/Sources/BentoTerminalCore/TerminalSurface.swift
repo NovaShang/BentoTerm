@@ -1,4 +1,5 @@
 import Foundation
+import BentoFoundationKit
 
 /// Authoritative cell grid reported by the rendering engine. This is what must
 /// drive the tmux client / PTY size — never homemade cell math, or TUI wrapping
@@ -96,4 +97,15 @@ public protocol TerminalSurface: AnyObject {
 
 public extension TerminalSurface {
     func setPredictedText(_ text: String) {}
+}
+
+extension ThemeStore {
+    /// Build the engine-agnostic TerminalTheme (colors + font) for a surface.
+    /// Lives here (not in BentoFoundationKit) because TerminalTheme is a
+    /// TerminalSurface type.
+    public func makeTerminalTheme() -> TerminalTheme {
+        TerminalTheme(background: current.bg, foreground: current.fg,
+                      ansi: current.ansi, fontSize: fontSize, fontFamily: ghosttyFontFamily,
+                      isDark: current.isDark)
+    }
 }

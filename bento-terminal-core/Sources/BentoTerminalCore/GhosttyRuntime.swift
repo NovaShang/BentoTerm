@@ -1,6 +1,7 @@
 import Foundation
 import GhosttyKit
 import os
+import BentoFoundationKit
 
 #if canImport(UIKit)
 import UIKit

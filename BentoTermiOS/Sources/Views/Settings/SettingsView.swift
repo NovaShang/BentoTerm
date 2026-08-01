@@ -1,5 +1,6 @@
 import SwiftUI
 import BentoTerminalCore
+import BentoFoundationKit
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss

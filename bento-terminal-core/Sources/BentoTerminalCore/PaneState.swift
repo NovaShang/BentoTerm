@@ -130,8 +130,8 @@ public struct StateProfile: Identifiable, Codable {
     /// ProfileStore.mergeMissingBuiltIns) — detection logic stays preset-driven,
     /// user edits to name/outputPatterns/quickKeys persist.
     public var agentRules: AgentRuleSet?
-    /// Line regexes that mark a USER-TURN START in the scrollback (for the
-    /// scroll-bookmark / history nav). e.g. Claude Code: a line starting `❯ `.
+    /// Line regexes that mark a USER-TURN START in the scrollback.
+    /// e.g. Claude Code: a line starting `❯ `.
     public var promptBoundary: [String]
 
     public init(id: String, name: String, outputPatterns: [String],
@@ -265,19 +265,6 @@ public final class ProfileStore: ObservableObject {
     public func resetToDefaults() {
         profiles = Self.defaultProfiles
         save()
-    }
-
-    /// Turn-boundary regexes for the profile matching this pane's command (used by
-    /// the scroll turn-navigation scan). Empty when nothing matches → nav no-ops.
-    public func promptBoundary(forCommand command: String?) -> [String] {
-        guard let command, !command.isEmpty else { return [] }
-        for p in profiles where !p.promptBoundary.isEmpty {
-            if let cp = p.commandPattern, !cp.isEmpty, command.contains(cp) { return p.promptBoundary }
-            if let r = p.agentRules, r.commandPatterns.contains(where: { command.contains($0) }) {
-                return p.promptBoundary
-            }
-        }
-        return []
     }
 
     // MARK: - Built-in Presets

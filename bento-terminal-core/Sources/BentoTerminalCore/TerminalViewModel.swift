@@ -1,39 +1,10 @@
 import Foundation
 import SwiftUI
 import os
-import SwiftTmux
+import BentoTmuxKit
+import BentoFoundationKit
 
 private let log = Logger(subsystem: "com.novashang.bento", category: "TerminalVM")
-
-/// Optional file sink for the core package's `dlog`. Core logs default to
-/// os_log only, which is invisible in the app's pullable `debug.log` — set
-/// this once at app start (before any terminal work) to mirror every core
-/// log line into the host app's file logger so real-device incidents can be
-/// diagnosed from a single file pull.
-public nonisolated(unsafe) var coreDlogFileSink: (@Sendable (String) -> Void)?
-
-/// Package-local debug log (the app's global `dlog` lives in the iOS target).
-func dlog(_ s: String) {
-    log.debug("\(s, privacy: .public)")
-    coreDlogFileSink?(s)
-}
-
-// File diagnostics ordering surface-lifecycle vs seed-feed events (os_log
-// debug doesn't reliably reach `log show`). Off by default; opt in per-run
-// with BENTO_DIAG=1 to trace to /tmp/bento-diag.log.
-let _diagEnabled = ProcessInfo.processInfo.environment["BENTO_DIAG"] == "1"
-let _diagLock = NSLock()
-func DIAG(_ s: @autoclosure () -> String) {
-    guard _diagEnabled else { return }
-    _diagLock.lock(); defer { _diagLock.unlock() }
-    let line = String(format: "%.3f %@\n", ProcessInfo.processInfo.systemUptime, s())
-    let url = URL(fileURLWithPath: "/tmp/bento-diag.log")
-    if let h = try? FileHandle(forWritingTo: url) {
-        h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
-    } else {
-        try? line.data(using: .utf8)?.write(to: url)
-    }
-}
 
 /// User's choice for how to start a session on the host.
 public enum TmuxStartChoice: Hashable {
@@ -1224,8 +1195,8 @@ public final class TerminalViewModel: ObservableObject {
     /// began at the moment its surface was created — and surfaces are recreated
     /// whenever the pane set changes (`GhosttyTiledPaneHost.syncPanes` tears them
     /// down), so **every window switch threw the scrollback away**. Nothing that
-    /// reads backwards worked past that line: scrolling up, turn navigation,
-    /// scroll-review-compose, and now ⌘F.
+    /// reads backwards worked past that line: scrolling up, scroll-review-
+    /// compose, and now ⌘F.
     ///
     /// tmux clamps `-S` to whatever history actually exists, so this is a ceiling,
     /// not a cost floor — an idle shell pane still seeds a few dozen lines, and an

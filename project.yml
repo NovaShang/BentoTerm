@@ -20,8 +20,14 @@ packages:
   Citadel:
     url: https://github.com/orlandos-nl/Citadel.git
     from: "0.7.0"
-  SwiftTmux:
-    path: swift-tmux
+  BentoTmuxKit:
+    path: Modules/BentoTmuxKit
+  BentoVoiceKit:
+    path: Modules/BentoVoiceKit
+  BentoFoundationKit:
+    path: Modules/BentoFoundationKit
+  BentoFilePreviewKit:
+    path: Modules/BentoFilePreviewKit
   BentoTerminalCore:
     path: bento-terminal-core
 
@@ -44,7 +50,10 @@ targets:
     dependencies:
       - package: SwiftTerm
       - package: Citadel
-      - package: SwiftTmux
+      - package: BentoTmuxKit
+      - package: BentoVoiceKit
+      - package: BentoFoundationKit
+      - package: BentoFilePreviewKit
       - package: BentoTerminalCore
     settings:
       base:
@@ -88,6 +97,7 @@ targets:
       - BentoTermMac/Sources
       - BentoTermMac/Resources/Assets.xcassets
     dependencies:
+      - package: BentoFoundationKit
       - package: BentoTerminalCore
     settings:
       base:

@@ -1,6 +1,7 @@
 import SwiftUI
 import BentoTerminalCore
 import UniformTypeIdentifiers
+import BentoFoundationKit
 
 /// SettingsView is the content of the app's Settings scene. macOS renders it
 /// in the canonical "preferences window" chrome with toolbar + grouped form.

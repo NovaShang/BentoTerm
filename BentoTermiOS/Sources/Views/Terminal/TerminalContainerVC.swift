@@ -2,7 +2,9 @@ import UIKit
 import SwiftUI
 import Combine
 import BentoTerminalCore
-import SwiftTmux
+import BentoTmuxKit
+import BentoFilePreviewKit
+import BentoFoundationKit
 
 /// Phases of a pane title-bar drag (tiled mode), reported to the parent so it
 /// can resolve the pane + drop zone under the finger (center = swap, edge =
@@ -41,9 +43,6 @@ final class TerminalContainerVC: UIViewController {
     /// value can't outlive a config reload (surfaces re-report once they render).
     private var reportedBgColor: UIColor?
 
-    /// Scroll-bookmark jump control, hugging the right edge of the surface. Two
-    /// stacked chevrons that appear only when a jump in that direction exists.
-    private let markPager = ScrollMarkPager()
     private var cancellables = Set<AnyCancellable>()
 
     var paneVM: PaneViewModel?
@@ -232,7 +231,6 @@ final class TerminalContainerVC: UIViewController {
         dlog("[paneLayout] tbh=\(tbh) view=\(view.bounds) surface=\(surface.frame)")
         stateTint.frame = surface.frame
         layoutRendererHealthBanner()
-        layoutMarkPager()
     }
 
     // MARK: - Renderer health
@@ -266,18 +264,6 @@ final class TerminalContainerVC: UIViewController {
     private func layoutRendererHealthBanner() {
         guard let banner = rendererHealthBanner else { return }
         banner.frame = CGRect(x: 0, y: titleBarHeight, width: view.bounds.width, height: 20)
-    }
-
-    /// Right-edge, vertically centered over the surface content. Inset from the
-    /// edge so it hugs the content without sitting on the very border.
-    private func layoutMarkPager() {
-        guard surface != nil else { return }   // sinks can fire before setupSurface
-        let size = markPager.intrinsicContentSize
-        let inset: CGFloat = 8
-        markPager.frame = CGRect(
-            x: surface.frame.maxX - size.width - inset,
-            y: surface.frame.midY - size.height / 2,
-            width: size.width, height: size.height)
     }
 
     // MARK: - Setup
@@ -344,11 +330,6 @@ final class TerminalContainerVC: UIViewController {
         surface.onTitleChanged = { [weak self] title in
             self?.updateTitle(title)
         }
-        // Scroll-bookmark nav: push scrollback geometry into the VM (paneVM is
-        // read lazily — it's bound separately, possibly before/after this).
-        surface.onScrollbar = { [weak self] total, offset, len in
-            self?.paneVM?.noteScrollbar(total: total, offset: offset, len: len)
-        }
         surface.onCopyModeScroll = { [weak self] rows in
             self?.onCopyModeScroll?(rows)
         }
@@ -390,13 +371,6 @@ final class TerminalContainerVC: UIViewController {
         stateTint.backgroundColor = .clear
         stateTint.frame = surface.frame
         view.addSubview(stateTint)
-
-        // Scroll-bookmark pager floats over the surface's right edge.
-        // A fling still gliding when a bookmark jump fires would fight it —
-        // kill the momentum first.
-        markPager.onUp = { [weak self] in self?.stopMomentum(); self?.paneVM?.jumpToOlderMark() }
-        markPager.onDown = { [weak self] in self?.stopMomentum(); self?.paneVM?.jumpToNewerMark() }
-        view.addSubview(markPager)
     }
 
     /// Apply the soft-Ctrl modifier and route to the transport. The engine has
@@ -648,23 +622,7 @@ final class TerminalContainerVC: UIViewController {
             }
         }
 
-        // Scroll-bookmark nav: let the VM drive history scrolling + show/hide the
-        // edge pager by availability. (surface.onScrollbar is wired in
-        // setupSurface — bindToPaneVM can run before the surface exists.)
-        vm.onReviewScroll = { [weak self] rows in self?.surface?.scrollRows(rows) }
-        vm.onScrollToLive = { [weak self] in self?.surface?.scrollToLive() }
-        vm.onReadScrollback = { [weak self] in self?.surface?.readScrollback() }
         cancellables.removeAll()
-        markPager.canUp = vm.canJumpUp
-        markPager.canDown = vm.canJumpDown
-        vm.$canJumpUp
-            .receive(on: RunLoop.main)
-            .sink { [weak self] v in self?.markPager.canUp = v; self?.layoutMarkPager() }
-            .store(in: &cancellables)
-        vm.$canJumpDown
-            .receive(on: RunLoop.main)
-            .sink { [weak self] v in self?.markPager.canDown = v; self?.layoutMarkPager() }
-            .store(in: &cancellables)
 
         // Push the pane's mouse-reporting mode into the surface so touch-scroll
         // forwards to an alt-screen TUI instead of paging local scrollback. The
@@ -1695,75 +1653,6 @@ final class SelectionHandle: UIView {
         ctx.fillEllipse(in: CGRect(x: cx - knobRadius, y: knobY - knobRadius,
                                    width: knobRadius * 2, height: knobRadius * 2))
     }
-}
-
-/// Scroll-bookmark jump control: a small Bento card on the surface's right edge
-/// with up/down chevrons. Each chevron shows only when a jump in that direction
-/// is possible (so there's no "down" at the live bottom); the whole card hides
-/// when neither is available. Chevrons distinguish "navigate marks" from the
-/// FloatingQuickKeysToolbar's send-arrow-keystroke `↑ ↓`.
-final class ScrollMarkPager: UIView {
-    var onUp: (() -> Void)?
-    var onDown: (() -> Void)?
-
-    var canUp = false { didSet { if oldValue != canUp { rebuild() } } }
-    var canDown = false { didSet { if oldValue != canDown { rebuild() } } }
-
-    private let stack = UIStackView()
-    private let upButton = UIButton(type: .system)
-    private let downButton = UIButton(type: .system)
-    private static let buttonSide: CGFloat = 36
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = BentoBrand.surface
-        layer.borderColor = BentoBrand.border.cgColor
-        layer.borderWidth = 1
-        layer.cornerRadius = 10
-        clipsToBounds = true
-
-        configure(upButton, symbol: "chevron.up", action: #selector(upTapped))
-        configure(downButton, symbol: "chevron.down", action: #selector(downTapped))
-
-        stack.axis = .vertical
-        stack.alignment = .fill
-        stack.distribution = .fillEqually
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
-        rebuild()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func configure(_ button: UIButton, symbol: String, action: Selector) {
-        let cfg = UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
-        button.setImage(UIImage(systemName: symbol, withConfiguration: cfg), for: .normal)
-        button.tintColor = BentoBrand.inkPrimary
-        button.addTarget(self, action: action, for: .touchUpInside)
-    }
-
-    private func rebuild() {
-        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        if canUp { stack.addArrangedSubview(upButton) }
-        if canDown { stack.addArrangedSubview(downButton) }
-        isHidden = !(canUp || canDown)
-        invalidateIntrinsicContentSize()
-    }
-
-    override var intrinsicContentSize: CGSize {
-        let count = (canUp ? 1 : 0) + (canDown ? 1 : 0)
-        return CGSize(width: Self.buttonSide, height: Self.buttonSide * CGFloat(count))
-    }
-
-    @objc private func upTapped() { onUp?() }
-    @objc private func downTapped() { onDown?() }
 }
 
 /// Weak-target trampoline for the scroll-momentum CADisplayLink — the link

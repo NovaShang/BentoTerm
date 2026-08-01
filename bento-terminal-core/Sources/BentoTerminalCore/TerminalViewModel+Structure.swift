@@ -1,5 +1,6 @@
 import Foundation
-import SwiftTmux
+import BentoTmuxKit
+import BentoFoundationKit
 
 /// Bento's two-mode model. The user thinks in exactly two shapes:
 ///

@@ -1,3 +1,4 @@
+import BentoFoundationKit
 #if canImport(UIKit)
 import UIKit
 import Metal
@@ -16,9 +17,6 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     public var onSizeChanged: ((TerminalSurfaceSize) -> Void)?
     /// Never fired by the current implementation — titles flow via tmux.
     public var onTitleChanged: ((String) -> Void)?
-    /// Scrollback geometry, pushed on every SCROLLBAR action. Host forwards to
-    /// `PaneViewModel.noteScrollbar` for the scroll-bookmark nav.
-    public var onScrollbar: ((_ total: UInt64, _ offset: UInt64, _ len: UInt64) -> Void)?
     public private(set) var currentSize: TerminalSurfaceSize?
 
     /// Per-pane mouse-reporting mode, learned from tmux's `mouse_any_flag` /
@@ -719,12 +717,9 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         onInput?(data)
     }
 
-    /// Called by GhosttyRuntime on every SCROLLBAR action. Pushes the scrollback
-    /// geometry to the host (scroll-bookmark nav). The richer scroll-review-
-    /// compose draft bar is still a macOS-only follow-up.
+    /// Called by GhosttyRuntime on every SCROLLBAR action.
     func handleScrollbar(total: UInt64, offset: UInt64, len: UInt64) {
         lastScrollTop = Int(offset)
-        onScrollbar?(total, offset, len)
     }
 
     /// The engine reported an actually-rendered color (initial theme
@@ -757,9 +752,9 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// Ordered path candidates + highlight rects under a tap at `point`
     /// (surface coords) — wrap-chain joins first, bare fragment last — plus
     /// screen-context root hints. The caller stat-verifies in order unless
-    /// `hits[0].fastPath`. `wrapCols` is the tmux pane width when available
-    /// (the wrap width the proven turn-nav math uses); nil falls back to
-    /// ghostty's grid. Public: the iOS host lives in the app target.
+    /// `hits[0].fastPath`. `wrapCols` is the tmux pane width when available;
+    /// nil falls back to ghostty's grid. Public: the iOS host lives in the app
+    /// target.
     public func pathTapHits(at point: CGPoint, wrapCols: Int?) -> SurfacePathHitEngine.TapScan {
         guard let cs = currentSize, cs.cellWidthPx > 0, cs.cellHeightPx > 0 else { return .empty }
         let s = currentScale
@@ -772,45 +767,8 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
             readText: { [weak self] in self?.readScrollback() })
     }
 
-    /// Scroll the history view by `lines` (negative = up/older) without sending
-    /// keys, for scroll-bookmark jumps. ghostty applies scroll at the tracked
-    /// mouse position, so anchor it over the surface first (see `scroll`).
-    /// Public: the iOS host lives in the app target, not this module.
-    public func reviewScroll(lines: Int) {
-        guard let surface else { return }
-        let c = pxPoint(CGPoint(x: bounds.midX, y: bounds.midY))
-        ghostty_surface_mouse_pos(surface, c.0, c.1, GHOSTTY_MODS_NONE)
-        // mods 0 = low-res: dy is in lines, matching the macOS reviewScroll path.
-        ghostty_surface_mouse_scroll(surface, 0, Double(-lines), 0)
-        ghostty_surface_refresh(surface)
-        setNeedsDraw()
-    }
-
-    /// Scroll the history by an EXACT number of rows (negative = up), for turn-nav
-    /// jumps. HIGH-PRECISION scroll (mods bit0 = 1): dy is device pixels, which
-    /// ghostty divides by the cell height → exact rows (no wheel multiplier / 3-row
-    /// granularity). Public: iOS host is in the app target.
-    public func scrollRows(_ rows: Int) {
-        guard let surface, rows != 0, let ch = currentSize?.cellHeightPx, ch > 0 else { return }
-        let c = pxPoint(CGPoint(x: bounds.midX, y: bounds.midY))
-        ghostty_surface_mouse_pos(surface, c.0, c.1, GHOSTTY_MODS_NONE)
-        ghostty_surface_mouse_scroll(surface, 0, Double(-rows) * Double(ch), 1)
-        ghostty_surface_refresh(surface)
-        setNeedsDraw()
-    }
-
-    /// Snap the history view back to the live bottom (scroll-bookmark "return to
-    /// live"). Public: the iOS host lives in the app target, not this module.
-    public func scrollToLive() {
-        guard let surface else { return }
-        GhosttySel.bindingAction("scroll_to_bottom", on: surface)
-        ghostty_surface_refresh(surface)
-        setNeedsDraw()
-    }
-
     /// The whole scrollback as text (one line per row, top-aligned with the
-    /// SCROLLBAR row space — see TurnNavigator) for the turn-scan nav. Public:
-    /// the iOS host lives in the app target.
+    /// SCROLLBAR row space). Public: the iOS host lives in the app target.
     public func readScrollback() -> String? {
         guard let surface else { return nil }
         return GhosttySel.readRegion(surface, tag: GHOSTTY_POINT_SCREEN)?.text

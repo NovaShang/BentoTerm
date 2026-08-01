@@ -1,4 +1,5 @@
 import SwiftUI
+import BentoVoiceKit
 import BentoTerminalCore
 
 /// iOS voice overlay — now a thin wrapper over the shared `VoiceCompassView`

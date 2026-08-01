@@ -1,6 +1,7 @@
 import UIKit
 import SwiftUI
 import BentoTerminalCore
+import BentoFilePreviewKit
 
 // MARK: - Tap chip
 

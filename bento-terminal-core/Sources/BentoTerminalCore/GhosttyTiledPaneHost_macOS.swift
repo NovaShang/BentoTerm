@@ -1,8 +1,10 @@
+import BentoTmuxKit
+import BentoFilePreviewKit
+import BentoFoundationKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Combine
 import SwiftUI
-import SwiftTmux
 
 /// iTerm2-style TILED multi-pane host for macOS. Every tmux pane is shown at
 /// once, laid out by its tmux cell geometry (x/y/width/height), each in its own
@@ -228,7 +230,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         wireSurfaceCallbacks(surface, paneVM: paneVM, paneID: paneID)
 
         let container = PaneCellView()
-        wireContainerActions(container, paneVM: paneVM, paneID: paneID)
+        wireContainerActions(container, paneID: paneID)
         container.embed(surface)
         // Insert BELOW the divider overlay so dividers stay hit-testable on top.
         addSubview(container, positioned: .below, relativeTo: dividerOverlay)
@@ -238,8 +240,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         return PaneCell(container: container, surface: surface)
     }
 
-    /// Surface ↔ view-model wiring: output/input, selection, voice, split, size,
-    /// and the scroll-bookmark hooks. Extracted from `makeCell`.
+    /// Surface ↔ view-model wiring: output/input, selection, voice, split, size.
+    /// Extracted from `makeCell`.
     private func wireSurfaceCallbacks(_ surface: GhosttyTerminalSurface,
                                       paneVM: PaneViewModel,
                                       paneID: TmuxPaneID) {
@@ -303,14 +305,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             }
         }
 
-        // Scroll-bookmark nav: push scrollback geometry into the VM; let the VM
-        // drive history scrolling.
-        surface.onScrollbar = { [weak paneVM] total, offset, len in
-            paneVM?.noteScrollbar(total: total, offset: offset, len: len)
-        }
-        paneVM.onReviewScroll = { [weak surface] rows in surface?.scrollRows(rows) }
-        paneVM.onScrollToLive = { [weak surface] in surface?.scrollToLive() }
-        paneVM.onReadScrollback = { [weak surface] in surface?.readScrollback() }
         // Path preview (⌘hover / ⌘click): macOS panes run against the local
         // machine, so files come straight off disk. cwd = the pane's live tmux
         // path (never stale), falling back to the surface's OSC 7 report.
@@ -338,7 +332,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 
     /// Container (title bar / chrome) action wiring. Extracted from `makeCell`.
     private func wireContainerActions(_ container: PaneCellView,
-                                      paneVM: PaneViewModel,
                                       paneID: TmuxPaneID) {
         container.onClick = { [weak self] in self?.viewModel.selectPane(paneID) }
         container.onZoom = { [weak self] in
@@ -352,13 +345,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         }
         container.onPaneDrag = { [weak self] phase in
             self?.handlePaneDrag(source: paneID, phase: phase)
-        }
-        // Title-bar chevrons for the scroll-bookmark nav.
-        container.onJumpUp = { [weak self, weak paneVM] in
-            self?.viewModel.selectPane(paneID); paneVM?.jumpToOlderMark()
-        }
-        container.onJumpDown = { [weak self, weak paneVM] in
-            self?.viewModel.selectPane(paneID); paneVM?.jumpToNewerMark()
         }
         // The mode glyph is also the way OUT of the mode it reports — a badge you
         // can't act on just tells you you're stuck.
@@ -393,18 +379,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         paneVM.$agentFinishedUnseen
             .receive(on: RunLoop.main)
             .sink { [weak container] v in container?.agentFinishedUnseen = v }
-            .store(in: &bag)
-
-        // Show/hide the title-bar chevrons by jump availability.
-        container.canJumpUp = paneVM.canJumpUp
-        container.canJumpDown = paneVM.canJumpDown
-        paneVM.$canJumpUp
-            .receive(on: RunLoop.main)
-            .sink { [weak container] v in container?.canJumpUp = v }
-            .store(in: &bag)
-        paneVM.$canJumpDown
-            .receive(on: RunLoop.main)
-            .sink { [weak container] v in container?.canJumpDown = v }
             .store(in: &bag)
 
         cellBags[paneID] = bag
@@ -1528,18 +1502,6 @@ final class PaneCellView: NSView {
     var onMenu: (() -> Void)? {
         didSet { titleBar.onMenu = onMenu }
     }
-    var onJumpUp: (() -> Void)? {
-        didSet { titleBar.onJumpUp = onJumpUp }
-    }
-    var onJumpDown: (() -> Void)? {
-        didSet { titleBar.onJumpDown = onJumpDown }
-    }
-    var canJumpUp = false {
-        didSet { titleBar.canJumpUp = canJumpUp }
-    }
-    var canJumpDown = false {
-        didSet { titleBar.canJumpDown = canJumpDown }
-    }
     private let titleBar = PaneTitleBar()
     private let stateTint = PaneStateTintView()
     private weak var surface: NSView?
@@ -1743,29 +1705,8 @@ final class PaneTitleBar: NSView {
     /// Trailing mode glyph (copy-mode / mouse reporting off). Hidden by default —
     /// "nothing unusual" must not carry a marker, same rule as idle state.
     private let modeButton = NSButton()
-    /// Scroll-bookmark jump chevrons, left of zoom. Shown only when a jump in that
-    /// direction is possible (e.g. no "down" at the live bottom).
-    let markUpButton = NSButton()
-    let markDownButton = NSButton()
     var onZoom: (() -> Void)?
     var onMenu: (() -> Void)?
-    var onJumpUp: (() -> Void)?
-    var onJumpDown: (() -> Void)?
-
-    var canJumpUp = false {
-        didSet {
-            guard oldValue != canJumpUp else { return }
-            markUpButton.isHidden = !canJumpUp
-            needsLayout = true
-        }
-    }
-    var canJumpDown = false {
-        didSet {
-            guard oldValue != canJumpDown else { return }
-            markDownButton.isHidden = !canJumpDown
-            needsLayout = true
-        }
-    }
 
     var text: String = "" {
         didSet { label.stringValue = text }
@@ -1883,8 +1824,6 @@ final class PaneTitleBar: NSView {
         label.textColor = ink
         zoomButton.contentTintColor = ink
         menuButton.contentTintColor = ink
-        markUpButton.contentTintColor = ink
-        markDownButton.contentTintColor = ink
         // Same ink as the rest of the bar: a mode is information, not an alarm,
         // and it must never read as one of the state colors.
         modeButton.contentTintColor = ink
@@ -1912,11 +1851,7 @@ final class PaneTitleBar: NSView {
         configure(zoomButton, symbol: "arrow.up.left.and.arrow.down.right",
                   fallback: "⤢", action: #selector(zoomTapped))
         configure(menuButton, symbol: "ellipsis", fallback: "⋯", action: #selector(menuTapped))
-        configure(markUpButton, symbol: "chevron.up", fallback: "▲", action: #selector(markUpTapped))
-        configure(markDownButton, symbol: "chevron.down", fallback: "▼", action: #selector(markDownTapped))
         configure(modeButton, symbol: "cursorarrow.slash", fallback: "⊘", action: #selector(modeTapped))
-        markUpButton.isHidden = true
-        markDownButton.isHidden = true
         modeButton.isHidden = true
 
         label.font = .systemFont(ofSize: 10, weight: .medium)
@@ -1941,19 +1876,14 @@ final class PaneTitleBar: NSView {
         let zoomX = menuX - 4 - s
         menuButton.frame = NSRect(x: menuX, y: y, width: s, height: s)
         zoomButton.frame = NSRect(x: zoomX, y: y, width: s, height: s)
-        // Bookmark chevrons sit left of zoom, right→left (down nearest zoom, then
-        // up), and only when visible — a hidden one yields its slot to the label.
-        var markX = zoomX
-        if canJumpDown { markX -= 4 + s; markDownButton.frame = NSRect(x: markX, y: y, width: s, height: s) }
-        if canJumpUp { markX -= 4 + s; markUpButton.frame = NSRect(x: markX, y: y, width: s, height: s) }
-        // Mode glyph sits leftmost in the trailing cluster, and like the chevrons
-        // yields its slot to the label when there is no mode.
-        var modeX = (canJumpUp || canJumpDown) ? markX : zoomX
+        // Mode glyph sits leftmost in the trailing cluster, and like the other
+        // buttons yields its slot to the label when there is no mode.
+        var modeX = zoomX
         if modeBadge != .none {
             modeX -= 4 + s
             modeButton.frame = NSRect(x: modeX, y: y, width: s, height: s)
         }
-        let chromeLeftX = modeBadge != .none ? modeX : ((canJumpUp || canJumpDown) ? markX : zoomX)
+        let chromeLeftX = modeBadge != .none ? modeX : zoomX
         // Fixed-width leading slot for the state glyph, so the title never shifts
         // as state changes (idle = empty slot, same x for the label).
         let icon: CGFloat = 13
@@ -1992,8 +1922,6 @@ final class PaneTitleBar: NSView {
 
     @objc private func zoomTapped() { onZoom?() }
     @objc private func menuTapped() { onMenu?() }
-    @objc private func markUpTapped() { onJumpUp?() }
-    @objc private func markDownTapped() { onJumpDown?() }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -2004,7 +1932,7 @@ final class PaneTitleBar: NSView {
     // pane container (so clicking the title to focus the pane still works).
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
-        let buttons: [NSView] = [zoomButton, menuButton, markUpButton, markDownButton]
+        let buttons: [NSView] = [zoomButton, menuButton]
         return buttons.contains(where: { $0 === hit }) ? hit : nil
     }
 }

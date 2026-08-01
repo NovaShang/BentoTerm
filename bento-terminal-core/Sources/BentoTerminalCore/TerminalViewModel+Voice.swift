@@ -1,4 +1,6 @@
 import Foundation
+import BentoVoiceKit
+import BentoFoundationKit
 
 public extension TerminalViewModel {
     /// Apply a voice result to the active pane, per the compass direction.

@@ -1,7 +1,9 @@
+import BentoTmuxKit
+import BentoFilePreviewKit
+import BentoFoundationKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Combine
-import SwiftTmux
 import SwiftUI
 
 /// Opens native libghostty terminals backed by a local pty + `tmux -CC`. macOS

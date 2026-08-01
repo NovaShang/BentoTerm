@@ -1,5 +1,6 @@
 import UIKit
 import BentoTerminalCore
+import BentoFoundationKit
 
 // `TerminalColorTheme`, `ThemeStore`, `fromITermColors`, and the
 // `.terminalThemeChanged` / `.terminalFontChanged` notifications now live in the

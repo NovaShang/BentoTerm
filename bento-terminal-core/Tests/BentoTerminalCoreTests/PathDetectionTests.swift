@@ -1,4 +1,5 @@
 import Testing
+import BentoFoundationKit
 @testable import BentoTerminalCore
 
 // MARK: - Token detection
@@ -269,7 +270,7 @@ import Testing
         let cell = PathDetector.cellSpan(inLine: line, of: r).start
         // Convert (lineIdx, cell) → (absRow, col) with the same wrap math.
         var absRow = 0
-        for l in lines[0..<lineIdx] { absRow += TurnNavigator.visualRows(l, cols: cols) }
+        for l in lines[0..<lineIdx] { absRow += TerminalGeometry.visualRows(l, cols: cols) }
         return t.tapCandidates(absRow: absRow + cell / cols, col: cell % cols)
     }
 

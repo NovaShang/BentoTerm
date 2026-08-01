@@ -1,5 +1,5 @@
 import Foundation
-import SwiftTmux
+import BentoTmuxKit
 
 /// Monitors pane output to detect the three-state machine:
 /// Working → Idle → AwaitingInput

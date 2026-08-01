@@ -1,5 +1,6 @@
 import UIKit
 import BentoTerminalCore
+import BentoFoundationKit
 
 /// Floating control strip for the active pane. Carries the agent-prompt nav
 /// keys (↑ ↓ ↵ Esc Tab) and — for tmux panes — the pane actions (zoom + menu) that

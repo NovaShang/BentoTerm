@@ -1,7 +1,7 @@
 import Testing
 @testable import BentoTerm
 import BentoTerminalCore
-import SwiftTmux
+import BentoTmuxKit
 
 @Suite("State Detection Tests")
 @MainActor

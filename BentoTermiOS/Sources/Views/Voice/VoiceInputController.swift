@@ -1,5 +1,6 @@
 import UIKit
 import SwiftUI
+import BentoVoiceKit
 import BentoTerminalCore
 
 /// Manages the voice input gesture + recording lifecycle.
@@ -83,7 +84,7 @@ final class VoiceInputController: ObservableObject {
 
     /// `VoiceInputResult` now lives in BentoTerminalCore; alias keeps existing
     /// `VoiceInputController.VoiceInputResult` references working.
-    typealias VoiceInputResult = BentoTerminalCore.VoiceInputResult
+    typealias VoiceInputResult = BentoVoiceKit.VoiceInputResult
 
     // MARK: - Tap-to-Toggle (mic button)
 

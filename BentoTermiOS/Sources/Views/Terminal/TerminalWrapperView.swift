@@ -1,7 +1,10 @@
 import SwiftUI
-import SwiftTmux
+import BentoTmuxKit
 import Combine
+import BentoVoiceKit
 import BentoTerminalCore
+import BentoFilePreviewKit
+import BentoFoundationKit
 
 /// Bridges the UIKit terminal views into SwiftUI navigation.
 /// The session has already been picked (and the SSH is up) before this view

@@ -70,7 +70,7 @@ enum GhosttySel {
     /// Read the text of a whole region (SCREEN = scrollback+screen, VIEWPORT =
     /// visible) via `ghostty_surface_read_text`, mirroring `selectedText`. Returns
     /// the text plus the region's top-left pixel anchor and its char offset/len in
-    /// the engine's text space. nil if the read failed. Used by the turn-scanner.
+    /// the engine's text space. nil if the read failed.
     static func readRegion(_ surface: ghostty_surface_t,
                            tag: ghostty_point_tag_e)
         -> (text: String, tlPxY: Double, offsetStart: UInt32, offsetLen: UInt32)?

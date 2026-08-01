@@ -1,5 +1,6 @@
 import Foundation
 import os
+import BentoFilePreviewKit
 
 /// The command palette (⌘P): one single-state box over the focused pane that
 /// blends *file preview* (browse / fuzzy-find / open any file in the working

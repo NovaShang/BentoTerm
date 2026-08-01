@@ -1,6 +1,6 @@
+import BentoTmuxKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
-import SwiftTmux
 
 /// The unified title-bar toolbar for a session window.
 ///
