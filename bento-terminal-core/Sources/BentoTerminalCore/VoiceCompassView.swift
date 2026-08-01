@@ -41,6 +41,25 @@ public struct VoiceCompassView: View {
     /// between its idle and active size (see `glassEffectID`).
     @Namespace private var glassNS
 
+    /// Everything here used to be hardcoded white, which is invisible in light
+    /// mode. Observing the store means the overlay repaints when the appearance
+    /// flips. (Core can't reach the app target's BentoBrand tokens, but
+    /// ThemeStore is the same authority they resolve against.)
+    @ObservedObject private var themeStore = ThemeStore.shared
+
+    private var isDark: Bool { themeStore.effectiveIsDark }
+
+    /// Primary content on glass: icons of active targets, transcript text.
+    private var ink: Color { isDark ? .white : Color(red: 0.08, green: 0.09, blue: 0.11) }
+    /// Idle icons and secondary labels.
+    private var inkDim: Color { ink.opacity(isDark ? 0.6 : 0.55) }
+    /// The action hint — quietest thing in the bubble.
+    private var inkMute: Color { ink.opacity(isDark ? 0.5 : 0.45) }
+    /// Activation base + glow. White brightens dark glass; on light glass it
+    /// washes out, so tint/glow with the ink color instead.
+    private var hotTint: Color { isDark ? Color.white.opacity(0.28) : ink.opacity(0.16) }
+    private var hotGlow: Color { isDark ? Color.white.opacity(0.45) : ink.opacity(0.25) }
+
     public var body: some View {
         ZStack {
             bubble.offset(y: -(radius + 106))
@@ -64,13 +83,13 @@ public struct VoiceCompassView: View {
                     .foregroundStyle(.red)
                     .symbolEffect(.pulse, options: .repeating)
                 Text("Listening").font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(ink.opacity(0.85))
             }
             // Bottom-aligned 3-line window (fixed height so the bubble stays put
             // as text streams in; newest line at the bottom).
             Text(transcript.isEmpty ? "Listening…" : transcript)
                 .font(.system(size: 14))
-                .foregroundStyle(.white)
+                .foregroundStyle(ink)
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
                 .frame(width: 248, alignment: .center)
@@ -81,14 +100,14 @@ public struct VoiceCompassView: View {
             // the bubble never resizes.
             Text(hintText)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(inkMute)
                 .frame(height: 14)
                 .animation(.spring(response: 0.3, dampingFraction: 0.8), value: direction)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .frame(width: 280)
         .glassSurface(.rect(cornerRadius: 18))
-        .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
+        .shadow(color: .black.opacity(isDark ? 0.45 : 0.18), radius: 18, y: 6)
     }
 
     // MARK: - Compass
@@ -136,12 +155,12 @@ public struct VoiceCompassView: View {
         let hot = direction == .none
         return Image(systemName: "mic.fill")
             .font(.system(size: 22, weight: .semibold))
-            .foregroundStyle(hot ? .white : accent)
+            .foregroundStyle(hot ? ink : accent)
             .symbolEffect(.pulse, options: .repeating)
             .frame(width: hot ? 70 : 56, height: hot ? 70 : 56)
-            .glassSurface(.circle, tint: hot ? Color.white.opacity(0.28) : nil,
+            .glassSurface(.circle, tint: hot ? hotTint : nil,
                           id: "center", namespace: glassNS)
-            .shadow(color: hot ? Color.white.opacity(0.45) : accent.opacity(0.5),
+            .shadow(color: hot ? hotGlow : accent.opacity(0.5),
                     radius: hot ? 14 : 16)
     }
 
@@ -160,11 +179,11 @@ public struct VoiceCompassView: View {
         let hot = d == direction
         return Image(systemName: symbol(for: d))
             .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(hot ? .white : Color.white.opacity(0.6))
+            .foregroundStyle(hot ? ink : inkDim)
             .frame(width: hot ? 74 : 60, height: hot ? 74 : 60)
-            .glassSurface(.circle, tint: hot ? Color.white.opacity(0.28) : nil,
+            .glassSurface(.circle, tint: hot ? hotTint : nil,
                           id: d.rawValue, namespace: glassNS)
-            .shadow(color: hot ? Color.white.opacity(0.45) : .clear, radius: hot ? 14 : 0)
+            .shadow(color: hot ? hotGlow : .clear, radius: hot ? 14 : 0)
             .offset(x: dx, y: dy)
     }
 
@@ -181,7 +200,9 @@ public struct VoiceCompassView: View {
         Circle()
             .fill(Color.clear)
             .frame(width: 78, height: 78)
-            .glassSurface(.circle, tint: nil)
+            // A touch of ink tint so the marble is legible on light glass too,
+            // where clear-on-clear all but disappears.
+            .glassSurface(.circle, tint: isDark ? nil : ink.opacity(0.10))
             .offset(x: fingerOffset.width * k, y: fingerOffset.height * k)
             .opacity(min(1, mag / 26))
     }
@@ -219,6 +240,11 @@ private struct GlassSurface: ViewModifier {
     var id: String?
     var namespace: Namespace.ID?
 
+    /// The pre-26 fallback paints real fills, so it needs the appearance too —
+    /// its old black/white constants were invisible in light mode.
+    @ObservedObject private var themeStore = ThemeStore.shared
+    private var isDark: Bool { themeStore.effectiveIsDark }
+
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 26.0, macOS 26.0, *) {
@@ -238,17 +264,19 @@ private struct GlassSurface: ViewModifier {
                 shaped
             }
         } else {
+            let base = isDark ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
+            let edge = (isDark ? Color.white : Color.black).opacity(tint == nil ? 0.10 : 0.22)
             switch shape {
             case .circle:
                 content
-                    .background(Circle().fill(tint ?? Color.black.opacity(0.55)))
-                    .overlay(Circle().strokeBorder(Color.white.opacity(tint == nil ? 0.10 : 0.25)))
+                    .background(Circle().fill(tint ?? base))
+                    .overlay(Circle().strokeBorder(edge))
             case .rect(let r):
                 content
                     .background(.ultraThinMaterial,
                                 in: RoundedRectangle(cornerRadius: r, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: r, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08)))
+                        .strokeBorder(edge.opacity(0.6)))
             }
         }
     }
