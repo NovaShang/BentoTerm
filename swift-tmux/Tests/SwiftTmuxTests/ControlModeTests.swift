@@ -229,14 +229,86 @@ struct ResponseQueueTests {
         let task = Task { await service.send(.listPanes()) }
         try? await Task.sleep(for: .milliseconds(50))
 
-        // Two responses arrive. First is consumed by the fire-and-forget
-        // counter; second matches the awaited continuation.
+        // Two responses arrive. The first is consumed by the fire-and-forget's
+        // own queue slot; the second matches the awaited continuation.
         service.feedData(Data("%begin 1 100 1\n%end 1 100 1\n".utf8))
         service.feedData(Data("%begin 1 101 1\npane data\n%end 1 101 1\n".utf8))
 
         let response = await task.value
         #expect(response.output == "pane data")
         #expect(!response.isError)
+    }
+
+    /// The same pair in the other order — which is the order that actually
+    /// happens. The 2 s state poll is usually mid-`list-panes` when the user
+    /// taps split / zoom / rename / kill, and every one of those is a
+    /// fire-and-forget. While fire-and-forgets were a counter checked *before*
+    /// the queue, this handed the poll's block to nobody and the poll the next
+    /// block along. On a LAN the window is a few milliseconds; at 900 ms RTT it
+    /// is a large fraction of the poll period.
+    @Test func fireAndForgetIssuedMidFlightKeepsTheOrder() async {
+        let (service, _) = makeAttachedService()
+        service.sendToSSH = { _ in }
+
+        let task = Task { await service.send(.listPanes()) }
+        try? await Task.sleep(for: .milliseconds(50))
+        service.sendFireAndForget(.selectPane(id: TmuxPaneID(0)))
+
+        // tmux answers in the order it received them.
+        service.feedData(Data("%begin 1 100 1\npane data\n%end 1 100 1\n".utf8))
+        service.feedData(Data("%begin 1 101 1\n%end 1 101 1\n".utf8))
+
+        let response = await task.value
+        #expect(response.output == "pane data")
+        #expect(!response.isError)
+    }
+
+    /// A timed-out command leaves a placeholder rather than vacating its slot,
+    /// so a merely-slow response is absorbed where it belongs instead of
+    /// shifting every later match by one.
+    @Test func lateResponseLandsOnItsOwnSlotAfterTimeout() async {
+        let (service, _) = makeAttachedService()
+        service.sendToSSH = { _ in }
+
+        let slow = Task { await service.send(.listPanes(), timeout: .milliseconds(100)) }
+        try? await Task.sleep(for: .milliseconds(50))
+        let second = Task { await service.send(.listWindows(), timeout: .seconds(5)) }
+        try? await Task.sleep(for: .milliseconds(200))
+
+        #expect(await slow.value.isError)
+
+        // Both responses now arrive, in order. The late one belongs to the
+        // abandoned slot, not to the caller queued behind it.
+        service.feedData(Data("%begin 1 100 1\nlate panes\n%end 1 100 1\n".utf8))
+        service.feedData(Data("%begin 1 101 1\nwindows\n%end 1 101 1\n".utf8))
+
+        #expect(await second.value.output == "windows")
+    }
+
+    /// Placeholders are bounded: a response that never arrives would otherwise
+    /// keep its slot forever and start eating the next command's block —
+    /// the same shift, just deferred.
+    @Test func abandonedPlaceholdersAreCapped() async {
+        let (service, _) = makeAttachedService()
+        service.sendToSSH = { _ in }
+
+        // Nine commands time out with nothing ever arriving; the cap is eight,
+        // so exactly one placeholder is dropped.
+        for _ in 0..<9 {
+            #expect(await service.send(.listPanes(), timeout: .milliseconds(20)).isError)
+        }
+
+        let live = Task { await service.send(.listWindows(), timeout: .seconds(5)) }
+        try? await Task.sleep(for: .milliseconds(50))
+
+        // Eight stale blocks are swallowed by the surviving placeholders and
+        // the ninth reaches the live caller. Uncapped it would take ten.
+        for i in 0..<8 {
+            service.feedData(Data("%begin 1 \(100 + i) 1\nstale\n%end 1 \(100 + i) 1\n".utf8))
+        }
+        service.feedData(Data("%begin 1 200 1\nwindows\n%end 1 200 1\n".utf8))
+
+        #expect(await live.value.output == "windows")
     }
 
     @Test func errorResponseDetected() async {

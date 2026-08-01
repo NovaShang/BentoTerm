@@ -32,15 +32,34 @@ public final class TmuxControlMode: @unchecked Sendable {
     // Response tracking: FIFO queue of continuations
     private let responseLock = OSAllocatedUnfairLock(initialState: ResponseState())
 
+    /// One slot in the response queue. Every command that goes out — awaited or
+    /// not — appends exactly one, so queue position and wire order can never
+    /// diverge.
     private struct PendingEntry {
+        enum Kind {
+            /// A `send(_:)` caller is suspended on this slot.
+            case awaiting(CheckedContinuation<TmuxCommandResponse, Never>)
+            /// A fire-and-forget command: its block is consumed and dropped.
+            case discard
+            /// A slot whose caller already gave up and was resumed with a
+            /// timeout. Kept in place so the late response lands here instead
+            /// of being handed to the next command.
+            case abandoned
+        }
         let id: UInt64
-        let continuation: CheckedContinuation<TmuxCommandResponse, Never>
+        var kind: Kind
     }
+
+    /// A response that never arrives leaves its placeholder in the queue for
+    /// good, and from then on it eats the *next* command's block — the same
+    /// shift the placeholder exists to prevent, just deferred. Bound it: a
+    /// connection that has lost this many responses is already being torn down
+    /// by the poll watchdog, and `reset()` clears the rest.
+    private static let maxAbandonedPlaceholders = 8
 
     private struct ResponseState {
         var pendingQueue: [PendingEntry] = []
         var currentBlock: CommandBlock?
-        var pendingFireAndForget: Int = 0
         var nextEntryID: UInt64 = 0
         /// True once the current connection's greeting block has been consumed.
         /// `tmux -CC new-session/attach` emits one UNSOLICITED `%begin`/`%end`
@@ -185,10 +204,12 @@ public final class TmuxControlMode: @unchecked Sendable {
     /// `timeout` bounds the wait: if no response block arrives (dead
     /// connection, desynced stream), the call returns an `isError` response
     /// instead of suspending forever — an unbounded await here is what used to
-    /// wedge the reconnect loop for good. Timing out the FIFO head while its
-    /// response is merely *slow* (not lost) shifts later matches by one, but a
-    /// >timeout response on a live link means the stream is already broken,
-    /// and `reset()` restores alignment on the next reconnect.
+    /// wedge the reconnect loop for good. Timing out does NOT remove the slot:
+    /// it is marked `.abandoned` and left in place, so a merely-slow response
+    /// is absorbed by its own slot rather than shifting every later match by
+    /// one. (That shift used to be accepted on the theory that a >timeout
+    /// response means the stream is already broken — which stops being true on
+    /// a relayed link where a 900 ms RTT makes slow responses ordinary.)
     @discardableResult
     public func send(_ command: TmuxCommand, timeout: Duration = .seconds(10)) async -> TmuxCommandResponse {
         let id: UInt64 = responseLock.withLock { state in
@@ -203,7 +224,7 @@ public final class TmuxControlMode: @unchecked Sendable {
             // wire order and registration order must never diverge (two
             // concurrent senders interleaving append/write used to swap them).
             responseLock.withLock { state in
-                state.pendingQueue.append(PendingEntry(id: id, continuation: continuation))
+                state.pendingQueue.append(PendingEntry(id: id, kind: .awaiting(continuation)))
                 sendToSSH?(cmdString)
             }
             Task { [weak self] in
@@ -214,11 +235,28 @@ public final class TmuxControlMode: @unchecked Sendable {
     }
 
     private func timeOutPending(id: UInt64) {
-        let cont = responseLock.withLock { state -> CheckedContinuation<TmuxCommandResponse, Never>? in
-            guard let idx = state.pendingQueue.firstIndex(where: { $0.id == id }) else { return nil }
-            return state.pendingQueue.remove(at: idx).continuation
+        let (cont, dropped) = responseLock.withLock {
+            state -> (CheckedContinuation<TmuxCommandResponse, Never>?, Int) in
+            guard let idx = state.pendingQueue.firstIndex(where: { $0.id == id }),
+                  case .awaiting(let c) = state.pendingQueue[idx].kind else { return (nil, 0) }
+            state.pendingQueue[idx].kind = .abandoned
+
+            // Safety valve, see `maxAbandonedPlaceholders`.
+            var dropped = 0
+            while state.pendingQueue.count(where: { if case .abandoned = $0.kind { return true } else { return false } })
+                    > Self.maxAbandonedPlaceholders,
+                  let oldest = state.pendingQueue.firstIndex(where: {
+                      if case .abandoned = $0.kind { return true } else { return false }
+                  }) {
+                state.pendingQueue.remove(at: oldest)
+                dropped += 1
+            }
+            return (c, dropped)
         }
         guard let cont else { return }
+        if dropped > 0 {
+            log("tmux dropped \(dropped) stale placeholder(s) — the stream is losing responses, not just slow")
+        }
         log("tmux send timed out waiting for response (entry \(id))")
         cont.resume(returning: TmuxCommandResponse(commandNumber: -1, isError: true, output: "timeout: no response"))
     }
@@ -277,7 +315,6 @@ public final class TmuxControlMode: @unchecked Sendable {
             state.pendingQueue.removeAll()
             state.controlModeWaiters.removeAll()
             state.currentBlock = nil
-            state.pendingFireAndForget = 0
             state.greetingConsumed = false
             state.preGreetingLines.removeAll()
             return (o, w)
@@ -285,22 +322,33 @@ public final class TmuxControlMode: @unchecked Sendable {
         if !orphans.isEmpty || !waiters.isEmpty {
             log("tmux parser reset: dropping \(orphans.count) pending command(s), \(waiters.count) waiter(s)")
         }
+        // `.discard` and `.abandoned` slots have nobody waiting on them.
         for entry in orphans {
-            entry.continuation.resume(returning: TmuxCommandResponse(commandNumber: -1, isError: true, output: "connection reset"))
+            guard case .awaiting(let cont) = entry.kind else { continue }
+            cont.resume(returning: TmuxCommandResponse(commandNumber: -1, isError: true, output: "connection reset"))
         }
         for waiter in waiters {
             waiter.continuation.resume(returning: false)
         }
     }
 
-    /// Send a tmux command without waiting for response. The response
-    /// arrives but is discarded; the counter ensures it does not get
-    /// delivered to a later `send(_:)` caller.
+    /// Send a tmux command without waiting for response. The response arrives
+    /// but is discarded — via a `.discard` slot in the same queue, so it can
+    /// only ever consume its *own* block.
+    ///
+    /// This used to be a counter that `finishBlock` checked *before* the queue,
+    /// which reversed the order whenever a fire-and-forget was issued while an
+    /// awaited command was still in flight: the earlier command's block was
+    /// dropped as if it belonged to the fire-and-forget, and its caller was
+    /// handed the next one. On a LAN that window is a few milliseconds; on a
+    /// relayed link it is a large fraction of the 2 s poll period, which is
+    /// most of a user's taps.
     public func sendFireAndForget(_ command: TmuxCommand) {
         let cmdString = command.commandString + "\n"
         log("tmux send (fire): \(cmdString.trimmingCharacters(in: .whitespacesAndNewlines))")
         responseLock.withLock { state in
-            state.pendingFireAndForget += 1
+            state.nextEntryID += 1
+            state.pendingQueue.append(PendingEntry(id: state.nextEntryID, kind: .discard))
             sendToSSH?(cmdString)
         }
     }
@@ -360,7 +408,8 @@ public final class TmuxControlMode: @unchecked Sendable {
         // send() was pending — display-message callers (path-preview cwd,
         // duplicate-window seeds) mostly received ⟨⟩ instead of their output.
         responseLock.withLock { state in
-            state.pendingFireAndForget += 1
+            state.nextEntryID += 1
+            state.pendingQueue.append(PendingEntry(id: state.nextEntryID, kind: .discard))
             sendToSSH?(cmd)
         }
     }
@@ -711,13 +760,13 @@ public final class TmuxControlMode: @unchecked Sendable {
                 return (nil, nil, w)
             }
 
-            if state.pendingFireAndForget > 0 {
-                state.pendingFireAndForget -= 1
-                return (block, nil, [])
+            guard !state.pendingQueue.isEmpty else { return (block, nil, []) }
+            switch state.pendingQueue.removeFirst().kind {
+            case .awaiting(let cont): return (block, cont, [])
+            // Fire-and-forget, or a caller that already timed out: consume the
+            // block so it cannot shift the next command's match, and drop it.
+            case .discard, .abandoned: return (block, nil, [])
             }
-
-            let cont = state.pendingQueue.isEmpty ? nil : state.pendingQueue.removeFirst().continuation
-            return (block, cont, [])
         }
 
         for waiter in waiters {
