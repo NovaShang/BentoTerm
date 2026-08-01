@@ -24,6 +24,19 @@ import SwiftUI
 /// direction change, then snaps. It fades in as the finger leaves center and is
 /// clamped so a far drag can't push it off the overlay.
 public struct VoiceCompassView: View {
+    /// Overlay footprint, and how far its content reaches from the center anchor.
+    /// Hosts need these to keep the compass clear of screen edges — the compass is
+    /// centered on the touch point, so nothing inside it can enforce that.
+    public enum Metrics {
+        public static let size = CGSize(width: 360, height: 580)
+        /// Half-width: the side targets sit within this of the anchor.
+        public static let halfWidth: CGFloat = size.width / 2
+        /// Top of the tallest bubble, above the anchor.
+        public static let reachUp: CGFloat = 270
+        /// Bottom of the down target (plus its glow), below the anchor.
+        public static let reachDown: CGFloat = 120
+    }
+
     public let transcript: String
     public let direction: VoiceDirection
     public let fingerOffset: CGSize
@@ -80,7 +93,7 @@ public struct VoiceCompassView: View {
         // (NSView center on macOS, `.position` on iOS). Both place by center, so
         // the height only needs to fit the bubble above without clipping — it
         // does not shift the anchor.
-        .frame(width: 360, height: 580)
+        .frame(width: Metrics.size.width, height: Metrics.size.height)
     }
 
     // MARK: - Transcript bubble (+ status + action hint, all inside the glass)

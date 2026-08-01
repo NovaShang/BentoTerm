@@ -32,6 +32,7 @@ struct TerminalWrapperView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showSettings = false
     @State private var showOnboarding: Bool = GestureOnboardingOverlay.shouldShow
     @State private var sizingResolved = false
@@ -57,6 +58,14 @@ struct TerminalWrapperView: View {
     @StateObject private var paneBridge = PaneContainerBridge()
 
     private var host: Host { viewModel.host }
+
+    /// The pane background as a SwiftUI color — the full-screen backdrop of
+    /// the terminal screen (status-bar / nav-bar strips, home-indicator strip)
+    /// and the window tab bar. Mirrors STTheme.term's light/dark resolution
+    /// so it tracks appearance like the UIKit chrome.
+    private var paneBgColor: Color {
+        Color(uiColor: colorScheme == .dark ? STTheme.TermDark.bg : STTheme.TermLight.bg)
+    }
 
     /// Persistence key for the sizing choice (per host + tmux session).
     private var sessionKey: String {
@@ -313,19 +322,31 @@ struct TerminalWrapperView: View {
     /// The terminal plus (on the phone) the window tab bar — the split view's
     /// detail column, and the whole screen on a phone. Owns the session toolbar.
     private var terminalDetail: some View {
-        VStack(spacing: 0) {
-            terminalSurface
-            if showsWindowTabs {
-                WindowTabBar(viewModel: viewModel)
+        ZStack {
+            // Full-screen pane backdrop. A plain Color with .ignoresSafeArea()
+            // genuinely fills the status-bar / nav-bar strips above and the
+            // home-indicator strip below — unlike `.background(ignoresSafeArea
+            // Edges:)` on an in-safe-area view (extends by its zero insets,
+            // i.e. nowhere) or a UIKit subview stretched past its parent's
+            // bounds (SwiftUI clips it). The grid keeps its exact geometry:
+            // tmux never resizes for this.
+            paneBgColor.ignoresSafeArea()
+            VStack(spacing: 0) {
+                terminalSurface
+                if showsWindowTabs {
+                    WindowTabBar(viewModel: viewModel)
+                }
             }
+            // Without the tab bar the terminal reclaims the home-indicator
+            // strip (PRD §2.2 — the page runs to the very bottom edge). With
+            // the bar, the VStack respects the bottom inset and the bar owns
+            // it. The keyboard is ignored on `body` either way: it slides OVER
+            // the bar (hiding it) and never resizes the page (PRD §2.6).
+            .ignoresSafeArea(.container, edges: showsWindowTabs ? [] : .bottom)
         }
-        // Without the tab bar the terminal reclaims the home-indicator strip
-        // (PRD §2.2 — the page runs to the very bottom edge). With the bar,
-        // the VStack respects the bottom inset and the bar owns it (its
-        // background extends under the home indicator itself). The keyboard is
-        // ignored on `body` either way: it slides OVER the bar (hiding it) and
-        // never resizes the page (PRD §2.6).
-        .ignoresSafeArea(.container, edges: showsWindowTabs ? [] : .bottom)
+        // The nav bar turns transparent so its strip reads as pane background
+        // too; the system buttons/status text keep floating on top.
+        .toolbarBackground(.hidden, for: .navigationBar)
         // Standard system navigation bar (Liquid Glass on iOS 26, no override):
         // back + session-switcher on the left, the mode switch centered, the ⋯
         // menu on the right. HostSessionsView stops hiding the nav bar for this.
@@ -412,21 +433,55 @@ struct TerminalWrapperView: View {
     @ViewBuilder
     private var voiceOverlay: some View {
         if voiceController.showOverlay {
-            GeometryReader { _ in
+            GeometryReader { geo in
+                let anchor = compassAnchor(in: geo)
+                let press = voiceController.fingerScreenPosition
                 VoiceOverlayView(
                     transcript: voiceController.transcript,
                     activeDirection: voiceController.activeDirection,
                     isRecording: voiceController.isRecording,
-                    fingerOffset: voiceController.fingerOffset
+                    // The marble tracks the real finger, so add back however far
+                    // the anchor was pushed off the press point by clamping —
+                    // otherwise it sits offset by exactly that much.
+                    fingerOffset: CGSize(
+                        width: voiceController.fingerOffset.width + (press.x - anchor.x),
+                        height: voiceController.fingerOffset.height + (press.y - anchor.y))
                 )
-                .position(
-                    x: voiceController.fingerScreenPosition.x,
-                    y: voiceController.fingerScreenPosition.y
-                )
+                .position(anchor)
             }
             .ignoresSafeArea()
             .transition(.scale.combined(with: .opacity))
         }
+    }
+
+    /// Keep the compass on screen when the press starts near an edge. It is
+    /// centered on the touch point, so a press near the top clipped the transcript
+    /// bubble, near the bottom clipped the cancel target (and it collided with the
+    /// floating quick-keys toolbar), and near a side clipped the side targets.
+    ///
+    /// Clamp the ANCHOR rather than the view: the compass keeps its fixed internal
+    /// layout (the four targets stay reachable at known offsets) and just stops
+    /// short of the edges. Only what the content actually needs is reserved —
+    /// clamping by the full half-height would yank the overlay to mid-screen and
+    /// away from the finger.
+    private func compassAnchor(in geo: GeometryProxy) -> CGPoint {
+        typealias M = VoiceCompassView.Metrics
+        let bounds = geo.frame(in: .local)
+        let safe = geo.safeAreaInsets
+        let margin: CGFloat = 8
+        // The toolbar sits at the bottom, so the down target has to clear it too.
+        let bottomReserve = safe.bottom + FloatingQuickKeysToolbar.reservedBand + margin
+
+        let minX = bounds.minX + M.halfWidth + margin
+        let maxX = bounds.maxX - M.halfWidth - margin
+        let minY = bounds.minY + safe.top + M.reachUp + margin
+        let maxY = bounds.maxY - bottomReserve - M.reachDown
+
+        let p = voiceController.fingerScreenPosition
+        // A screen too small for the ideal margins: center on that axis instead of
+        // letting an inverted range flip the clamp.
+        return CGPoint(x: minX <= maxX ? min(max(p.x, minX), maxX) : bounds.midX,
+                       y: minY <= maxY ? min(max(p.y, minY), maxY) : bounds.midY)
     }
 
     @ViewBuilder
@@ -1368,10 +1423,6 @@ final class PaneContainerVC: UIViewController {
         // only the toolbar's own band. Keyboard-INDEPENDENT (PRD §2.6) — a
         // constant layout reserve, not tied to the keyboard.
         //
-        // Respect the TOP inset too: the split view hosts us edge to edge, so
-        // without it the title bar and the first rows of the grid sit under the
-        // navigation bar's glass. It reads 0 when nothing overlaps us, which is
-        // the phone's plain pushed-bar case.
         let insets = view.safeAreaInsets
         return CGRect(x: insets.left, y: insets.top,
                       width: max(0, view.bounds.width - insets.left - insets.right),
@@ -1534,6 +1585,11 @@ extension PaneContainerVC {
             setContentFrame(page)
             single.tiled = false
             single.fixedTerminalCellSize = nil
+            // Focus immersion: the pane fills the screen, so the title strip
+            // (icon + label) is pure chrome over the user's terminal — drop
+            // it. The surface keeps its old geometry: the strip's height stays
+            // reserved as a plain pane-background band, the grid never moves.
+            single.titleBar.isHidden = true
             single.titleBarHeight = TerminalContainerVC.defaultTitleBarHeight
             single.surfaceInsetX = 0
             single.view.frame = CGRect(origin: .zero, size: page)
@@ -1562,6 +1618,9 @@ extension PaneContainerVC {
             if isFocus {
                 vc.tiled = false
                 vc.fixedTerminalCellSize = nil
+                // Same immersion as the single-pane case: no title strip in
+                // focus, the reserved band stays as plain pane background.
+                vc.titleBar.isHidden = true
                 vc.titleBarHeight = TerminalContainerVC.defaultTitleBarHeight
                 vc.surfaceInsetX = 0
                 vc.view.frame = CGRect(origin: .zero, size: page)
@@ -1582,6 +1641,8 @@ extension PaneContainerVC {
                                       frame: CGRect) {
         vc.view.isHidden = false
         vc.tiled = true
+        // Tiled layout always restores the strip the focus layout hid.
+        vc.titleBar.isHidden = false
         vc.titleBarHeight = titleBarHeight
         vc.surfaceInsetX = surfaceInsetX
         vc.fixedTerminalCellSize = fixedCellSize
@@ -2119,6 +2180,7 @@ extension PaneContainerVC {
 /// position every poll, so it's deliberately not used here.)
 struct WindowTabBar: View {
     @ObservedObject var viewModel: TerminalViewModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var pendingClose: TmuxWindowID?
     @State private var showCustomSheet = false
     @State private var pendingMove: TmuxWindowID?
@@ -2166,7 +2228,10 @@ struct WindowTabBar: View {
         }
         .background(
             // The bar owns the bottom inset: paint under the home indicator.
-            Color.bentoShell.ignoresSafeArea(.container, edges: .bottom)
+            // Pane background, not the app shell — in Focus the bar reads as
+            // the terminal's own floor, not chrome floating on it.
+            Color(uiColor: colorScheme == .dark ? STTheme.TermDark.bg : STTheme.TermLight.bg)
+                .ignoresSafeArea(.container, edges: .bottom)
         )
         .overlay(alignment: .top) {
             Rectangle().fill(Color.bentoBorder).frame(height: 1)
