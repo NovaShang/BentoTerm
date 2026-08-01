@@ -32,8 +32,13 @@ struct TerminalWrapperView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showSettings = false
+    /// In-session immersive fullscreen (hides the nav bar; its buttons float
+    /// as glass discs, the session name moves to the bottom strip). Pure UI
+    /// state — deliberately not in the VM (which macOS shares) and not a
+    /// size-class change (which would remount the terminal, see `chrome`).
+    @State private var isFullscreen = false
     @State private var showOnboarding: Bool = GestureOnboardingOverlay.shouldShow
     @State private var sizingResolved = false
     @State private var showMixedFlattenAlert = false
@@ -59,12 +64,50 @@ struct TerminalWrapperView: View {
 
     private var host: Host { viewModel.host }
 
+    // MARK: - Fullscreen
+
+    private func toggleFullscreen() {
+        isFullscreen.toggle()
+    }
+
+    /// iPhone landscape auto-enters fullscreen; portrait auto-exits. A manual
+    /// toggle (button / menu) wins until the next rotation flips the class.
+    private func syncFullscreenToOrientation() {
+        guard !isRegularWidth else { return }   // iPad is manual-only
+        isFullscreen = (verticalSizeClass == .compact)
+    }
+
     /// The pane background as a SwiftUI color — the full-screen backdrop of
     /// the terminal screen (status-bar / nav-bar strips, home-indicator strip)
-    /// and the window tab bar. Mirrors STTheme.term's light/dark resolution
-    /// so it tracks appearance like the UIKit chrome.
+    /// and the window tab bar. Reads the terminal's LIVE reported background
+    /// (via the bridge) so the strips fuse with whatever the terminal actually
+    /// renders; falls back to the theme bg until the first report / after a
+    /// theme change.
     private var paneBgColor: Color {
-        Color(uiColor: colorScheme == .dark ? STTheme.TermDark.bg : STTheme.TermLight.bg)
+        // The terminal's live reported background (via the bridge), FUSED with
+        // the foreground pane's running state — the full-screen backdrop, so
+        // the now-transparent nav bar and window tab bar let it flow through
+        // the top/bottom strips and match the reserved band below the toolbar.
+        // Falls back to the theme bg until the first report / after a theme
+        // change.
+        let bg = paneBridge.terminalBgColor ?? ThemeStore.shared.current.bgColor
+        if let signal = foregroundPaneSignal {
+            return Color(uiColor: STTheme.fusedBackground(bg: bg, state: signal.state,
+                                                          doneUnseen: signal.doneUnseen))
+        }
+        return Color(uiColor: bg)
+    }
+
+    /// The pane the backdrop speaks for (zoomed/focused, else active) and its
+    /// state — same resolution as `PaneContainerVC.effectiveFocusID`. Re-read
+    /// on every body render, which `stateVersion` (bumped each state poll)
+    /// drives, so the backdrop tracks state changes.
+    private var foregroundPaneSignal: (state: PaneState, doneUnseen: Bool)? {
+        let id = viewModel.zoomedPaneID
+            ?? (viewModel.paneViewModels.count == 1 ? viewModel.paneViewModels.first?.paneID : nil)
+            ?? viewModel.activePaneID
+        guard let id, let pvm = viewModel.paneViewModels.first(where: { $0.paneID == id }) else { return nil }
+        return (pvm.paneState, pvm.agentFinishedUnseen)
     }
 
     /// Persistence key for the sizing choice (per host + tmux session).
@@ -84,108 +127,116 @@ struct TerminalWrapperView: View {
     }
 
     var body: some View {
+        terminalChrome
+            .sheet(isPresented: $showSettings) { SettingsView() }
+            .alert("Connection Error", isPresented: $viewModel.showError) {
+                Button("Retry") { viewModel.retry() }
+                Button("Dismiss", role: .cancel) { dismiss() }
+            } message: {
+                Text(viewModel.errorMessage ?? "Unknown error")
+            }
+            .sheet(isPresented: $showSplitSheet) {
+                NewWindowSheet(title: "Split — Path & Command") { path, command in
+                    Task { await viewModel.splitPane(horizontal: true, seed: .custom(path: path, command: command)) }
+                }
+            }
+            .alert(closeWindowAlertTitle, isPresented: Binding(
+                get: { pendingCloseWindow != nil },
+                set: { if !$0 { pendingCloseWindow = nil } }
+            )) {
+                Button("Close Window", role: .destructive) {
+                    if let id = pendingCloseWindow { viewModel.closeWindow(id) }
+                    pendingCloseWindow = nil
+                }
+                Button("Cancel", role: .cancel) { pendingCloseWindow = nil }
+            } message: {
+                Text("The processes running in it will be terminated.")
+            }
+            .alert("Kill this session?", isPresented: $pendingKillSession) {
+                Button("Kill Session", role: .destructive) {
+                    // Leave the screen now; the kill awaits tmux's reply before it
+                    // tears the connection down (see `killSession`), and holding
+                    // the alert open for that round trip would look like a hang.
+                    Task { await viewModel.killSession() }
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Every window and pane in this session is closed and its processes are terminated. This can't be undone.")
+            }
+            .onChange(of: viewModel.isTmuxReady) { _, ready in
+                if ready {
+                    resolveSizing()
+                    // Populate the session switcher (PRD §3.6) once attached.
+                    Task { await viewModel.refreshTmuxSessions() }
+                }
+            }
+            .onAppear { if viewModel.isTmuxReady { resolveSizing() } }
+            // ---- One-shot teaching moments (design doc §6). Each fires at the
+            // user's FIRST encounter with the concept, once per install. ----
+            .onChange(of: viewModel.agentsWaiting) { _, waiting in
+                // The first amber pane is the first time the app "needs" the user:
+                // the moment the color legend lands (§6.2).
+                if waiting > 0, tips.shouldShow(.stateLegend) {
+                    withAnimation { showStateLegend = true }
+                }
+            }
+            .onChange(of: viewModel.agentsWorking) { _, working in
+                handleWorkingChange(working)
+            }
+            .onChange(of: viewModel.isReconnecting) { was, now in
+                // First successful reconnect → the persistence concept (§6.5).
+                if was, !now, viewModel.isTmuxReady, tips.consume(.persistence) {
+                    showTipToast("Your agents kept working while you were away — the tmux session runs on the host, not here. It stays alive until you close it.")
+                }
+            }
+            .onChange(of: showsWindowTabs) { _, shown in
+                if shown, tips.consume(.windowTabsIntro) {
+                    showTipToast("Each tab is a tmux window holding one pane — switch with the tabs below. Each tab's dot is that window's status.")
+                }
+            }
+            .onChange(of: viewModel.windows.count) { _, _ in maybeShowSidebarIntro() }
+            .onChange(of: viewModel.sessionMode) { _, _ in maybeShowSidebarIntro() }
+            .onChange(of: voiceController.voiceSendTotal) { _, n in
+                handleVoiceSendMilestone(n)
+            }
+            .alert("Better Chinese recognition?", isPresented: $showQwenSuggestion) {
+                Button("Switch") {
+                    UserDefaults.standard.set("qwen", forKey: "speech_engine")
+                }
+                Button("Keep current", role: .cancel) {}
+            } message: {
+                Text("You seem to speak Chinese — the Qwen engine is much more accurate for 中文 and mixed 中英. Free, no setup, switch back anytime in Settings.")
+            }
+    }
+
+    /// The terminal plus its floating chrome, kept separate from the modal /
+    /// teaching chain so the compiler can type-check each half on its own.
+    private var terminalChrome: some View {
         chrome
             .ignoresSafeArea(.keyboard)
             .onAppear { wireVoiceController() }
-        .overlay(alignment: .top) { reconnectingBanner }
-        .overlay { voiceOverlay }
-        // The managed input surface: an inline bar riding the keyboard's top
-        // edge (NOT a modal — the terminal stays visible and pans clear, so
-        // you compose while watching output). ComposeBar tracks the keyboard
-        // frame itself; the hit target is just the bar, the rest of the
-        // overlay passes touches through to the panes.
-        .overlay(alignment: .bottom) {
-            if voiceController.showPreview {
-                ComposeBar(controller: voiceController)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            // iPhone landscape → auto-fullscreen; portrait → auto-exit.
+            .onChange(of: verticalSizeClass) { _, _ in syncFullscreenToOrientation() }
+            .overlay(alignment: .top) { reconnectingBanner }
+            .overlay { voiceOverlay }
+            // The managed input surface: an inline bar riding the keyboard's top
+            // edge (NOT a modal — the terminal stays visible and pans clear, so
+            // you compose while watching output). ComposeBar tracks the keyboard
+            // frame itself; the hit target is just the bar, the rest of the
+            // overlay passes touches through to the panes.
+            .overlay(alignment: .bottom) {
+                if voiceController.showPreview {
+                    ComposeBar(controller: voiceController)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
-        }
-        .animation(.easeInOut(duration: 0.2), value: voiceController.showPreview)
-        .overlay { onboardingOverlay }
-        .overlay(alignment: .top) { tipToastView }
-        .overlay { stateLegendOverlay }
-        .overlay(alignment: .top) { parallelTipCard }
-        .overlay(alignment: .bottom) { voiceAdvancedTipCard }
-        .sheet(isPresented: $showSettings) { SettingsView() }
-        .alert("Connection Error", isPresented: $viewModel.showError) {
-            Button("Retry") { viewModel.retry() }
-            Button("Dismiss", role: .cancel) { dismiss() }
-        } message: {
-            Text(viewModel.errorMessage ?? "Unknown error")
-        }
-        .sheet(isPresented: $showSplitSheet) {
-            NewWindowSheet(title: "Split — Path & Command") { path, command in
-                Task { await viewModel.splitPane(horizontal: true, seed: .custom(path: path, command: command)) }
-            }
-        }
-        .alert(closeWindowAlertTitle, isPresented: Binding(
-            get: { pendingCloseWindow != nil },
-            set: { if !$0 { pendingCloseWindow = nil } }
-        )) {
-            Button("Close Window", role: .destructive) {
-                if let id = pendingCloseWindow { viewModel.closeWindow(id) }
-                pendingCloseWindow = nil
-            }
-            Button("Cancel", role: .cancel) { pendingCloseWindow = nil }
-        } message: {
-            Text("The processes running in it will be terminated.")
-        }
-        .alert("Kill this session?", isPresented: $pendingKillSession) {
-            Button("Kill Session", role: .destructive) {
-                // Leave the screen now; the kill awaits tmux's reply before it
-                // tears the connection down (see `killSession`), and holding
-                // the alert open for that round trip would look like a hang.
-                Task { await viewModel.killSession() }
-                dismiss()
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Every window and pane in this session is closed and its processes are terminated. This can't be undone.")
-        }
-        .onChange(of: viewModel.isTmuxReady) { _, ready in
-            if ready {
-                resolveSizing()
-                // Populate the session switcher (PRD §3.6) once attached.
-                Task { await viewModel.refreshTmuxSessions() }
-            }
-        }
-        .onAppear { if viewModel.isTmuxReady { resolveSizing() } }
-        // ---- One-shot teaching moments (design doc §6). Each fires at the
-        // user's FIRST encounter with the concept, once per install. ----
-        .onChange(of: viewModel.agentsWaiting) { _, waiting in
-            // The first amber pane is the first time the app "needs" the user:
-            // the moment the color legend lands (§6.2).
-            if waiting > 0, tips.shouldShow(.stateLegend) {
-                withAnimation { showStateLegend = true }
-            }
-        }
-        .onChange(of: viewModel.agentsWorking) { _, working in
-            handleWorkingChange(working)
-        }
-        .onChange(of: viewModel.isReconnecting) { was, now in
-            // First successful reconnect → the persistence concept (§6.5).
-            if was, !now, viewModel.isTmuxReady, tips.consume(.persistence) {
-                showTipToast("Your agents kept working while you were away — the tmux session runs on the host, not here. It stays alive until you close it.")
-            }
-        }
-        .onChange(of: showsWindowTabs) { _, shown in
-            if shown, tips.consume(.windowTabsIntro) {
-                showTipToast("Each tab is a tmux window holding one pane — switch with the tabs below. Each tab's dot is that window's status.")
-            }
-        }
-        .onChange(of: viewModel.windows.count) { _, _ in maybeShowSidebarIntro() }
-        .onChange(of: viewModel.sessionMode) { _, _ in maybeShowSidebarIntro() }
-        .onChange(of: voiceController.voiceSendTotal) { _, n in
-            handleVoiceSendMilestone(n)
-        }
-        .alert("Better Chinese recognition?", isPresented: $showQwenSuggestion) {
-            Button("Switch") {
-                UserDefaults.standard.set("qwen", forKey: "speech_engine")
-            }
-            Button("Keep current", role: .cancel) {}
-        } message: {
-            Text("You seem to speak Chinese — the Qwen engine is much more accurate for 中文 and mixed 中英. Free, no setup, switch back anytime in Settings.")
-        }
+            .animation(.easeInOut(duration: 0.2), value: voiceController.showPreview)
+            .overlay { onboardingOverlay }
+            .overlay(alignment: .top) { tipToastView }
+            .overlay { stateLegendOverlay }
+            .overlay(alignment: .top) { parallelTipCard }
+            .overlay(alignment: .bottom) { voiceAdvancedTipCard }
     }
 
     /// Everything sizing-related now comes from the server (the view model
@@ -344,13 +395,18 @@ struct TerminalWrapperView: View {
             // the bar (hiding it) and never resizes the page (PRD §2.6).
             .ignoresSafeArea(.container, edges: showsWindowTabs ? [] : .bottom)
         }
-        // The nav bar turns transparent so its strip reads as pane background
-        // too; the system buttons/status text keep floating on top.
-        .toolbarBackground(.hidden, for: .navigationBar)
+        // Fullscreen: drop the nav bar (its buttons float as glass discs
+        // instead, the session name moves to the bottom strip). Hiding the bar
+        // shrinks safeAreaInsets.top to the status bar, so the grid reclaims
+        // the bar's 44pt by itself — pageRect needs no change.
+        .modifier(FullscreenNavBar(isFullscreen: isFullscreen))
         // Standard system navigation bar (Liquid Glass on iOS 26, no override):
         // back + session-switcher on the left, the mode switch centered, the ⋯
         // menu on the right. HostSessionsView stops hiding the nav bar for this.
         .navigationBarTitleDisplayMode(.inline)
+        // Transparent nav bar: the terminal background flows through so the top
+        // fuses with the terminal instead of wearing the opaque app-shell color.
+        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button(action: backTapped) {
@@ -379,9 +435,35 @@ struct TerminalWrapperView: View {
                     .accessibilityLabel("Files")
                 }
             }
+            // iPad only: the fullscreen toggle lives in the bar next to the
+            // overflow menu (iPhone folds it into the ⋯ menu instead).
+            if isRegularWidth {
+                ToolbarItem(placement: .topBarTrailing) {
+                    fullscreenToggleButton
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 sessionMenu
             }
+        }
+        // Fullscreen floating chrome (glass discs over the pane background):
+        // back top-left; Files + ⋯ top-right; the session name in the bottom
+        // (non-safe) strip. One overlay to keep this modifier chain type-checkable.
+        .overlay { if isFullscreen { fullscreenOverlay } }
+    }
+
+    /// Fullscreen floating chrome as one overlay: top row (back left, Files +
+    /// ⋯ right) above a spacer, session name resting in the bottom strip.
+    private var fullscreenOverlay: some View {
+        VStack {
+            HStack {
+                fullscreenBackButton
+                Spacer()
+                fullscreenTrailingButtons
+            }
+            .padding(.top, 8)
+            Spacer()
+            fullscreenSessionName
         }
     }
 
@@ -403,6 +485,7 @@ struct TerminalWrapperView: View {
             voiceController: voiceController,
             sizingMode: viewModel.sizingMode,
             sizingOwnerIsMe: viewModel.sizingOwnerIsMe,
+            isFullscreen: isFullscreen,
             bridge: paneBridge
         )
     }
@@ -739,15 +822,26 @@ struct TerminalWrapperView: View {
     /// windows, at the very bottom — so the menu never grows long enough to
     /// scroll. Kill Session / Close Window still confirm first (alerts below,
     /// which present after the menu dismisses).
-    private var sessionMenu: some View {
-        Menu {
+    ///
+    /// Split into content + label so the fullscreen floating chrome can render
+    /// the same menu behind a glass disc (a Menu's label is the only part that
+    /// can carry the glass).
+    private var sessionMenuContent: some View {
+        Group {
             // Same order as the Mac pane menu: create, then arrange, then the
             // session-wide policy — so the two platforms can be described with
             // one sentence instead of two.
+            Button(action: toggleFullscreen) {
+                Label(isFullscreen ? "Exit Fullscreen" : "Fullscreen",
+                      systemImage: isFullscreen ? "arrow.down.right.and.arrow.up.left"
+                                                : "arrow.up.left.and.arrow.down.right")
+            }
             if viewModel.isTmuxReady {
                 // The phone has no room for the segmented switch in the bar,
                 // so the layout choice lives here instead (see modeSection).
-                if !isRegularWidth { modeSection }
+                // Fullscreen shows it everywhere (the iPad bar's toggle is
+                // floating then, and there is no bar to host the switch).
+                if !isRegularWidth || isFullscreen { modeSection }
                 splitSection
                 layoutSection
                 sessionSizeSection
@@ -761,10 +855,77 @@ struct TerminalWrapperView: View {
                     Label("Kill Session", systemImage: "xmark.circle")
                 }
             }
-        } label: {
+        }
+    }
+
+    private var sessionMenu: some View {
+        Menu { sessionMenuContent } label: {
             Image(systemName: "ellipsis.circle")
                 .font(.system(size: 20))
         }
+    }
+
+    // MARK: - Fullscreen floating chrome
+
+    /// The nav bar's buttons rehosted as floating glass discs over the pane
+    /// background while fullscreen: back top-left, Files + ⋯ top-right, and
+    /// the session name in the bottom (non-safe) strip.
+
+    /// Bar button (iPad) — also the label source for the floating discs.
+    private var fullscreenToggleButton: some View {
+        Button(action: toggleFullscreen) {
+            Image(systemName: isFullscreen ? "arrow.down.right.and.arrow.up.left"
+                                           : "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 16, weight: .medium))
+        }
+        .accessibilityLabel(isFullscreen ? "Exit Fullscreen" : "Fullscreen")
+    }
+
+    private var fullscreenBackButton: some View {
+        Button(action: backTapped) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color.bentoInk)
+                .frame(width: 40, height: 40)
+        }
+        .modifier(GlassChrome(shape: .circle))
+        .accessibilityLabel("Sessions")
+        .padding(.leading, 12)
+    }
+
+    private var fullscreenTrailingButtons: some View {
+        HStack(spacing: 10) {
+            if viewModel.isTmuxReady {
+                Button { paneBridge.container?.presentFileBrowser() } label: {
+                    Image(systemName: "folder")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Color.bentoInk)
+                        .frame(width: 40, height: 40)
+                }
+                .modifier(GlassChrome(shape: .circle))
+                .accessibilityLabel("Files")
+            }
+            Menu { sessionMenuContent } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Color.bentoInk)
+                    .frame(width: 40, height: 40)
+                    .modifier(GlassChrome(shape: .circle))
+            }
+        }
+        .padding(.trailing, 12)
+    }
+
+    /// The session name, resting in the bottom non-safe strip (home-indicator
+    /// band) while fullscreen — the nav bar is gone, so the name floats there.
+    private var fullscreenSessionName: some View {
+        Text(viewModel.activeTmuxSessionName ?? host.displayName)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Color.bentoInkDim)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .modifier(GlassChrome(shape: .capsule))
+            .padding(.bottom, 6)
     }
 
 
@@ -905,8 +1066,38 @@ struct TerminalWrapperView: View {
 /// Lets the SwiftUI chrome reach the live pane container. Only the container
 /// knows which pane is focused and how to resolve its file context, so the
 /// Files button has to ask it rather than rebuild that itself.
-@MainActor final class PaneContainerBridge: ObservableObject {
+@MainActor final class PaneContainerBridge: NSObject, ObservableObject {
     weak var container: PaneContainerVC?
+
+    /// The terminal's live reported background, so the SwiftUI backdrop
+    /// (status-bar / nav-bar / home-indicator strips) fuses with the terminal
+    /// instead of a static legacy hex. `nil` until the first surface report and
+    /// after a theme change (surfaces re-report once the config reloads), at
+    /// which point `paneBgColor` falls back to the theme bg.
+    @Published var terminalBgColor: UIColor?
+
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(surfaceBackgroundChanged),
+            name: .ghosttySurfaceBackgroundChanged, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(themeChanged),
+            name: .terminalThemeChanged, object: nil)
+    }
+
+    @objc private func surfaceBackgroundChanged(_ note: Notification) {
+        guard let surface = note.object as? GhosttyTerminalSurface,
+              container?.owns(surface: surface) == true,
+              let color = surface.reportedBackgroundColor else { return }
+        terminalBgColor = color
+    }
+
+    @objc private func themeChanged() {
+        terminalBgColor = nil   // surfaces re-report after the config reload
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
 }
 
 struct SinglePaneSurface: UIViewControllerRepresentable {
@@ -919,6 +1110,10 @@ struct SinglePaneSurface: UIViewControllerRepresentable {
     /// Under `.thisDevice` only the owner may push a size, and only the owner's
     /// viewport matches the window — everyone else letterboxes.
     var sizingOwnerIsMe: Bool
+    /// Fullscreen lets the grid reclaim the hidden nav bar's strip (pageRect
+    /// reaches up into it). Not @ObservedObject-observed state: it only
+    /// re-lays out the container, which updateUIViewController drives anyway.
+    var isFullscreen: Bool
     /// Handed back to the SwiftUI chrome so the Files button can reach the
     /// focused pane's file context.
     let bridge: PaneContainerBridge
@@ -930,6 +1125,7 @@ struct SinglePaneSurface: UIViewControllerRepresentable {
         vc.voiceController = voiceController
         vc.sizingMode = sizingMode
         vc.sizingOwnerIsMe = sizingOwnerIsMe
+        vc.isFullscreen = isFullscreen
 
         if viewModel.isTmuxReady {
             vc.setupTmuxPanes()
@@ -954,6 +1150,7 @@ struct SinglePaneSurface: UIViewControllerRepresentable {
         bridge.container = vc
         vc.sizingMode = sizingMode
         vc.sizingOwnerIsMe = sizingOwnerIsMe
+        vc.isFullscreen = isFullscreen
         if viewModel.isTmuxReady {
             if vc.singlePaneVC != nil {
                 vc.setupTmuxPanes()
@@ -1003,6 +1200,14 @@ final class PaneContainerVC: UIViewController {
     /// Non-tmux single pane controller, bound directly to TerminalViewModel.
     private(set) var singlePaneVC: TerminalContainerVC?
 
+    /// Does this container host the given surface? The SwiftUI bridge scopes
+    /// background reports to THIS screen's panes (a tmux session's panes share
+    /// one bg, but a second window's session should not recolor this one).
+    func owns(surface: GhosttyTerminalSurface) -> Bool {
+        if let s = singlePaneVC?.surface, s === surface { return true }
+        return paneControllers.values.contains { $0.surface === surface }
+    }
+
     private let floatingToolbar = FloatingQuickKeysToolbar()
     private let findBar = PaneFindBar()
     /// The pane the find bar is searching. Held so the bar keeps talking to the
@@ -1037,6 +1242,11 @@ final class PaneContainerVC: UIViewController {
 
     var sizingMode: TerminalSizingMode = .tracking {
         didSet { if oldValue != sizingMode { view.setNeedsLayout() } }
+    }
+    /// Fullscreen shrinks the page's top inset to the status bar (the grid
+    /// reclaims the hidden nav bar's strip). Set by the SwiftUI wrapper.
+    var isFullscreen = false {
+        didSet { if oldValue != isFullscreen { view.setNeedsLayout() } }
     }
     var sizingOwnerIsMe = false {
         didSet { if oldValue != sizingOwnerIsMe { view.setNeedsLayout() } }
@@ -1087,7 +1297,7 @@ final class PaneContainerVC: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = STTheme.term.bg
+        view.backgroundColor = STTheme.term
         contentView.clipsToBounds = false
         view.addSubview(contentView)
         contentView.addSubview(dividerOverlay)
@@ -1148,7 +1358,7 @@ final class PaneContainerVC: UIViewController {
     }
 
     private func syncBackgroundToActivePane() {
-        let bg = focusedOrActiveVC?.view.backgroundColor ?? STTheme.term.bg
+        let bg = focusedOrActiveVC?.view.backgroundColor ?? STTheme.term
         guard view.backgroundColor != bg else { return }
         UIView.animate(withDuration: 0.26) { self.view.backgroundColor = bg }
     }
@@ -1379,6 +1589,7 @@ final class PaneContainerVC: UIViewController {
     }
 
     private func pushClientSize(cols: Int, rows: Int) {
+        dlog("[pushClientSize] \(cols)x\(rows)")
         guard cols > 0, rows > 0 else { return }
         // PRD §2.6 resize whitelist: a session owned by ANOTHER device is the
         // only case where we stay quiet — tmux ignores `refresh-client` under
@@ -1423,11 +1634,28 @@ final class PaneContainerVC: UIViewController {
         // only the toolbar's own band. Keyboard-INDEPENDENT (PRD §2.6) — a
         // constant layout reserve, not tied to the keyboard.
         //
+        // Fullscreen: the nav bar is hidden but SwiftUI keeps THIS view's frame
+        // (and thus its insets) where it was — the grid would never grow. Reach
+        // up into the old nav-bar strip ourselves: page.y = statusBarTop −
+        // viewTopInWindow, i.e. negative (the content view is allowed to stick
+        // out above this view's bounds; only the status strip above it stays
+        // untouchable, which is fine — it's system chrome).
         let insets = view.safeAreaInsets
-        return CGRect(x: insets.left, y: insets.top,
-                      width: max(0, view.bounds.width - insets.left - insets.right),
-                      height: max(0, view.bounds.height - insets.top
-                                     - FloatingQuickKeysToolbar.reservedBand))
+        let top: CGFloat
+        if isFullscreen, let window = view.window {
+            let viewTopInWindow = view.convert(.zero, to: window).y
+            let statusBarHeight = window.windowScene?.statusBarManager?.statusBarFrame.height ?? 0
+            top = statusBarHeight - viewTopInWindow
+        } else {
+            top = insets.top
+        }
+        let result = CGRect(x: insets.left, y: top,
+                            width: max(0, view.bounds.width - insets.left - insets.right),
+                            height: max(0, view.bounds.height - top
+                                           - FloatingQuickKeysToolbar.reservedBand))
+        let winTop = view.window.map { view.convert(.zero, to: $0).y } ?? -1
+        dlog("[pageRect] frame=\(view.frame) winTop=\(winTop) full=\(isFullscreen) bounds=\(view.bounds) insets=\(insets) top=\(top) page=\(result)")
+        return result
     }
 
     override func viewDidLayoutSubviews() {
@@ -1464,10 +1692,6 @@ final class PaneContainerVC: UIViewController {
 
     // MARK: - Page sizing & content offset
 
-    /// Focus / single-pane title bar height (a comfortable touch target). Tiled
-    /// mode uses one cell instead — see `layoutTiles`.
-    private var titleBarH: CGFloat { TerminalContainerVC.defaultTitleBarHeight }
-
     /// Base visibility: a pane exists to receive keys. The toolbar additionally
     /// hides while the keyboard is up — the docked accessory key bar covers keys
     /// then, and the toolbar's reserved band sits behind the keyboard anyway.
@@ -1500,11 +1724,13 @@ extension PaneContainerVC {
         else { return }
         let inView = view.convert(frameValue, from: nil)
         keyboardInsetBottom = max(0, view.bounds.maxY - inView.minY)
+        dlog("[keyboard] show inset=\(keyboardInsetBottom)")
         updateFloatingToolbarVisibility()
         animateForKeyboard(note)
     }
 
     @objc private func keyboardWillHide(_ note: Notification) {
+        dlog("[keyboard] hide")
         keyboardInsetBottom = 0
         updateFloatingToolbarVisibility()
         animateForKeyboard(note)
@@ -1586,11 +1812,11 @@ extension PaneContainerVC {
             single.tiled = false
             single.fixedTerminalCellSize = nil
             // Focus immersion: the pane fills the screen, so the title strip
-            // (icon + label) is pure chrome over the user's terminal — drop
-            // it. The surface keeps its old geometry: the strip's height stays
-            // reserved as a plain pane-background band, the grid never moves.
+            // (icon + label) is pure chrome over the user's terminal — drop it
+            // entirely (zero height), and the surface grows into its space
+            // (tmux gets one or two extra rows — that's the point).
             single.titleBar.isHidden = true
-            single.titleBarHeight = TerminalContainerVC.defaultTitleBarHeight
+            single.titleBarHeight = 0
             single.surfaceInsetX = 0
             single.view.frame = CGRect(origin: .zero, size: page)
             return
@@ -1619,9 +1845,9 @@ extension PaneContainerVC {
                 vc.tiled = false
                 vc.fixedTerminalCellSize = nil
                 // Same immersion as the single-pane case: no title strip in
-                // focus, the reserved band stays as plain pane background.
+                // focus — zero height, and the surface grows into the space.
                 vc.titleBar.isHidden = true
-                vc.titleBarHeight = TerminalContainerVC.defaultTitleBarHeight
+                vc.titleBarHeight = 0
                 vc.surfaceInsetX = 0
                 vc.view.frame = CGRect(origin: .zero, size: page)
                 vc.titleBar.isActivePane = true
@@ -1728,8 +1954,9 @@ extension PaneContainerVC {
         guard windowSizeIsForeign, let ppc = pointsPerCell, let (c, r) = cols else {
             return rect.size
         }
+        // No title strip in focus anymore — the page is exactly the grid.
         return CGSize(width: CGFloat(c) * ppc.width,
-                      height: CGFloat(r) * ppc.height + titleBarH)
+                      height: CGFloat(r) * ppc.height)
     }
 
     /// Page size for Tiles. We drive the size → viewport; someone else does →
@@ -1761,6 +1988,7 @@ extension PaneContainerVC {
         contentOffset = CGPoint(x: clampedX, y: clampedY)
         contentView.frame = CGRect(x: rect.minX + clampedX, y: rect.minY + clampedY,
                                    width: page.width, height: page.height)
+        dlog("[contentFrame] page=\(page) offset=\(contentOffset) frame=\(contentView.frame) occ=\(bottomOcclusion)")
     }
 
     private func applyContentFrame() {
@@ -2180,7 +2408,6 @@ extension PaneContainerVC {
 /// position every poll, so it's deliberately not used here.)
 struct WindowTabBar: View {
     @ObservedObject var viewModel: TerminalViewModel
-    @Environment(\.colorScheme) private var colorScheme
     @State private var pendingClose: TmuxWindowID?
     @State private var showCustomSheet = false
     @State private var pendingMove: TmuxWindowID?
@@ -2227,11 +2454,11 @@ struct WindowTabBar: View {
             }
         }
         .background(
-            // The bar owns the bottom inset: paint under the home indicator.
-            // Pane background, not the app shell — in Focus the bar reads as
-            // the terminal's own floor, not chrome floating on it.
-            Color(uiColor: colorScheme == .dark ? STTheme.TermDark.bg : STTheme.TermLight.bg)
-                .ignoresSafeArea(.container, edges: .bottom)
+            // Transparent: the terminal background (paneBgColor behind) flows
+            // through the bar (and under the home indicator — the backdrop
+            // already fills it), so the floor fuses with the terminal instead
+            // of wearing a hardcoded hex.
+            Color.clear
         )
         .overlay(alignment: .top) {
             Rectangle().fill(Color.bentoBorder).frame(height: 1)
@@ -2576,5 +2803,26 @@ final class TileDividerOverlay: UIView {
             path.addLine(to: CGPoint(x: d.hotRect.maxX, y: pos))
         }
         path.stroke()
+    }
+}
+
+/// Hides the navigation bar while fullscreen; untouched otherwise. iOS 26's
+/// `.automatic` visibility changes the content safe area (shrinking the
+/// container view — observed on a device), so non-fullscreen must not touch
+/// the bar at all. iOS 18+ API with a deployment-target-17 fallback.
+private struct FullscreenNavBar: ViewModifier {
+    var isFullscreen: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isFullscreen {
+            if #available(iOS 18.0, *) {
+                content.toolbarVisibility(.hidden, for: .navigationBar)
+            } else {
+                content.toolbar(.hidden, for: .navigationBar)
+            }
+        } else {
+            content
+        }
     }
 }

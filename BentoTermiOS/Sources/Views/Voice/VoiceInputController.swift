@@ -439,7 +439,8 @@ struct ComposeBar: View {
 /// Liquid-glass chrome for the compose bar's elements on iOS 26+, falling back
 /// to the flat bento-surface look on earlier systems (deployment target 17).
 /// `tint` colors the glass (the send button's emerald); nil = plain glass.
-private struct GlassChrome: ViewModifier {
+/// Internal (not private) so the fullscreen floating buttons reuse it.
+struct GlassChrome: ViewModifier {
     enum Shape { case circle, capsule, field }
     var shape: Shape
     var tint: Color?

@@ -34,6 +34,13 @@ final class TerminalContainerVC: UIViewController {
     /// the voice long-press all reach the surface underneath.
     private let stateTint = UIView()
 
+    /// The engine's ACTUALLY rendered background (initial theme resolution,
+    /// config reload, or a runtime OSC 11) — the only honest source for chrome
+    /// that must fuse with the terminal. Mirrors the macOS window host. `nil`
+    /// until the first report, and cleared on theme/appearance change so a stale
+    /// value can't outlive a config reload (surfaces re-report once they render).
+    private var reportedBgColor: UIColor?
+
     /// Scroll-bookmark jump control, hugging the right edge of the surface. Two
     /// stacked chevrons that appear only when a jump in that direction exists.
     private let markPager = ScrollMarkPager()
@@ -119,7 +126,8 @@ final class TerminalContainerVC: UIViewController {
     /// Tiled mode: the container owns sizing (it computes one tmux client size
     /// for the whole viewport and sizes each surface to its exact tmux cell
     /// geometry). When true this VC does NOT push its own size to tmux. Also
-    /// drives the title bar's look (green chrome vs. blend into the terminal).
+    /// drives the title bar's look (fused state band vs. blend into the
+    /// terminal background).
     var tiled = false {
         didSet { titleBar.isTiled = tiled }
     }
@@ -156,7 +164,7 @@ final class TerminalContainerVC: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = STTheme.term.bg
+        view.backgroundColor = STTheme.term
         // Tiled mode sizes the surface one cell larger than the pane (see the
         // container) so ghostty doesn't drop a column; clip the overflow.
         view.clipsToBounds = true
@@ -202,6 +210,7 @@ final class TerminalContainerVC: UIViewController {
         super.traitCollectionDidChange(previous)
         guard traitCollection.userInterfaceStyle != previous?.userInterfaceStyle else { return }
         ThemeStore.shared.updateSystemIsDark(traitCollection.userInterfaceStyle == .dark)
+        reportedBgColor = nil   // appearance flip → surfaces re-report the new slot
         applyTheme()
         titleBar.recolor()
         applyPaneBorder(active: paneIsActive)
@@ -220,6 +229,7 @@ final class TerminalContainerVC: UIViewController {
             surface.frame = CGRect(x: 0, y: tbh, width: view.bounds.width,
                                    height: max(0, view.bounds.height - tbh))
         }
+        dlog("[paneLayout] tbh=\(tbh) view=\(view.bounds) surface=\(surface.frame)")
         stateTint.frame = surface.frame
         layoutRendererHealthBanner()
         layoutMarkPager()
@@ -276,7 +286,7 @@ final class TerminalContainerVC: UIViewController {
         let tbh = titleBarHeight
         titleBar.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: tbh)
         titleBar.autoresizingMask = [.flexibleWidth, .flexibleBottomMargin]
-        titleBar.surfaceColor = view.backgroundColor ?? STTheme.term.bg
+        titleBar.surfaceColor = view.backgroundColor ?? STTheme.term
         // The title bar is now just [● state-dot] [title]. Zoom + the pane menu
         // live on the floating toolbar (the strip is one cell tall in tiled
         // mode — too short to host touch targets). See `paneMenu` / onToggleZoom.
@@ -596,17 +606,11 @@ final class TerminalContainerVC: UIViewController {
         titleBar.isActivePane = active
         applyPaneBorder(active: active)
 
-        // Match ghostty's ACTUAL rendered background so the reserved toolbar band
-        // fuses with the terminal (System renders ghostty's default, not
-        // `theme.bg`). The per-state signal comes from the translucent `stateTint`
-        // wash on top of the surface, not from this base color.
-        let bgColor = resolvedTerminalBackground()
-        UIView.animate(withDuration: 0.26) {
-            self.view.backgroundColor = bgColor
-            self.surface.backgroundColor = bgColor
-            self.titleBar.surfaceColor = bgColor
-            self.stateTint.backgroundColor = state.tintUIColor ?? .clear
-        }
+        // The pane surround (and, via syncBackgroundToActivePane, the reserved
+        // band below the toolbar) FUSES the terminal bg with the pane's running
+        // state; the surface keeps the plain terminal bg, its per-state signal
+        // staying the translucent stateTint wash on top.
+        applyBackgrounds(animated: true)
     }
 
     /// Last-applied active state, so theme/layout changes can re-derive the
@@ -812,9 +816,19 @@ extension TerminalContainerVC {
         NotificationCenter.default.addObserver(
             self, selector: #selector(fontDidChange),
             name: UIApplication.didBecomeActiveNotification, object: nil)
+        // The engine reported the background it's ACTUALLY rendering (initial
+        // resolution, config reload, or a runtime OSC 11) — the only honest
+        // source for chrome that must fuse with the terminal. Mirrors the macOS
+        // window host's surfaceBackgroundChanged subscription.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(surfaceBackgroundChanged),
+            name: .ghosttySurfaceBackgroundChanged, object: nil)
     }
 
-    @objc private func themeDidChange() { applyTheme(); titleBar.recolor(); applyPaneBorder(active: paneIsActive) }
+    @objc private func themeDidChange() {
+        reportedBgColor = nil   // surfaces re-report after the config reload
+        applyTheme(); titleBar.recolor(); applyPaneBorder(active: paneIsActive)
+    }
     @objc private func fontDidChange() { applyTheme() }
 
     /// Build the engine-agnostic theme from the current ThemeStore selection.
@@ -834,31 +848,48 @@ extension TerminalContainerVC {
         )
     }
 
-    /// The terminal's true background. For explicit themes it's `theme.bgColor`;
-    /// the dark "System" theme writes no background to ghostty (it renders
-    /// ghostty's built-in default, not `theme.bg`), so read that back off the
-    /// surface — otherwise the reserved toolbar band and the blend title bar show
-    /// a color the terminal never renders, leaving a visible seam.
     private func resolvedTerminalBackground() -> UIColor {
-        if ThemeStore.shared.current.id == TerminalColorTheme.systemID,
-           let bg = surface?.effectiveBackgroundColor {
-            return bg
+        reportedBgColor ?? ThemeStore.shared.current.bgColor
+    }
+
+    /// Push the current terminal bg + pane state onto the container surround,
+    /// the surface, the title bar (whose fused band re-derives from `surfaceColor`),
+    /// and the state wash. Animated on state change, instant on bg reports /
+    /// theme reapplies.
+    private func applyBackgrounds(animated: Bool) {
+        let bgColor = resolvedTerminalBackground()
+        let surround = STTheme.fusedBackground(
+            bg: bgColor, state: titleBar.paneState, doneUnseen: titleBar.agentFinishedUnseen)
+        let tint = titleBar.paneState.tintUIColor ?? .clear
+        let apply = {
+            self.view.backgroundColor = surround
+            self.surface.backgroundColor = bgColor
+            self.titleBar.surfaceColor = bgColor
+            self.stateTint.backgroundColor = tint
         }
-        return ThemeStore.shared.current.bgColor
+        if animated { UIView.animate(withDuration: 0.26, animations: apply) } else { apply() }
+    }
+
+    /// The engine reported a new bg (or the theme/appearance re-applied) —
+    /// re-derive everything from the current pane state, without animating.
+    private func applyTerminalBackground() {
+        applyBackgrounds(animated: false)
+    }
+
+    @objc private func surfaceBackgroundChanged(_ note: Notification) {
+        guard let s = note.object as? GhosttyTerminalSurface,
+              s === surface,
+              let color = s.reportedBackgroundColor else { return }
+        reportedBgColor = color
+        applyTerminalBackground()
     }
 
     /// Apply the user-selected color theme.
     private func applyTheme() {
         surface.applyTheme(currentTerminalTheme())
-
-        // Match ghostty's ACTUAL rendered background so the reserved toolbar band
-        // and the blend title bar fuse with the terminal.
-        let bgColor = resolvedTerminalBackground()
-        view.backgroundColor = bgColor
-        surface.backgroundColor = bgColor
-        // Blend (non-tiled) mode tracks the terminal background; tiled mode
-        // ignores this and uses its own green/gray chrome (see PaneTitleBar).
-        titleBar.surfaceColor = bgColor
+        // The surface re-reports its bg once the new config renders; until then
+        // `resolvedTerminalBackground` falls back to the theme bg.
+        applyTerminalBackground()
     }
 }
 
@@ -1504,10 +1535,12 @@ final class PaneTitleBar: UIView {
         didSet { if oldValue != isTiled { updateChrome() } }
     }
 
-    /// Terminal background, used only in blend (non-tiled) mode so a fullscreen
-    /// pane's title bar flows into the terminal. Ignored in tiled mode.
-    var surfaceColor: UIColor = STTheme.term.bg {
-        didSet { if !isTiled { backgroundColor = surfaceColor } }
+    /// The terminal's reported background. Drives the fused title band in BOTH
+    /// modes — the band is this bg blended toward the state accent, so a bg
+    /// report (or theme/appearance change) re-derives the whole band via
+    /// `updateChrome`.
+    var surfaceColor: UIColor = STTheme.term {
+        didSet { updateChrome() }
     }
 
     override init(frame: CGRect) {
@@ -1555,23 +1588,24 @@ final class PaneTitleBar: UIView {
         updateChrome()
     }
 
-    /// Tiled: band + text track the pane state (green / amber, neutral for idle),
-    /// brightening when active — mirrors the macOS host. Blend (focus / single
-    /// pane): the title bar flows into the terminal background, text brightens
-    /// only when active.
+    /// The title band FUSES with the terminal's real background: the bg blended
+    /// toward the state accent (working/awaiting/done), or nudged in luminance
+    /// for a faint neutral band when idle so the bento grid stays legible. Tiled
+    /// mode strengthens the active pane; blend (focus / single) mode lets the
+    /// band dissolve into the bg. Ink keys off the bg's luminance so it stays
+    /// legible even when a TUI repaints the bg at runtime.
     private func updateChrome() {
+        // Done-unseen wins the band, otherwise the per-state color (nil for
+        // idle → faint neutral band) — the macOS chrome's precedence.
+        let accent: UIColor? = agentFinishedUnseen
+            ? PaneState.uiColor(hex: PaneState.doneUnseenHex)
+            : paneState.chromeAccentUIColor
         if isTiled {
-            // Done-unseen wins the band, otherwise the per-state color (nil for
-            // idle → neutral chrome) — the macOS chrome's precedence.
-            let accent = agentFinishedUnseen
-                ? PaneState.uiColor(hex: PaneState.doneUnseenHex)
-                : paneState.chromeAccentUIColor
-            backgroundColor = STTheme.titleBand(accent: accent, active: isActivePane)
-            titleLabel.textColor = STTheme.titleInk(accent: accent, active: isActivePane)
+            backgroundColor = STTheme.fusedBand(bg: surfaceColor, accent: accent, active: isActivePane)
         } else {
-            backgroundColor = surfaceColor
-            titleLabel.textColor = isActivePane ? .label : .secondaryLabel
+            backgroundColor = surfaceColor   // fullscreen pane: band = terminal bg
         }
+        titleLabel.textColor = STTheme.fusedInk(bg: surfaceColor, active: isActivePane)
         // Same ink as the title: a mode is information, not an alarm, and it must
         // never be mistaken for one of the state colors.
         modeIcon.tintColor = titleLabel.textColor

@@ -13,36 +13,12 @@ enum STTheme {
     /// Dark terminal theme — bento brand palette (icon prompt cell as
     /// pane background; emerald/salmon for state).
     enum TermDark {
-        static let bg          = UIColor(hex: 0x0D0F13)   // bentoInset
-        static let bgIdle      = UIColor(hex: 0x0D0F13)
-        static let bgAwait     = UIColor(hex: 0x2A1F10)
-        static let bgWorking   = UIColor(hex: 0x0C3320)
-        static let fg          = UIColor(hex: 0xF0EAD8)   // bento rice ink
-        static let dim         = UIColor(hex: 0x9CA0AB)
-        static let muted       = UIColor(hex: 0x5A5F6B)
-        static let border      = UIColor.white.withAlphaComponent(0.06)
-        static let borderActive = UIColor(hex: 0x4ADE80)  // bento emerald
-        static let borderAwait = UIColor(hex: 0xE89B7C)   // bento salmon
-        static let borderWork  = UIColor(hex: 0x4ADE80).withAlphaComponent(0.30)
-        static let awaitInk    = UIColor(hex: 0xE89B7C)
-        static let workInk     = UIColor(hex: 0x9AE6B4)
+        static let bg = UIColor(hex: 0x0D0F13)   // bentoInset
     }
 
-    /// Light terminal theme — warm paper, subtle state tints
+    /// Light terminal theme — warm paper
     enum TermLight {
-        static let bg          = UIColor.white
-        static let bgIdle      = UIColor(hex: 0xF4F4F7)
-        static let bgAwait     = UIColor(hex: 0xFFF5E0)
-        static let bgWorking   = UIColor(hex: 0xE8F6EC)
-        static let fg          = UIColor(hex: 0x1C1C1E)
-        static let dim         = UIColor(hex: 0x6B6B70)
-        static let muted       = UIColor(hex: 0xAEAEB2)
-        static let border      = UIColor(red: 60/255, green: 60/255, blue: 67/255, alpha: 0.12)
-        static let borderActive = UIColor(hex: 0x007AFF)
-        static let borderAwait = UIColor(hex: 0xFF9500)
-        static let borderWork  = UIColor(hex: 0x34C759).withAlphaComponent(0.28)
-        static let awaitInk    = UIColor(hex: 0xB45309)
-        static let workInk     = UIColor(hex: 0x1F7A3A)
+        static let bg = UIColor.white
     }
 
     // MARK: - Chrome Palettes (iOS System Colors)
@@ -96,68 +72,59 @@ enum STTheme {
         UITraitCollection.current.userInterfaceStyle == .light
     }
 
-    /// Current terminal palette based on system appearance
-    static var term: (bg: UIColor, bgIdle: UIColor, bgAwait: UIColor, bgWorking: UIColor,
-                      fg: UIColor, dim: UIColor, border: UIColor,
-                      borderActive: UIColor, borderAwait: UIColor, borderWork: UIColor,
-                      awaitInk: UIColor, workInk: UIColor) {
-        isLight
-            ? (TermLight.bg, TermLight.bgIdle, TermLight.bgAwait, TermLight.bgWorking,
-               TermLight.fg, TermLight.dim, TermLight.border,
-               TermLight.borderActive, TermLight.borderAwait, TermLight.borderWork,
-               TermLight.awaitInk, TermLight.workInk)
-            : (TermDark.bg, TermDark.bgIdle, TermDark.bgAwait, TermDark.bgWorking,
-               TermDark.fg, TermDark.dim, TermDark.border,
-               TermDark.borderActive, TermDark.borderAwait, TermDark.borderWork,
-               TermDark.awaitInk, TermDark.workInk)
+    /// The terminal's default background by appearance — the fallback until the
+    /// engine's real reported bg arrives, and the pre-report pane tint.
+    static var term: UIColor {
+        isLight ? TermLight.bg : TermDark.bg
     }
 
-    // Per-state pane *background* colors (term.bgIdle / bgAwait / bgWorking) are
-    // retained in the palette, but panes no longer swap their whole background by
-    // state — the signal is now a translucent `stateTint` wash over the surface
-    // (see TerminalContainerVC, PaneState.tintUIColor), so it works for every
-    // theme and tints the terminal body itself.
-
-    // MARK: - State-colored pane chrome (title band + border)
+    // MARK: - Background-fused chrome
     //
-    // Title bar and border track the pane state (blue / amber, plus neutral for
-    // idle) so state reads at a glance; active/focus reads through a brighter
-    // band + thicker, fuller-color border. Mirrors the macOS host's
-    // GhosttyPaneColors helpers. iOS has no "done, unseen" (green ✓) concept.
+    // Status chrome that emerges from the terminal's REAL background instead of
+    // sitting on top as an independent colored strip. `bg` is the engine's
+    // reported background (initial resolution / config reload / OSC 11), so the
+    // band is always harmonious with whatever theme or program is running.
 
-    /// Title-bar band for a state accent (nil = idle → neutral). Active panes get
-    /// a brighter/heavier band so focus reads within one state color. Dark band in
-    /// dark mode; light band in light mode (colored accents tinted to match).
-    static func titleBand(accent: UIColor?, active: Bool) -> UIColor {
-        if isLight {
-            guard let a = accent else { return UIColor(white: active ? 0.86 : 0.92, alpha: 1) }
-            return a.mixed(with: .white, active ? 0.74 : 0.86)
+    /// A title band derived from `bg` blended toward the state `accent`
+    /// (working/awaiting/done); idle nudges the bg's luminance for a faint
+    /// neutral band so the bento grid stays legible without a foreign grey.
+    /// Stronger on the active pane so focus reads.
+    static func fusedBand(bg: UIColor, accent: UIColor?, active: Bool) -> UIColor {
+        if let accent {
+            return bg.mixed(with: accent, active ? 0.22 : 0.14)
         }
-        guard let a = accent else { return UIColor(white: active ? 0.16 : 0.12, alpha: 1) }
-        return a.scaledRGB(active ? 0.30 : 0.17)
+        // Idle: lift a dark bg / lower a light bg just enough to mark the seam
+        // between panes — a band cut from the terminal's own color.
+        let dark = bg.luminance < 0.5
+        return bg.mixed(with: dark ? UIColor.white : UIColor.black, dark ? 0.07 : 0.05)
     }
 
-    /// Label ink over the band: muted when inactive, a tint of the accent when
-    /// active. Light text on the dark band; dark text on the light band.
-    static func titleInk(accent: UIColor?, active: Bool) -> UIColor {
-        if isLight {
-            guard active else { return UIColor(white: 0.42, alpha: 1) }
-            guard let a = accent else { return UIColor(white: 0.16, alpha: 1) }
-            return a.mixed(with: .black, 0.55)
+    /// Title ink that stays legible over a `fusedBand` built from `bg`. Keys off
+    /// the bg's luminance (not the trait) so it's still right when a TUI repaints
+    /// the background. Neutral light/dark, like the band it sits on.
+    static func fusedInk(bg: UIColor, active: Bool) -> UIColor {
+        if bg.luminance < 0.5 {
+            return UIColor(white: active ? 0.95 : 0.62, alpha: 1)
         }
-        guard active else { return UIColor(white: 0.62, alpha: 1) }
-        guard let a = accent else { return UIColor(white: 0.95, alpha: 1) }
-        return a.mixed(with: .white, 0.45)
+        return UIColor(white: active ? 0.16 : 0.42, alpha: 1)
     }
 
-    /// Pane border for a state accent: full color when active, dimmer when
-    /// inactive. Idle keeps a faint hairline (white on dark, black on light).
-    static func paneBorderColor(accent: UIColor?, active: Bool) -> UIColor {
-        guard let a = accent else {
-            if isLight { return active ? UIColor(white: 0.45, alpha: 0.9) : UIColor(white: 0, alpha: 0.14) }
-            return active ? UIColor(white: 0.55, alpha: 0.9) : UIColor(white: 1, alpha: 0.10)
+    /// The pane surround / reserved-band color: the terminal bg FUSED with the
+    /// pane's running state — the old per-state pane background (bgWorking /
+    /// bgAwait), now derived from the live terminal bg instead of a hardcoded
+    /// hex. Idle = the plain bg (full fusion). Done-unseen (green ✓) has no
+    /// PaneState case, so it layers on like the title bar does.
+    ///
+    /// The overlay is applied with the SAME alpha the surface wash uses
+    /// (`PaneState.tintAlpha`; done-unseen 0.10 as the macOS wash) so the band
+    /// and an empty washed terminal read as ONE color — not a darker cousin.
+    static func fusedBackground(bg: UIColor, state: PaneState, doneUnseen: Bool) -> UIColor {
+        if doneUnseen {
+            return bg.mixed(with: PaneState.uiColor(hex: PaneState.doneUnseenHex), 0.10)
         }
-        return a.withAlphaComponent(active ? 1.0 : 0.55)
+        let alpha = state.tintAlpha   // 0 idle / 0.05 working / 0.12 awaiting
+        guard alpha > 0 else { return bg }
+        return bg.mixed(with: state.uiColor, alpha)
     }
 
     /// Dot color for pane state
@@ -246,14 +213,6 @@ extension UIColor {
         UIColor { $0.userInterfaceStyle == .dark ? dark : light }
     }
 
-    /// Multiply RGB toward black by `factor` (0…1), preserving alpha — used to
-    /// derive the dark title-bar band from a bright state accent.
-    func scaledRGB(_ factor: CGFloat) -> UIColor {
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        getRed(&r, green: &g, blue: &b, alpha: &a)
-        return UIColor(red: r * factor, green: g * factor, blue: b * factor, alpha: a)
-    }
-
     /// Linear blend toward `other` by `t` (0…1), used to lighten the accent into
     /// readable ink over the dark band.
     func mixed(with other: UIColor, _ t: CGFloat) -> UIColor {
@@ -263,6 +222,15 @@ extension UIColor {
         other.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
         return UIColor(red: r1 + (r2 - r1) * t, green: g1 + (g2 - g1) * t,
                        blue: b1 + (b2 - b1) * t, alpha: a1 + (a2 - a1) * t)
+    }
+
+    /// Relative luminance (Rec. 709), 0…1. Used to pick ink / band treatment
+    /// from a background color the UI trait can't describe — a TUI or shell may
+    /// repaint the terminal bg at runtime (OSC 11), so `isLight` would be wrong.
+    var luminance: CGFloat {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        getRed(&r, green: &g, blue: &b, alpha: &a)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
     }
 }
 
@@ -450,5 +418,4 @@ extension Color {
     static let stSurface2 = stDyn(STTheme.ChromeLight.surface2, STTheme.ChromeDark.surface2)
     static let stLine     = stDyn(STTheme.ChromeLight.line,     STTheme.ChromeDark.line)
     static let stLineO    = stDyn(STTheme.ChromeLight.lineO,    STTheme.ChromeDark.lineO)
-    static let stAwaitInk = stDyn(STTheme.TermLight.awaitInk,   STTheme.TermDark.awaitInk)
 }
