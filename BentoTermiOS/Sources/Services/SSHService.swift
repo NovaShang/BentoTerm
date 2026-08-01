@@ -29,6 +29,12 @@ struct SendableStdinWriter: @unchecked Sendable {
     let writer: TTYStdinWriter
 }
 
+/// Wall-clock milliseconds since `start`.
+private func elapsedMs(since start: ContinuousClock.Instant) -> Int {
+    let d = ContinuousClock.now - start
+    return Int(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000)
+}
+
 /// Thread-safe mutable state for SSHService
 private struct SSHMutableState: Sendable {
     var state: SSHConnectionState = .disconnected
@@ -62,9 +68,34 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
 
     // MARK: - Connect
 
+    /// An IPv4 literal rewritten to its IPv4-mapped IPv6 form; anything else
+    /// passed through.
+    ///
+    /// Citadel connects by hostname, and NIO's `connect(host:port:)` never
+    /// short-circuits literals — every string goes through `getaddrinfo`. On an
+    /// IPv6-only cellular network (NAT64 + DNS64) Darwin *synthesises* an IPv6
+    /// address from an IPv4 literal, which is right for a public address and
+    /// fatal for one that only exists inside a VPN: the synthesised address
+    /// leaves via the carrier's NAT64 gateway toward something the public
+    /// internet cannot route, so a Tailscale peer dies at the 30 s TCP timeout
+    /// having never received a packet — while the same address over Wi-Fi
+    /// connects instantly.
+    ///
+    /// `::ffff:a.b.c.d` is already an IPv6 literal, so there is nothing to
+    /// synthesise and the kernel routes it as IPv4. Handing Citadel a
+    /// pre-resolved `SocketAddress` would be the honest fix, but its
+    /// `connect(on:)` traps when called off the event loop. Both are written up
+    /// with patches in `~/Desktop/citadel-bugs.md`.
+    private static func connectAddress(for hostname: String) -> String {
+        guard let parsed = try? SocketAddress(ipAddress: hostname, port: 0),
+              case .v4 = parsed else { return hostname }
+        return "::ffff:" + hostname
+    }
+
     func connect(host: Host) async {
         transition(to: .connecting)
 
+        let connectStart = ContinuousClock.now
         do {
             let authentication: SSHAuthenticationMethod
 
@@ -78,8 +109,10 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
                 authentication = .ed25519(username: host.username, privateKey: ed25519Key)
             }
 
+            let address = Self.connectAddress(for: host.hostname)
+            if address != host.hostname { dlog("connecting via \(address)") }
             let sshClient = try await SSHClient.connect(
-                host: host.hostname,
+                host: address,
                 port: Int(host.port),
                 authenticationMethod: authentication,
                 hostKeyValidator: .acceptAnything(),
@@ -88,7 +121,7 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
 
             self.client = sshClient
             mutableState.withLock { $0.state = .connected }
-            dlog("SSH connected successfully")
+            dlog("SSH connected successfully in \(elapsedMs(since: connectStart))ms")
             Task { @MainActor in TelemetryService.shared.record(.sshDirectConnected) }
 
             // Identify this client so the disconnect callback can tell whether
@@ -111,7 +144,13 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
 
             onStateChanged?(.connected)
         } catch {
-            dlog("SSH connection error: \(error)")
+            // `String(reflecting:)` rather than `localizedDescription`: NIO and
+            // Citadel errors are enums whose localized string is the same
+            // uninformative sentence for every cause, so the raw case is the
+            // only thing that distinguishes a TCP timeout from the handshake's
+            // 10 s login timeout from an auth rejection.
+            dlog("SSH connection error after \(elapsedMs(since: connectStart))ms: "
+                + "\(String(reflecting: error))")
             transition(to: .failed(error.localizedDescription))
         }
     }
