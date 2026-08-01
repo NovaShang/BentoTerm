@@ -37,6 +37,13 @@ public struct VoiceCompassView: View {
     private let accent = Color(red: 0.30, green: 0.90, blue: 0.62)
     private let radius: CGFloat = 80
 
+    /// Ceiling for the transcript area (~5 lines at 14pt + 3pt spacing). The bubble
+    /// grows with what you say up to here, then windows to the newest lines.
+    private static let maxTextHeight: CGFloat = 92
+    /// Slot the bubble is bottom-pinned in: enough for `maxTextHeight` plus the
+    /// status row, hint row and padding, so growth never gets clipped.
+    private static let bubbleSlot: CGFloat = maxTextHeight + 76
+
     /// Identity space the GlassEffectContainer uses to morph each target's glass
     /// between its idle and active size (see `glassEffectID`).
     @Namespace private var glassNS
@@ -62,14 +69,18 @@ public struct VoiceCompassView: View {
 
     public var body: some View {
         ZStack {
-            bubble.offset(y: -(radius + 106))
+            // Pin the bubble by its BOTTOM edge so a taller transcript grows
+            // upward, away from the compass, instead of creeping down over it.
+            bubble
+                .frame(height: Self.bubbleSlot, alignment: .bottom)
+                .offset(y: -(radius + 106))
             compass
         }
         // Fixed size so the compass center sits at the host's anchor point
         // (NSView center on macOS, `.position` on iOS). Both place by center, so
         // the height only needs to fit the bubble above without clipping — it
         // does not shift the anchor.
-        .frame(width: 360, height: 520)
+        .frame(width: 360, height: 580)
     }
 
     // MARK: - Transcript bubble (+ status + action hint, all inside the glass)
@@ -85,15 +96,23 @@ public struct VoiceCompassView: View {
                 Text("Listening").font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(ink.opacity(0.85))
             }
-            // Bottom-aligned 3-line window (fixed height so the bubble stays put
-            // as text streams in; newest line at the bottom).
+            // Grows with the transcript up to a ceiling, then windows to the
+            // newest lines (see the two modifiers below).
             Text(transcript.isEmpty ? "Listening…" : transcript)
                 .font(.system(size: 14))
                 .foregroundStyle(ink)
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
                 .frame(width: 248, alignment: .center)
-                .frame(height: 54, alignment: .bottom)
+                // Lay the text out at its FULL natural height first. Without this
+                // it gets squeezed into the window below and truncates its TAIL —
+                // you'd keep the first lines and lose the newest words, which is
+                // backwards for live dictation.
+                .fixedSize(horizontal: false, vertical: true)
+                // Then window it: the area grows with the text up to `maxTextHeight`
+                // (~5 lines), and once it overflows, bottom alignment + clipping keep
+                // the NEWEST lines visible while older ones scroll off the top.
+                .frame(maxHeight: Self.maxTextHeight, alignment: .bottom)
                 .clipped()
             // Dim, small action hint pinned inside the bubble. Always shown —
             // there is always a live target, the center included. Fixed height so
@@ -108,6 +127,8 @@ public struct VoiceCompassView: View {
         .frame(width: 280)
         .glassSurface(.rect(cornerRadius: 18))
         .shadow(color: .black.opacity(isDark ? 0.45 : 0.18), radius: 18, y: 6)
+        // Ease the growth so adding a line slides rather than jumps.
+        .animation(.easeOut(duration: 0.18), value: transcript)
     }
 
     // MARK: - Compass

@@ -205,7 +205,7 @@ struct MacVoicePreviewView: View {
 /// it never intercepts the mouse (the recording drag belongs to the surface).
 @MainActor
 public final class MacVoiceOverlay: NSView {
-    public static let preferredSize = NSSize(width: 360, height: 520)
+    public static let preferredSize = NSSize(width: 360, height: 580)
 
     private let hosting: NSHostingView<VoiceCompassView>
 
