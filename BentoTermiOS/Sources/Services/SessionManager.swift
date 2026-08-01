@@ -19,11 +19,10 @@ enum BentoRoute: Hashable {
 }
 
 /// What the host sheet should be born with when Home (or a deep link)
-/// routes there: the host, plus optionally the session name to attach to.
-/// Creation intents never ride here — the sheet's own New section owns them.
+/// routes there: just the host. Creation and attach happen inside the
+/// sheet's own UI.
 struct OpenRequest: Equatable {
     var hostID: UUID
-    var sessionName: String?
 }
 
 /// Central registry of live `TerminalViewModel` instances.
@@ -51,10 +50,19 @@ final class SessionManager: ObservableObject {
     /// type only — the terminal — so the stack is exactly Home → Terminal.
     @Published var navigationPath: [BentoRoute] = []
 
-    /// A session (or host, or creation intent) Home should hand to the
-    /// create sheet. Set by deep links and by Home's cached-session rows;
-    /// consumed (and cleared) by HomeView when it presents the sheet.
+    /// A host Home should hand to the host sheet. Set by deep links and
+    /// Home's host rows; consumed (and cleared) by HomeView when it
+    /// presents the sheet.
     @Published var openRequest: OpenRequest?
+
+    /// True while a no-sheet direct connect (recent tap) is in flight, so
+    /// Home can show the same "Starting session…" overlay the sheet uses.
+    @Published private(set) var isStartingSession = false
+
+    /// A direct connect that failed, with the key it failed on (so Retry
+    /// can re-run it). Home renders it as an alert; the terminal never
+    /// exists in a broken state.
+    @Published var connectFailure: (key: SessionKey, message: String)?
 
     /// Transient toast text for the host list (e.g. "Disconnected oldest session to free a slot").
     @Published var evictionNotice: String? = nil
@@ -136,19 +144,39 @@ final class SessionManager: ObservableObject {
         return vm
     }
 
-    /// Route a request to enter a session. Attached → push the terminal
-    /// directly (depth stays 1). Known but not attached → hand the create
-    /// sheet a prefilled request (it re-enumerates live, then attaches).
-    /// Every entry point — Home rows, cached sessions, recent launches,
-    /// deep links — converges on this one rule.
-    func open(session key: SessionKey, host: Host?) {
+    /// Enter a session. Attached → push the terminal immediately. Known but
+    /// not attached → connect DIRECTLY (no sheet), then push — a recent
+    /// tap means "take me back there", one tap should do it. Failure never
+    /// creates a broken terminal: it lands in `connectFailure` and Home
+    /// shows the alert.
+    func openOrStart(session key: SessionKey, host: Host) {
         if existingViewModel(for: key) != nil {
             navigationPath = [.terminal(key)]
-        } else if let host {
-            openRequest = OpenRequest(
-                hostID: host.id,
-                sessionName: key.tmuxSessionName.isEmpty ? nil : key.tmuxSessionName
-            )
+            return
+        }
+        // Only tmux sessions can be re-entered by name; a plain shell has
+        // nothing on the server to come back to.
+        let name = key.tmuxSessionName
+        guard !name.isEmpty else {
+            openRequest = OpenRequest(hostID: host.id)
+            return
+        }
+
+        isStartingSession = true
+        let vm = viewModel(for: host, tmuxSessionName: name)
+        Task { @MainActor in
+            await vm.connect()
+            guard case .connected = vm.connectionState else {
+                isStartingSession = false
+                connectFailure = (key, vm.errorMessage
+                    ?? "Couldn't reach \(host.displayName) — check the host and your SSH credentials.")
+                disconnect(key: key)
+                return
+            }
+            await vm.applyTmuxChoice(.createOrAttach(name: name))
+            isStartingSession = false
+            RecentLaunchStore.shared.record(host: host, sessionName: name)
+            navigationPath = [.terminal(key)]
         }
     }
 
@@ -419,13 +447,15 @@ final class RecentLaunchStore: ObservableObject {
 
     init() { load() }
 
-    /// Caller passes the tmux session name; raw shells (empty name) are
-    /// skipped by the caller — `new-session -A` on an empty name leaves
-    /// nothing on the server to come back to, so it earns no Recent row.
+    /// Raw shells (empty name) are skipped here: `new-session -A` on an
+    /// empty name leaves nothing on the server to come back to, so a plain
+    /// shell earns no Recent row.
     func record(host: Host, sessionName: String) {
+        let trimmed = sessionName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
         let launch = Launch(
             hostID: host.id,
-            sessionName: sessionName,
+            sessionName: trimmed,
             hostLabel: host.displayName,
             date: Date()
         )

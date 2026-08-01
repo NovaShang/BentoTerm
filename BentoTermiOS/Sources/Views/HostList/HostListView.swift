@@ -29,7 +29,6 @@ struct HomeView: View {
     struct HostSheetRequest: Identifiable {
         let id = UUID()
         var host: Host
-        var initialSessionName: String?
     }
 
     private var filteredHosts: [Host] {
@@ -123,7 +122,6 @@ struct HomeView: View {
             NavigationStack {
                 HostSessionsView(
                     host: request.host,
-                    initialSessionName: request.initialSessionName,
                     onSessionReady: { key in
                         // The sheet did the connect; now the terminal is the
                         // only thing on the stack above Home. Pushing under
@@ -139,7 +137,49 @@ struct HomeView: View {
             guard let request else { return }
             sessionManager.openRequest = nil
             guard let host = hostStore.hosts.first(where: { $0.id == request.hostID }) else { return }
-            hostSheetRequest = HostSheetRequest(host: host, initialSessionName: request.sessionName)
+            hostSheetRequest = HostSheetRequest(host: host)
+        }
+        .overlay {
+            // Direct connects (recent taps) run without a sheet — Home
+            // carries the same "Starting session…" feedback the sheet uses.
+            if sessionManager.isStartingSession {
+                ZStack {
+                    Color.black.opacity(0.45).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView().controlSize(.large).tint(Color.bentoEmerald)
+                        Text("Starting session…")
+                            .font(.callout)
+                            .foregroundStyle(Color.bentoInkDim)
+                    }
+                    .padding(24)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.bentoSurface)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.bentoBorder, lineWidth: 1)
+                    )
+                }
+            }
+        }
+        .alert("Connection Failed", isPresented: Binding(
+            get: { sessionManager.connectFailure != nil },
+            set: { if !$0 { sessionManager.connectFailure = nil } }
+        )) {
+            Button("Retry") {
+                if let failure = sessionManager.connectFailure {
+                    sessionManager.connectFailure = nil
+                    if let host = hostStore.hosts.first(where: { $0.id == failure.key.hostID }) {
+                        sessionManager.openOrStart(session: failure.key, host: host)
+                    }
+                }
+            }
+            Button("Dismiss", role: .cancel) {
+                sessionManager.connectFailure = nil
+            }
+        } message: {
+            Text(sessionManager.connectFailure?.message ?? "")
         }
     }
 
@@ -285,7 +325,10 @@ struct HomeView: View {
 
     private func openRecent(_ launch: RecentLaunchStore.Launch) {
         guard let host = hostStore.hosts.first(where: { $0.id == launch.hostID }) else { return }
-        sessionManager.open(
+        hostStore.markConnected(host)
+        // Attached → straight in. Not attached → connect directly, no
+        // sheet — a recent tap means "take me back there".
+        sessionManager.openOrStart(
             session: SessionKey(hostID: host.id, tmuxSessionName: launch.sessionName),
             host: host
         )
@@ -400,7 +443,8 @@ struct ActiveSessionRow: View {
 
     var body: some View {
         Button {
-            sessionManager.open(session: entry.key, host: entry.host)
+            // Attached, so this resolves to an immediate push.
+            sessionManager.openOrStart(session: entry.key, host: entry.host)
         } label: {
             HStack(spacing: 12) {
                 ZStack {

@@ -14,8 +14,8 @@ import BentoTerminalCore
 /// and hang" bug, fixed on both platforms the same way).
 struct HostSessionsView: View {
     let host: Host
-    var initialSessionName: String?
-    /// Called the moment a session is attached and ready to enter.
+    /// Called the moment a session is attached and ready to enter; the
+    /// sheet dismisses itself right after (the parent pushes the terminal).
     var onSessionReady: (SessionKey) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -29,16 +29,13 @@ struct HostSessionsView: View {
     @FocusState private var nameFieldFocused: Bool
     @State private var isStartingNew = false
     @State private var showAgentWizard = false
-    @State private var autoStarted = false
     /// Connect failures surface HERE, in the sheet — the terminal never
     /// exists yet, so the sheet is the only place that can say what happened.
     @State private var connectError: String?
 
     init(host: Host,
-         initialSessionName: String?,
          onSessionReady: @escaping (SessionKey) -> Void) {
         self.host = host
-        self.initialSessionName = initialSessionName
         self.onSessionReady = onSessionReady
         _lister = StateObject(wrappedValue: TmuxLister(host: host))
     }
@@ -116,7 +113,6 @@ struct HostSessionsView: View {
         }
         .task {
             await lister.refresh()
-            autoAttachIfRequested()
         }
         .alert("Error", isPresented: Binding(
             get: { lister.error != nil },
@@ -139,15 +135,6 @@ struct HostSessionsView: View {
                 startNewSession(.createAgent(spec: spec))
             }
         }
-    }
-
-    /// A recent-launch tap from Home means "take me back there". Attach on
-    /// appear without asking: `new-session -A` re-creates a same-named
-    /// session if it died, so even a stale recent lands somewhere real.
-    private func autoAttachIfRequested() {
-        guard !autoStarted, let name = initialSessionName, !name.isEmpty else { return }
-        autoStarted = true
-        startNewSession(.createOrAttach(name: name))
     }
 
     // MARK: - Sections
@@ -182,7 +169,7 @@ struct HostSessionsView: View {
         Section {
             ForEach(activeForHost) { entry in
                 Button {
-                    onSessionReady(entry.key)
+                    readyAndClose(entry.key)
                 } label: {
                     HStack(spacing: 10) {
                         Circle().fill(Color.bentoEmerald).frame(width: 8, height: 8)
@@ -353,7 +340,7 @@ struct HostSessionsView: View {
 
         // If somehow already cached (e.g. user double-tapped), just go.
         if sessionManager.existingViewModel(for: key) != nil {
-            onSessionReady(key)
+            readyAndClose(key)
             return
         }
 
@@ -381,7 +368,16 @@ struct HostSessionsView: View {
             // Refresh the lister so the new session appears in the sheet
             // next time and keeps our attached/unattached split correct.
             await lister.refresh()
-            onSessionReady(key)
+            readyAndClose(key)
         }
+    }
+
+    /// Hand the ready session to the parent and dismiss the sheet. The
+    /// parent pushes the terminal on the stack UNDER the sheet; the
+    /// dismissal animation reveals it. (Without the dismiss the terminal
+    /// sat behind an open sheet that never went away.)
+    private func readyAndClose(_ key: SessionKey) {
+        onSessionReady(key)
+        dismiss()
     }
 }
