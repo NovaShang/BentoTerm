@@ -193,6 +193,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
             // to think the screen is stale — ask for one frame on return.
             needsDraw = true
             startRenderLink()
+            flushPendingBytes()
         } else {
             stopRenderLink()
         }
@@ -201,6 +202,38 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     private func stopRenderLink() {
         renderLink?.invalidate()
         renderLink = nil
+    }
+
+    /// Output that arrived with nowhere to put it — no surface yet, or the app
+    /// in the background where feeding would block (see `feedOnMainActor`).
+    ///
+    /// Bounded: a session left in a pocket while a build scrolls by can emit
+    /// without limit, and holding all of it would trade a watchdog kill for a
+    /// memory kill. Terminal output is overwhelmingly repaint, so the newest
+    /// bytes are the ones worth keeping.
+    private static let maxPendingBytes = 8 << 20
+    private var pendingByteCount = 0
+
+    private func buffer(_ data: Data) {
+        pendingBytes.append(data)
+        pendingByteCount += data.count
+        var dropped = 0
+        while pendingByteCount > Self.maxPendingBytes, !pendingBytes.isEmpty {
+            pendingByteCount -= pendingBytes.removeFirst().count
+            dropped += 1
+        }
+        if dropped > 0 {
+            dlog("surface: dropped \(dropped) buffered chunk(s) — over "
+                + "\(Self.maxPendingBytes / (1 << 20))MB queued while unable to feed")
+        }
+    }
+
+    private func flushPendingBytes() {
+        guard !pendingBytes.isEmpty else { return }
+        let queued = pendingBytes
+        pendingBytes.removeAll()
+        pendingByteCount = 0
+        for chunk in queued { feedOnMainActor(chunk) }
     }
 
     public override func layoutSubviews() {
@@ -256,10 +289,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         ghostty_surface_draw(created)
         updateRenderActive()
 
-        // Flush any bytes that arrived before the surface existed.
-        let queued = pendingBytes
-        pendingBytes.removeAll()
-        for chunk in queued { feed(chunk) }
+        flushPendingBytes()
     }
 
     private var currentScale: CGFloat {
@@ -597,8 +627,17 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     }
 
     private func feedOnMainActor(_ data: Data) {
-        guard let surface else { pendingBytes.append(data); return }
         guard !data.isEmpty else { return }
+        guard let surface else { buffer(data); return }
+        // `ghostty_surface_process_output` is a SYNCHRONOUS push into ghostty's
+        // mailbox, and the draw loop is what drains it. Backgrounded there is no
+        // draw loop — but the SSH connection is deliberately kept alive, so tmux
+        // `%output` keeps arriving. The mailbox fills, the push blocks the main
+        // thread, and iOS ends it with a scene-update watchdog kill
+        // (0x8BADF00D, "exhausted real (wall clock) time allowance of 10.00
+        // seconds", at 0% CPU — blocked, not spinning). Buffer instead and flush
+        // when the draw loop is running again.
+        guard !isBackgrounded else { buffer(data); return }
         data.withUnsafeBytes { raw in
             guard let ptr = raw.bindMemory(to: CChar.self).baseAddress else { return }
             ghostty_surface_process_output(surface, ptr, UInt(data.count))

@@ -1,40 +1,134 @@
 import SwiftUI
 import BentoTerminalCore
 
-/// Second-level navigation: shows the tmux sessions that exist on a host,
-/// plus a "new session" row and a "no tmux" row. Selecting any of them
-/// pushes the terminal view onto the navigation stack with the choice
-/// already applied.
-struct HostSessionsView: View {
-    let host: Host
+// MARK: - Create sheet
 
+/// The pre-session "where to / what to create" sheet — iOS's form of the
+/// Mac launcher's creation panel. Level 1: pick a host. Level 2: that
+/// host's sessions (live enumeration) plus the creation entries.
+///
+/// All SSH round-trips (enumeration, connection, session start) and all
+/// failure display happen HERE, before any terminal exists. The terminal is
+/// only pushed once a real session is attached — so it never has to express
+/// a connection failure (the structural root of the Mac's "open remote tmux
+/// and hang" bug, fixed on both platforms the same way).
+struct CreateSheetView: View {
+    var initialHost: Host?
+    var initialSessionName: String?
+    var initialIntent: CreateIntent?
+    /// Called the moment a session is attached and ready to enter.
+    var onSessionReady: (SessionKey) -> Void
+    var onAddHost: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hostStore: HostStore
-    @EnvironmentObject private var sessionManager: SessionManager
+
+    @State private var path = NavigationPath()
+    @State private var prefillPushed = false
 
     var body: some View {
-        HostSessionsContent(host: host)
+        NavigationStack(path: $path) {
+            hostList
+                .navigationDestination(for: Host.self) { host in
+                    HostSessionsContent(
+                        host: host,
+                        initialSessionName: initialSessionName,
+                        initialIntent: initialIntent,
+                        onSessionReady: { key in
+                            onSessionReady(key)
+                            dismiss()
+                        }
+                    )
+                }
+                .navigationTitle("New")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Cancel") { dismiss() }
+                    }
+                }
+        }
+        .task {
+            // Prefill: a cached-session tap or a recent-launch tap routes here
+            // with a specific host. Push straight past the host list.
+            guard !prefillPushed, let host = initialHost else { return }
+            prefillPushed = true
+            path.append(host)
+        }
+    }
+
+    private var hostList: some View {
+        Form {
+            Section {
+                if hostStore.hosts.isEmpty {
+                    Text("No hosts yet — add the machine you want to reach.")
+                        .font(.callout)
+                        .foregroundStyle(Color.bentoInkDim)
+                } else {
+                    ForEach(hostStore.hosts) { host in
+                        NavigationLink(value: host) {
+                            HostRow(host: host)
+                        }
+                    }
+                }
+            } header: {
+                BentoFormHeader("SSH Hosts")
+            } footer: {
+                BentoFormFooter("A host is any machine running sshd and tmux. Pick one to attach to a session or start a new one.")
+            }
+            .bentoSectionStyle()
+
+            Section {
+                Button {
+                    onAddHost()
+                } label: {
+                    Label("Add SSH host…", systemImage: "plus.circle")
+                }
+            }
+            .bentoSectionStyle()
+        }
+        .bentoForm()
     }
 }
 
-/// Inner view: owns the transient TmuxLister (independent SSH used purely
-/// for discovery), the per-host VoiceInputController, and routes session
-/// picks into the SessionManager.
+// MARK: - Per-host session content (level 2)
+
+/// Lists the tmux sessions that exist on a host, plus a "new session" row
+/// and a "no tmux" row. Selecting any of them attaches (or starts) the
+/// session and calls `onSessionReady` — the sheet dismisses and the parent
+/// pushes the terminal.
+///
+/// Opened with a `sessionName` it auto-attaches on appear (the cached-session
+/// tap flow — one tap from Home should enter). Opened with an `intent` it
+/// runs that creation flow (agent wizard / empty session / plain shell).
 private struct HostSessionsContent: View {
     let host: Host
+    var initialSessionName: String?
+    var initialIntent: CreateIntent?
+    var onSessionReady: (SessionKey) -> Void
 
     @EnvironmentObject private var hostStore: HostStore
     @EnvironmentObject private var sessionManager: SessionManager
     @StateObject private var lister: TmuxLister
-    @StateObject private var voiceController = VoiceInputController()
 
     @State private var newSessionName: String = "bento"
-    @State private var pushKey: SessionKey?
+    @FocusState private var nameFieldFocused: Bool
     @State private var pendingChoice: TmuxStartChoice?
     @State private var isStartingNew = false
     @State private var showAgentWizard = false
+    @State private var autoStarted = false
+    /// Connect failures surface HERE, in the sheet — the terminal never
+    /// exists yet, so the sheet is the only place that can say what happened.
+    @State private var connectError: String?
 
-    init(host: Host) {
+    init(host: Host,
+         initialSessionName: String?,
+         initialIntent: CreateIntent?,
+         onSessionReady: @escaping (SessionKey) -> Void) {
         self.host = host
+        self.initialSessionName = initialSessionName
+        self.initialIntent = initialIntent
+        self.onSessionReady = onSessionReady
         _lister = StateObject(wrappedValue: TmuxLister(host: host))
     }
 
@@ -103,23 +197,10 @@ private struct HostSessionsContent: View {
                 .disabled(lister.isLoading)
             }
         }
-        .navigationDestination(item: $pushKey) { key in
-            if let entry = sessionManager.activeSessions.first(where: { $0.key == key }) {
-                TerminalWrapperView(
-                    viewModel: entry.viewModel,
-                    voiceController: voiceController
-                )
-                // Use the system navigation bar (Liquid Glass on iOS 26) — the
-                // terminal supplies its own back item, so only the default back
-                // button is hidden; the bar itself is no longer hidden.
-                .navigationBarBackButtonHidden()
-            }
-        }
         .task {
-            voiceController.onResult = { result in
-                handleVoiceResultForActivePane(result)
-            }
             await lister.refresh()
+            applyInitialIntent()
+            autoAttachIfRequested()
         }
         .alert("Error", isPresented: Binding(
             get: { lister.error != nil },
@@ -129,6 +210,43 @@ private struct HostSessionsContent: View {
         } message: {
             Text(lister.error ?? "")
         }
+        .alert("Connection Failed", isPresented: Binding(
+            get: { connectError != nil },
+            set: { if !$0 { connectError = nil } }
+        )) {
+            Button("Dismiss", role: .cancel) {}
+        } message: {
+            Text(connectError ?? "")
+        }
+        .sheet(isPresented: $showAgentWizard) {
+            AgentSessionWizardView { spec in
+                startNewSession(.createAgent(spec: spec))
+            }
+        }
+    }
+
+    /// The creation verb that opened this screen drives what happens when it
+    /// appears. Agent → straight into the wizard. Empty → the name field is
+    /// the cursor's home (the user types the one thing it needs).
+    private func applyInitialIntent() {
+        switch initialIntent {
+        case .agent:
+            showAgentWizard = true
+        case .empty:
+            newSessionName = ""
+            nameFieldFocused = true
+        case .plainShell, .none:
+            break
+        }
+    }
+
+    /// A cached-session tap from Home means "take me back there". Attach on
+    /// appear without asking: `new-session -A` re-creates a same-named
+    /// session if it died, so even a stale cache lands somewhere real.
+    private func autoAttachIfRequested() {
+        guard !autoStarted, let name = initialSessionName, !name.isEmpty else { return }
+        autoStarted = true
+        startNewSession(.createOrAttach(name: name))
     }
 
     // MARK: - Sections
@@ -163,7 +281,7 @@ private struct HostSessionsContent: View {
         Section {
             ForEach(activeForHost) { entry in
                 Button {
-                    pushKey = entry.key
+                    onSessionReady(entry.key)
                 } label: {
                     HStack(spacing: 10) {
                         Circle().fill(Color.bentoEmerald).frame(width: 8, height: 8)
@@ -246,6 +364,13 @@ private struct HostSessionsContent: View {
                 TextField("Session name", text: $newSessionName)
                     .autocapitalization(.none)
                     .autocorrectionDisabled()
+                    .focused($nameFieldFocused)
+                    .submitLabel(.go)
+                    .onSubmit {
+                        let name = newSessionName.trimmingCharacters(in: .whitespaces)
+                        guard !name.isEmpty else { return }
+                        startNewSession(.createOrAttach(name: name))
+                    }
                 Button("Create") {
                     let name = newSessionName.trimmingCharacters(in: .whitespaces)
                     guard !name.isEmpty else { return }
@@ -267,11 +392,6 @@ private struct HostSessionsContent: View {
             BentoFormFooter("Quick session is an empty single-pane shell. Agent session lets you pick an agent (Claude / Codex / …), working directory, and pane layout.")
         }
         .bentoSectionStyle()
-        .sheet(isPresented: $showAgentWizard) {
-            AgentSessionWizardView { spec in
-                startNewSession(.createAgent(spec: spec))
-            }
-        }
     }
 
     @ViewBuilder
@@ -312,20 +432,10 @@ private struct HostSessionsContent: View {
         }
     }
 
-    private func handleVoiceResultForActivePane(_ result: VoiceInputController.VoiceInputResult) {
-        // Voice input only makes sense once the user has pushed into a
-        // specific terminal — the active VM is the one at `pushKey`.
-        guard let key = pushKey,
-              let entry = sessionManager.activeSessions.first(where: { $0.key == key }) else {
-            return
-        }
-        entry.viewModel.handleVoiceResult(result)
-    }
-
     // MARK: - Pick
 
-    /// Open a fresh VM (new SSH) for the picked choice, then push the
-    /// terminal once it's ready.
+    /// Open a fresh VM (new SSH) for the picked choice, then hand the ready
+    /// session to the parent — the sheet dismisses, the terminal is pushed.
     private func startNewSession(_ choice: TmuxStartChoice) {
         let name: String
         switch choice {
@@ -336,9 +446,9 @@ private struct HostSessionsContent: View {
         }
         let key = SessionKey(hostID: host.id, tmuxSessionName: name)
 
-        // If somehow already cached (e.g. user double-tapped), just push.
+        // If somehow already cached (e.g. user double-tapped), just go.
         if sessionManager.existingViewModel(for: key) != nil {
-            pushKey = key
+            onSessionReady(key)
             return
         }
 
@@ -349,18 +459,24 @@ private struct HostSessionsContent: View {
         Task {
             await vm.connect()
             // Bail if SSH didn't come up — drop the half-registered VM so
-            // the picker stays consistent.
+            // the picker stays consistent, and say what happened right here
+            // in the sheet (the terminal doesn't exist yet).
             guard case .connected = vm.connectionState else {
                 isStartingNew = false
+                connectError = vm.errorMessage
+                    ?? "Couldn't reach \(host.displayName) — check the host and your SSH credentials."
                 sessionManager.disconnect(key: key)
                 return
             }
             await vm.applyTmuxChoice(choice)
             isStartingNew = false
-            pushKey = key
+            // The attach moment — this is what earns a Recent row (macOS
+            // records the same moment: a session you actually entered).
+            RecentLaunchStore.shared.record(host: host, sessionName: name)
             // Refresh the lister so the new session appears in the picker
             // next time and keeps our attached/unattached split correct.
             await lister.refresh()
+            onSessionReady(key)
         }
     }
 }

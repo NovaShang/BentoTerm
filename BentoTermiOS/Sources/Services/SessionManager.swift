@@ -12,6 +12,30 @@ struct SessionKey: Hashable {
     let tmuxSessionName: String
 }
 
+/// The navigation stack's single push destination. Depth = 1: everything
+/// else in the pre-session world is a sheet off Home, never a pushed screen.
+enum BentoRoute: Hashable {
+    case terminal(SessionKey)
+}
+
+/// What the create sheet should be born with when Home (or a deep link)
+/// routes there. Either a host to browse, plus optionally the session name
+/// to attach to and/or the creation intent to run.
+struct OpenRequest: Equatable {
+    var hostID: UUID
+    var sessionName: String?
+    var intent: CreateIntent?
+}
+
+/// The three tmux-related creation verbs, mirroring the Mac launcher's
+/// "New Agent Session… / New Empty Session / New Terminal without tmux".
+/// "New SSH Connection…" (host editor) is handled by Home directly.
+enum CreateIntent: Equatable {
+    case agent
+    case empty
+    case plainShell
+}
+
 /// Central registry of live `TerminalViewModel` instances.
 ///
 /// One VM owns one SSH connection. A host can have multiple concurrent VMs —
@@ -33,8 +57,14 @@ final class SessionManager: ObservableObject {
 
     @Published private(set) var activeSessions: [SessionEntry] = []
 
-    /// Driven by `NavigationStack(path:)` in `BentoApp`.
-    @Published var navigationPath: [HostNavigation] = []
+    /// Driven by `NavigationStack(path:)` in `BentoApp`. One destination
+    /// type only — the terminal — so the stack is exactly Home → Terminal.
+    @Published var navigationPath: [BentoRoute] = []
+
+    /// A session (or host, or creation intent) Home should hand to the
+    /// create sheet. Set by deep links and by Home's cached-session rows;
+    /// consumed (and cleared) by HomeView when it presents the sheet.
+    @Published var openRequest: OpenRequest?
 
     /// Transient toast text for the host list (e.g. "Disconnected oldest session to free a slot").
     @Published var evictionNotice: String? = nil
@@ -116,6 +146,22 @@ final class SessionManager: ObservableObject {
         return vm
     }
 
+    /// Route a request to enter a session. Attached → push the terminal
+    /// directly (depth stays 1). Known but not attached → hand the create
+    /// sheet a prefilled request (it re-enumerates live, then attaches).
+    /// Every entry point — Home rows, cached sessions, recent launches,
+    /// deep links — converges on this one rule.
+    func open(session key: SessionKey, host: Host?) {
+        if existingViewModel(for: key) != nil {
+            navigationPath = [.terminal(key)]
+        } else if let host {
+            openRequest = OpenRequest(
+                hostID: host.id,
+                sessionName: key.tmuxSessionName.isEmpty ? nil : key.tmuxSessionName
+            )
+        }
+    }
+
     func touch(key: SessionKey) {
         guard let idx = activeSessions.firstIndex(where: { $0.key == key }) else { return }
         activeSessions[idx].lastActiveAt = Date()
@@ -143,6 +189,8 @@ final class SessionManager: ObservableObject {
         for entry in activeSessions where entry.key.hostID == host.id {
             disconnect(key: entry.key)
         }
+        // Its cached session list is meaningless without the host.
+        SessionCacheStore.shared.clear(hostID: host.id)
     }
 
     // MARK: - Scene phase
@@ -344,6 +392,9 @@ final class TmuxLister: ObservableObject {
             return
         }
         sessions = TmuxParsers.parseTmuxLs(output, startMarker: startMarker, endMarker: endMarker)
+        // A successful enumeration refreshes the Home screen's cache. tmux
+        // was alive and answered; whatever it reported IS the current state.
+        SessionCacheStore.shared.record(hostID: host.id, names: sessions)
     }
 
     private func routeData(_ data: Data) {
@@ -355,5 +406,113 @@ final class TmuxLister: ObservableObject {
             captureContinuation = nil
             cont?.resume(returning: str)
         }
+    }
+}
+
+// MARK: - Session cache (per-host last-known tmux ls)
+
+/// Last-known tmux session list per host, persisted so Home can show what
+/// is probably running WITHOUT opening an SSH connection. The phone is a
+/// remote control: remote state is inherently a snapshot, and the cache
+/// carries its capture time so Home can say "5 minutes ago" instead of
+/// pretending to be live.
+///
+/// Written on every successful enumeration (TmuxLister), read by Home for
+/// the "not connected" rows. Stale rows are safe to show: tapping one
+/// re-enumerates live, and attach is `new-session -A`, which recreates a
+/// same-named session rather than erroring.
+@MainActor
+final class SessionCacheStore: ObservableObject {
+    static let shared = SessionCacheStore()
+
+    struct Entry: Codable, Equatable {
+        var names: [String]
+        var capturedAt: Date
+    }
+
+    @Published private(set) var byHostID: [UUID: Entry] = [:]
+
+    private let defaultsKey = "cached_tmux_sessions_v1"
+
+    init() { load() }
+
+    func entry(for hostID: UUID) -> Entry? { byHostID[hostID] }
+
+    func record(hostID: UUID, names: [String]) {
+        byHostID[hostID] = Entry(names: names, capturedAt: Date())
+        save()
+    }
+
+    func clear(hostID: UUID) {
+        byHostID.removeValue(forKey: hostID)
+        save()
+    }
+
+    private func load() {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+              let decoded = try? JSONDecoder().decode([String: Entry].self, from: data)
+        else { return }
+        byHostID = Dictionary(uniqueKeysWithValues: decoded.map { (UUID(uuidString: $0.key), $0.value) }
+            .compactMap { id, entry in id.map { ($0, entry) } })
+    }
+
+    private func save() {
+        let encoded = Dictionary(uniqueKeysWithValues: byHostID.map { ($0.key.uuidString, $0.value) })
+        guard let data = try? JSONEncoder().encode(encoded) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+}
+
+// MARK: - Recent launches
+
+/// Sessions this device actually attached to, most recent first. The iOS
+/// mirror of the Mac launcher's Recent Launches list — recorded at the
+/// attach moment (not at tap), so it answers "where have I been working",
+/// not "what did I browse".
+@MainActor
+final class RecentLaunchStore: ObservableObject {
+    static let shared = RecentLaunchStore()
+
+    struct Launch: Codable, Identifiable, Hashable {
+        var id: String { "\(hostID.uuidString).\(sessionName)" }
+        let hostID: UUID
+        let sessionName: String
+        let hostLabel: String
+        let date: Date
+    }
+
+    @Published private(set) var launches: [Launch] = []
+
+    private let defaultsKey = "recent_launches_v1"
+    private static let maxLaunches = 8
+
+    init() { load() }
+
+    /// Caller passes the tmux session name; raw shells (empty name) are
+    /// skipped by the caller — `new-session -A` on an empty name leaves
+    /// nothing on the server to come back to, so it earns no Recent row.
+    func record(host: Host, sessionName: String) {
+        let launch = Launch(
+            hostID: host.id,
+            sessionName: sessionName,
+            hostLabel: host.displayName,
+            date: Date()
+        )
+        launches.removeAll { $0.id == launch.id }
+        launches.insert(launch, at: 0)
+        if launches.count > Self.maxLaunches { launches = Array(launches.prefix(Self.maxLaunches)) }
+        save()
+    }
+
+    private func load() {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+              let decoded = try? JSONDecoder().decode([Launch].self, from: data)
+        else { return }
+        launches = decoded
+    }
+
+    private func save() {
+        guard let data = try? JSONEncoder().encode(launches) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
     }
 }

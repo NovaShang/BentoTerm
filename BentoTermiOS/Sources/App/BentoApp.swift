@@ -69,11 +69,20 @@ struct BentoApp: App {
     var body: some Scene {
         WindowGroup {
             NavigationStack(path: $sessionManager.navigationPath) {
-                HostListView()
-                    .navigationDestination(for: HostNavigation.self) { dest in
-                        switch dest {
-                        case .sessions(let host):
-                            HostSessionsView(host: host)
+                HomeView()
+                    // Depth = 1: the terminal is the only pushed destination.
+                    // Everything else in the pre-session world is a sheet off
+                    // Home (create, host editor, settings).
+                    .navigationDestination(for: BentoRoute.self) { route in
+                        switch route {
+                        case .terminal(let key):
+                            if let entry = sessionManager.activeSessions
+                                .first(where: { $0.key == key }) {
+                                TerminalWrapperView(viewModel: entry.viewModel)
+                                    // The terminal supplies its own back item;
+                                    // only the default button is hidden.
+                                    .navigationBarBackButtonHidden()
+                            }
                         }
                     }
             }
@@ -100,6 +109,10 @@ struct BentoApp: App {
     }
 
     /// Handles `bento://session/<hostID>` and `bento://app`.
+    ///
+    /// Same routing rule as everything else that enters a session: attached
+    /// → push the terminal; known host but not attached → hand the create
+    /// sheet a request (it re-enumerates live).
     private func handleDeepLink(_ url: URL) {
         guard url.scheme == "bento" else { return }
         let host = url.host ?? ""
@@ -107,11 +120,12 @@ struct BentoApp: App {
         switch host {
         case "session":
             guard let idString = path.dropFirst().first,
-                  let uuid = UUID(uuidString: idString),
-                  let entry = sessionManager.activeSessions.first(where: { $0.key.hostID == uuid }) else {
-                return
+                  let uuid = UUID(uuidString: idString) else { return }
+            if let entry = sessionManager.activeSessions.first(where: { $0.key.hostID == uuid }) {
+                sessionManager.navigationPath = [.terminal(entry.key)]
+            } else if hostStore.hosts.contains(where: { $0.id == uuid }) {
+                sessionManager.openRequest = OpenRequest(hostID: uuid)
             }
-            sessionManager.navigationPath = [.sessions(entry.host)]
         case "app":
             sessionManager.navigationPath = []
         default:

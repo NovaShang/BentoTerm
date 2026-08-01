@@ -1,14 +1,46 @@
 import SwiftUI
 import BentoTerminalCore
 
-struct HostListView: View {
+/// Home — the pre-session state surface, iOS's answer to the Mac launcher
+/// ("the app's lock screen"): what's running, what I was doing, where I can
+/// go. Same sections, same order, same vocabulary as the Mac — re-judged
+/// for the phone.
+///
+/// - Sessions first (attached + cached-not-connected, state language on the
+///   left), then Recent, then the creation verbs, then hosts.
+/// - Depth = 1: the terminal is the only push; everything else (create,
+///   host editor, settings) is a sheet.
+/// - All SSH round-trips live in the create sheet, never here and never in
+///   the terminal — Home is static and instant.
+struct HomeView: View {
     @EnvironmentObject private var hostStore: HostStore
     @EnvironmentObject private var sessionManager: SessionManager
+    @ObservedObject private var sessionCache = SessionCacheStore.shared
+    @ObservedObject private var recentLaunches = RecentLaunchStore.shared
+
     @State private var showAddHost = false
     @State private var showOnboarding = false
     @State private var showSettings = false
     @State private var editingHost: Host?
     @State private var searchText = ""
+    @State private var createRequest: CreateSheetRequest?
+
+    /// What the create sheet should be born with. `sheet(item:)` treats nil
+    /// as dismissed, so dismissing the sheet also clears the request.
+    struct CreateSheetRequest: Identifiable {
+        let id = UUID()
+        var initialHost: Host?
+        var initialSessionName: String?
+        var initialIntent: CreateIntent?
+    }
+
+    /// A session on some host that isn't attached from this phone.
+    private struct CachedSession: Identifiable {
+        let host: Host
+        let name: String
+        let capturedAt: Date
+        var id: String { "\(host.id.uuidString).\(name)" }
+    }
 
     private var filteredHosts: [Host] {
         if searchText.isEmpty { return hostStore.hosts }
@@ -19,12 +51,34 @@ struct HostListView: View {
         }
     }
 
+    /// Cached sessions of hosts that still exist, newest capture first.
+    private var cachedEntries: [CachedSession] {
+        var result: [CachedSession] = []
+        for (hostID, entry) in sessionCache.byHostID {
+            guard let host = hostStore.hosts.first(where: { $0.id == hostID }) else { continue }
+            let attached = sessionManager.sessions(forHostID: hostID).map { $0.key.tmuxSessionName }
+            for name in entry.names where !attached.contains(name) {
+                result.append(CachedSession(host: host, name: name, capturedAt: entry.capturedAt))
+            }
+        }
+        return result.sorted { $0.capturedAt > $1.capturedAt }
+    }
+
+    /// Recent launches whose host still exists, newest first.
+    private var recentRows: [RecentLaunchStore.Launch] {
+        recentLaunches.launches.filter { l in hostStore.hosts.contains { $0.id == l.hostID } }
+    }
+
+    private var hasAnySessions: Bool {
+        !sessionManager.activeSessions.isEmpty || !cachedEntries.isEmpty
+    }
+
     var body: some View {
         Group {
             if hostStore.hosts.isEmpty {
                 WelcomeFlowView(onAddSSH: { showAddHost = true })
             } else {
-                populatedForm
+                homeForm
             }
         }
         .background(Color.bentoShell.ignoresSafeArea())
@@ -92,80 +146,217 @@ struct HostListView: View {
         .sheet(isPresented: $showOnboarding) {
             HowBentoWorksView()
         }
+        .sheet(item: $createRequest) { request in
+            CreateSheetView(
+                initialHost: request.initialHost,
+                initialSessionName: request.initialSessionName,
+                initialIntent: request.initialIntent,
+                onSessionReady: { key in
+                    // The sheet did the connect; now the terminal is the only
+                    // thing on the stack above Home. Pushing under the sheet
+                    // is fine — the dismissal animation reveals it.
+                    sessionManager.navigationPath = [.terminal(key)]
+                },
+                onAddHost: { showAddHost = true }
+            )
+            .environmentObject(hostStore)
+            .environmentObject(sessionManager)
+        }
+        .onChange(of: sessionManager.openRequest) { _, request in
+            guard let request else { return }
+            sessionManager.openRequest = nil
+            createRequest = CreateSheetRequest(
+                initialHost: hostStore.hosts.first { $0.id == request.hostID },
+                initialSessionName: request.sessionName,
+                initialIntent: request.intent
+            )
+        }
     }
 
-    @ViewBuilder
-    private var populatedForm: some View {
-        Form {
-            if !sessionManager.activeSessions.isEmpty {
-                Section {
-                    ForEach(sessionManager.activeSessions) { entry in
-                        ActiveSessionRow(entry: entry)
-                            .environmentObject(sessionManager)
-                    }
-                } header: {
-                    BentoFormHeader("Active")
-                }
-                .bentoSectionStyle()
-            }
+    // MARK: - Form
 
-            if filteredHosts.isEmpty && !hostStore.hosts.isEmpty {
-                Section {
-                    Text("No hosts match \u{201C}\(searchText)\u{201D}")
-                        .font(.subheadline)
-                        .foregroundStyle(Color.bentoInkDim)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 8)
-                }
-                .bentoSectionStyle()
-            } else if !filteredHosts.isEmpty {
-                Section {
-                    ForEach(filteredHosts) { host in
-                        NavigationLink(value: HostNavigation.sessions(host)) {
-                            HostRow(
-                                host: host,
-                                isConnected: sessionManager.activeSessions.contains(where: { $0.key.hostID == host.id })
-                            )
-                        }
-                        .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                            Button {
-                                editingHost = host
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                            }
-                            .tint(Color.bentoSalmon)
-                        }
-                        .contextMenu {
-                            Button {
-                                editingHost = host
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                            }
-                            Button(role: .destructive) {
-                                hostStore.delete(host)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                    }
-                    .onDelete { indexSet in
-                        for index in indexSet {
-                            hostStore.delete(filteredHosts[index])
-                        }
-                    }
-                } header: {
-                    BentoFormHeader("SSH Hosts")
-                }
-                .bentoSectionStyle()
+    @ViewBuilder
+    private var homeForm: some View {
+        Form {
+            sessionsSection
+            if !recentRows.isEmpty {
+                recentSection
             }
+            verbsSection
+            hostsSection
         }
         .bentoForm()
         .searchable(text: $searchText, prompt: "Search hosts")
     }
-}
 
-enum HostNavigation: Hashable {
-    case sessions(Host)
+    /// The state surface: attached sessions (live) + cached-but-not-connected
+    /// (last-known, with staleness). One list — the question Home answers is
+    /// "what's running", and the host is a label on each row.
+    @ViewBuilder
+    private var sessionsSection: some View {
+        Section {
+            ForEach(sessionManager.activeSessions) { entry in
+                ActiveSessionRow(entry: entry)
+                    .environmentObject(sessionManager)
+            }
+            ForEach(cachedEntries) { entry in
+                CachedSessionRow(
+                    name: entry.name,
+                    host: entry.host,
+                    capturedAt: entry.capturedAt
+                )
+            }
+            if !hasAnySessions {
+                Text("Nothing running right now. Sessions you leave going on a host show up here.")
+                    .font(.callout)
+                    .foregroundStyle(Color.bentoInkDim)
+            }
+        } header: {
+            BentoFormHeader("Sessions")
+        }
+        .bentoSectionStyle()
+    }
+
+    @ViewBuilder
+    private var recentSection: some View {
+        Section {
+            ForEach(recentRows) { launch in
+                Button {
+                    openRecent(launch)
+                } label: {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.bentoSurfaceHi)
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(Color.bentoInkDim)
+                        }
+                        .frame(width: 34, height: 34)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(launch.hostLabel)
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(Color.bentoInk)
+                                .lineLimit(1)
+                            Text(launch.sessionName)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(Color.bentoInkDim)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Text(launch.date, style: .relative)
+                            .font(.caption)
+                            .foregroundStyle(Color.bentoInkMute)
+                            .lineLimit(1)
+                    }
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        } header: {
+            BentoFormHeader("Recent")
+        }
+        .bentoSectionStyle()
+    }
+
+    /// The creation verbs — same set as the Mac launcher, one concept one
+    /// name. Agent leads: that's the hero flow on a phone. Each opens the
+    /// create sheet with that intent; the sheet picks the host.
+    @ViewBuilder
+    private var verbsSection: some View {
+        Section {
+            Button {
+                createRequest = CreateSheetRequest(initialIntent: .agent)
+            } label: {
+                Label("New Agent Session…", systemImage: "wand.and.stars")
+            }
+            Button {
+                createRequest = CreateSheetRequest(initialIntent: .empty)
+            } label: {
+                Label("New Empty Session", systemImage: "plus.rectangle.on.rectangle")
+            }
+            Button {
+                createRequest = CreateSheetRequest(initialIntent: .plainShell)
+            } label: {
+                Label("New Terminal without tmux", systemImage: "terminal")
+            }
+            Button {
+                showAddHost = true
+            } label: {
+                Label("New SSH Connection…", systemImage: "network")
+            }
+        } header: {
+            BentoFormHeader("New")
+        }
+        .bentoSectionStyle()
+    }
+
+    @ViewBuilder
+    private var hostsSection: some View {
+        Section {
+            if filteredHosts.isEmpty && !hostStore.hosts.isEmpty {
+                Text("No hosts match \u{201C}\(searchText)\u{201D}")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.bentoInkDim)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(filteredHosts) { host in
+                    Button {
+                        createRequest = CreateSheetRequest(initialHost: host)
+                    } label: {
+                        HostRow(
+                            host: host,
+                            isConnected: sessionManager.activeSessions.contains(where: { $0.key.hostID == host.id })
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                        Button {
+                            editingHost = host
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        .tint(Color.bentoSalmon)
+                    }
+                    .contextMenu {
+                        Button {
+                            editingHost = host
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        Button(role: .destructive) {
+                            hostStore.delete(host)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                }
+                .onDelete { indexSet in
+                    for index in indexSet {
+                        hostStore.delete(filteredHosts[index])
+                    }
+                }
+            }
+        } header: {
+            BentoFormHeader("SSH Hosts")
+        }
+        .bentoSectionStyle()
+    }
+
+    // MARK: - Actions
+
+    private func openRecent(_ launch: RecentLaunchStore.Launch) {
+        guard let host = hostStore.hosts.first(where: { $0.id == launch.hostID }) else { return }
+        sessionManager.open(
+            session: SessionKey(hostID: host.id, tmuxSessionName: launch.sessionName),
+            host: host
+        )
+    }
 }
 
 // MARK: - Wordmark
@@ -226,6 +417,58 @@ struct HostRow: View {
     }
 }
 
+/// A session that exists on a host but isn't attached from this phone: the
+/// cached snapshot Home shows without opening an SSH connection. Honest
+/// about being a snapshot — the staleness is part of the row.
+struct CachedSessionRow: View {
+    let name: String
+    let host: Host
+    let capturedAt: Date
+
+    @EnvironmentObject private var sessionManager: SessionManager
+
+    var body: some View {
+        Button {
+            sessionManager.open(
+                session: SessionKey(hostID: host.id, tmuxSessionName: name),
+                host: host
+            )
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.bentoSurfaceHi)
+                    Image(systemName: "rectangle.stack")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.bentoInkMute)
+                }
+                .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.bentoInk)
+                        .lineLimit(1)
+                    Text("\(host.displayName) · not connected")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.bentoInkDim)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                Text(capturedAt, style: .relative)
+                    .font(.caption)
+                    .foregroundStyle(Color.bentoInkMute)
+                    .lineLimit(1)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 /// Active tmux session row.
 struct ActiveSessionRow: View {
     let entry: SessionManager.SessionEntry
@@ -276,7 +519,7 @@ struct ActiveSessionRow: View {
 
     var body: some View {
         Button {
-            sessionManager.navigationPath = [.sessions(entry.host)]
+            sessionManager.open(session: entry.key, host: entry.host)
         } label: {
             HStack(spacing: 12) {
                 ZStack {

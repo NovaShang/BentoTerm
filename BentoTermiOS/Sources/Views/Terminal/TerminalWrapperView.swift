@@ -4,12 +4,23 @@ import Combine
 import BentoTerminalCore
 
 /// Bridges the UIKit terminal views into SwiftUI navigation.
-/// The TerminalViewModel and VoiceInputController are owned by the parent
-/// (HostSessionsView) and passed in — the session has already been picked
-/// before this view is pushed.
+/// The session has already been picked (and the SSH is up) before this view
+/// is pushed; the view model comes in, the voice controller is owned here —
+/// voice input exists only inside a terminal, so the controller lives and
+/// dies with this screen.
 struct TerminalWrapperView: View {
     @ObservedObject var viewModel: TerminalViewModel
-    @ObservedObject var voiceController: VoiceInputController
+    @StateObject private var voiceController: VoiceInputController
+
+    init(viewModel: TerminalViewModel) {
+        self.viewModel = viewModel
+        _voiceController = StateObject(wrappedValue: VoiceInputController())
+        // Route results into this session's VM — the same wiring the macOS
+        // host uses (GhosttyTiledPaneHost wires `viewModel.handleVoiceResult`).
+        voiceController.onResult = { [weak viewModel] result in
+            viewModel?.handleVoiceResult(result)
+        }
+    }
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass

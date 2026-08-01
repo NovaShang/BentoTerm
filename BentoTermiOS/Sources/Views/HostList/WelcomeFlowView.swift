@@ -55,7 +55,7 @@ struct WelcomeFlowView: View {
                     pathCard(
                         symbol: "terminal",
                         title: "Connect over SSH",
-                        subtitle: "Any machine running sshd and tmux — Mac, Linux, or Windows (WSL). Reads your ~/.ssh/config.",
+                        subtitle: "Any machine running sshd and tmux — Mac, Linux, or Windows (WSL).",
                         prominent: true
                     ) { onAddSSH() }
 
