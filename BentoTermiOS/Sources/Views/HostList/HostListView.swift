@@ -87,6 +87,17 @@ struct HomeView: View {
                         .foregroundStyle(Color.bentoInkDim)
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showAddHost = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.bentoEmerald)
+                }
+                .accessibilityLabel("Add SSH host")
+                .accessibilityIdentifier("plus")
+            }
         }
         .sheet(isPresented: $showAddHost) {
             NavigationStack {
@@ -118,8 +129,7 @@ struct HomeView: View {
                         // only thing on the stack above Home. Pushing under
                         // the sheet is fine — the dismissal reveals it.
                         sessionManager.navigationPath = [.terminal(key)]
-                    },
-                    onAddHost: { showAddHost = true }
+                    }
                 )
             }
             .environmentObject(hostStore)

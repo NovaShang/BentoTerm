@@ -17,7 +17,6 @@ struct HostSessionsView: View {
     var initialSessionName: String?
     /// Called the moment a session is attached and ready to enter.
     var onSessionReady: (SessionKey) -> Void
-    var onAddHost: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hostStore: HostStore
@@ -37,12 +36,10 @@ struct HostSessionsView: View {
 
     init(host: Host,
          initialSessionName: String?,
-         onSessionReady: @escaping (SessionKey) -> Void,
-         onAddHost: @escaping () -> Void) {
+         onSessionReady: @escaping (SessionKey) -> Void) {
         self.host = host
         self.initialSessionName = initialSessionName
         self.onSessionReady = onSessionReady
-        self.onAddHost = onAddHost
         _lister = StateObject(wrappedValue: TmuxLister(host: host))
     }
 
@@ -76,7 +73,6 @@ struct HostSessionsView: View {
 
             otherSessionsSection
             newSection
-            addHostSection
         }
         .bentoForm()
         .disabled(isStartingNew)
@@ -314,18 +310,6 @@ struct HostSessionsView: View {
             return "A plain-shell session is already open — see Active."
         }
         return "Agent session picks an agent (Claude / Codex / …), directory and layout. Empty session is a blank single-pane tmux session. Without tmux is a plain shell — no split panes or session persistence."
-    }
-
-    @ViewBuilder
-    private var addHostSection: some View {
-        Section {
-            Button {
-                onAddHost()
-            } label: {
-                Label("Add SSH host…", systemImage: "plus.circle")
-            }
-        }
-        .bentoSectionStyle()
     }
 
     // MARK: - Helpers
