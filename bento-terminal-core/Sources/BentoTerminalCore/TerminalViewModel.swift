@@ -142,6 +142,13 @@ public final class TerminalViewModel: ObservableObject {
     @Published public var availableTmuxSessions: [String] = []
     @Published public var sessionsLoading: Bool = false
 
+    /// Whether `availableTmuxSessions` reflects an answer we actually received.
+    /// False until the first listing completes, and it stays false if that
+    /// listing times out — because `[]` then means "we don't know", not "this
+    /// host has nothing", and the two must not be confused where the list
+    /// decides whether we are creating a session or joining one.
+    private var sessionListIsTrustworthy = false
+
     /// Bumped every time `availableTmuxSessions` is re-read from the attached
     /// tmux server over the CONTROL CHANNEL — i.e. once per answered
     /// `list-sessions`, from the server this connection is actually on.
@@ -240,7 +247,8 @@ public final class TerminalViewModel: ObservableObject {
     private struct ShellCapture {
         var buffer: Data = Data()
         var marker: String
-        var continuation: CheckedContinuation<String, Never>
+        /// `nil` means the end marker never arrived — see `captureShellOutput`.
+        var continuation: CheckedContinuation<String?, Never>
     }
     private var shellCapture: ShellCapture? {
         // Mirrored into a lock so the off-main router can consult it without
@@ -611,6 +619,7 @@ public final class TerminalViewModel: ObservableObject {
                     guard parts.count == 2 else { return nil }
                     return String(parts[1])
                 }
+            sessionListIsTrustworthy = true
             dlog("Found tmux sessions (control): \(self.availableTmuxSessions)")
             // Answered by the server this connection is attached to — the only
             // list that can speak for this window's session.
@@ -636,28 +645,43 @@ public final class TerminalViewModel: ObservableObject {
             "printf '\\n%s%s\\n' '\(startA)' '\(startB)';" +
             " tmux ls 2>/dev/null;" +
             " printf '%s%s\\n' '\(endA)' '\(endB)'\n"
-        let output = await captureShellOutput(cmd: cmd, marker: endMarker, timeoutMs: 5000)
+        guard let output = await captureShellOutput(cmd: cmd, marker: endMarker, timeoutMs: 5000) else {
+            // Leave `availableTmuxSessions` alone. An empty list here does not
+            // mean "this host has no sessions" — and `applyTmuxChoice` reads it
+            // to decide whether it is creating a session or joining one, so a
+            // wrong empty answer makes it resize an EXISTING session to this
+            // device, shrinking the viewport for every other client attached to
+            // it. Staleness is strictly safer than a fabricated empty.
+            dlog("tmux ls timed out — keeping the previous session list")
+            return
+        }
         availableTmuxSessions = TmuxParsers.parseTmuxLs(output, startMarker: startMarker, endMarker: endMarker)
+        sessionListIsTrustworthy = true
         dlog("Found tmux sessions: \(self.availableTmuxSessions)")
     }
 
     /// Send a shell command and capture all output until `marker` is observed
-    /// (or until timeout). Output is consumed silently and not forwarded to
-    /// the terminal.
-    private func captureShellOutput(cmd: String, marker: String, timeoutMs: Int) async -> String {
-        await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
+    /// Output is consumed silently and not forwarded to the terminal.
+    ///
+    /// Returns `nil` if the marker never arrived. That is deliberately NOT the
+    /// same as an empty result: this used to return whatever partial bytes had
+    /// accumulated, so a slow login was indistinguishable from a host with
+    /// nothing on it — and the caller then acted on the empty answer. See
+    /// `refreshTmuxSessions`.
+    private func captureShellOutput(cmd: String, marker: String, timeoutMs: Int) async -> String? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             shellCapture = ShellCapture(buffer: Data(), marker: marker, continuation: continuation)
             transport.write(cmd)
 
-            // Timeout: if marker doesn't appear, return whatever we have.
             Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(timeoutMs))
                 guard let self else { return }
                 await MainActor.run {
                     if let capture = self.shellCapture {
-                        let str = String(data: capture.buffer, encoding: .utf8) ?? ""
+                        dlog("shell capture timed out after \(timeoutMs)ms with "
+                            + "\(capture.buffer.count) byte(s) and no end marker")
                         self.shellCapture = nil
-                        capture.continuation.resume(returning: str)
+                        capture.continuation.resume(returning: nil)
                     }
                 }
             }
@@ -697,7 +721,9 @@ public final class TerminalViewModel: ObservableObject {
             // opened at the rendered grid, so the attach already reports a
             // sensible client size.
             let isAttachToExisting =
-                transport.startsInTmuxControlMode || availableTmuxSessions.contains(name)
+                transport.startsInTmuxControlMode
+                || !sessionListIsTrustworthy
+                || availableTmuxSessions.contains(name)
             await launchTmux(
                 sessionName: name,
                 groupWith: nil,

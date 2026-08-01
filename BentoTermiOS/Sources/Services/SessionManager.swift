@@ -273,7 +273,10 @@ final class TmuxLister: ObservableObject {
     private let sshService = SSHService()
     private var captureBuffer = Data()
     private var captureMarker: String = ""
-    private var captureContinuation: CheckedContinuation<String, Never>?
+    /// `nil` result means the end marker never arrived — an empty session list
+    /// and "we never got an answer" are different facts and the picker shows
+    /// them differently.
+    private var captureContinuation: CheckedContinuation<String?, Never>?
 
     init(host: Host) {
         self.host = host
@@ -315,7 +318,7 @@ final class TmuxLister: ObservableObject {
             " tmux ls 2>/dev/null;" +
             " printf '%s%s\\n' '\(endA)' '\(endB)'\n"
 
-        let output = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+        let output = await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
             captureBuffer = Data()
             captureMarker = endMarker
             captureContinuation = cont
@@ -327,13 +330,19 @@ final class TmuxLister: ObservableObject {
                     guard let self else { return }
                     if let pending = self.captureContinuation {
                         self.captureContinuation = nil
-                        let str = String(data: self.captureBuffer, encoding: .utf8) ?? ""
-                        pending.resume(returning: str)
+                        pending.resume(returning: nil)
                     }
                 }
             }
         }
 
+        guard let output else {
+            // Do not publish an empty list: the picker would render it as "no
+            // other tmux sessions on this host", which is a claim we cannot
+            // make. Say what actually happened instead.
+            error = "Couldn't list sessions on \(host.displayName) — no answer in 5s."
+            return
+        }
         sessions = TmuxParsers.parseTmuxLs(output, startMarker: startMarker, endMarker: endMarker)
     }
 
