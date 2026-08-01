@@ -245,7 +245,11 @@ final class VoiceInputController: ObservableObject {
         showPreview = false
         previewLoading = false
         isManualCompose = false
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty else {
+            dlog("[compose] sendPreview EMPTY — previewText='\(previewText)'")
+            return
+        }
+        dlog("[compose] sendPreview '\(text)' (\(text.count) chars)")
         HapticService.shared.sent()
         TelemetryService.shared.record(.voiceSend)
         TelemetryService.shared.record(.voiceFirstSend)

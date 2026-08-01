@@ -15,8 +15,16 @@ struct TerminalWrapperView: View {
     init(viewModel: TerminalViewModel) {
         self.viewModel = viewModel
         _voiceController = StateObject(wrappedValue: VoiceInputController())
-        // Route results into this session's VM — the same wiring the macOS
-        // host uses (GhosttyTiledPaneHost wires `viewModel.handleVoiceResult`).
+    }
+
+    /// Route results into this session's VM — the same wiring the macOS host
+    /// uses (GhosttyTiledPaneHost wires `viewModel.handleVoiceResult`).
+    ///
+    /// Wired on appear, NOT in `init`: a `@StateObject`'s wrappedValue is not
+    /// final until the view is mounted — an instance captured in init can be
+    /// discarded and replaced, leaving `onResult` set on a dead instance while
+    /// ComposeBar talks to the live one (compose send then silently dropped).
+    private func wireVoiceController() {
         voiceController.onResult = { [weak viewModel] result in
             viewModel?.handleVoiceResult(result)
         }
@@ -69,6 +77,7 @@ struct TerminalWrapperView: View {
     var body: some View {
         chrome
             .ignoresSafeArea(.keyboard)
+            .onAppear { wireVoiceController() }
         .overlay(alignment: .top) { reconnectingBanner }
         .overlay { voiceOverlay }
         // The managed input surface: an inline bar riding the keyboard's top

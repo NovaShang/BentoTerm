@@ -4,6 +4,7 @@ public extension TerminalViewModel {
     /// Apply a voice result to the active pane, per the compass direction.
     /// Shared by iOS + macOS (both just hand off the `VoiceInputResult`).
     func handleVoiceResult(_ result: VoiceInputResult) {
+        dlog("[voice-result] direction=\(result.direction) '\(result.text)' (\(result.text.count) chars)")
         switch result.direction {
         case .none:
             sendString(result.text)

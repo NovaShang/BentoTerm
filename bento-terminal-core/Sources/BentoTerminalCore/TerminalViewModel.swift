@@ -1547,8 +1547,10 @@ public final class TerminalViewModel: ObservableObject {
     public func sendData(_ data: Data) {
         if usingTmux, let activePaneID,
            let paneVM = paneViewModels.first(where: { $0.paneID == activePaneID }) {
+            dlog("[sendData] \(data.count)B → paneVM \(activePaneID)")
             paneVM.sendInput(data)
         } else {
+            dlog("[sendData] \(data.count)B → transport (usingTmux=\(usingTmux), activePaneID=\(String(describing: activePaneID)))")
             predictor.willSend(data)   // draw the prediction; doesn't alter what's sent
             transport.write(data)
         }
