@@ -18,22 +18,12 @@ enum BentoRoute: Hashable {
     case terminal(SessionKey)
 }
 
-/// What the create sheet should be born with when Home (or a deep link)
-/// routes there. Either a host to browse, plus optionally the session name
-/// to attach to and/or the creation intent to run.
+/// What the host sheet should be born with when Home (or a deep link)
+/// routes there: the host, plus optionally the session name to attach to.
+/// Creation intents never ride here — the sheet's own New section owns them.
 struct OpenRequest: Equatable {
     var hostID: UUID
     var sessionName: String?
-    var intent: CreateIntent?
-}
-
-/// The three tmux-related creation verbs, mirroring the Mac launcher's
-/// "New Agent Session… / New Empty Session / New Terminal without tmux".
-/// "New SSH Connection…" (host editor) is handled by Home directly.
-enum CreateIntent: Equatable {
-    case agent
-    case empty
-    case plainShell
 }
 
 /// Central registry of live `TerminalViewModel` instances.

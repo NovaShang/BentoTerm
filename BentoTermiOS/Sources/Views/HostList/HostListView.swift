@@ -22,15 +22,14 @@ struct HomeView: View {
     @State private var showSettings = false
     @State private var editingHost: Host?
     @State private var searchText = ""
-    @State private var createRequest: CreateSheetRequest?
+    @State private var hostSheetRequest: HostSheetRequest?
 
-    /// What the create sheet should be born with. `sheet(item:)` treats nil
+    /// What the host sheet should be born with. `sheet(item:)` treats nil
     /// as dismissed, so dismissing the sheet also clears the request.
-    struct CreateSheetRequest: Identifiable {
+    struct HostSheetRequest: Identifiable {
         let id = UUID()
-        var initialHost: Host?
+        var host: Host
         var initialSessionName: String?
-        var initialIntent: CreateIntent?
     }
 
     private var filteredHosts: [Host] {
@@ -109,30 +108,28 @@ struct HomeView: View {
         .sheet(isPresented: $showOnboarding) {
             HowBentoWorksView()
         }
-        .sheet(item: $createRequest) { request in
-            CreateSheetView(
-                initialHost: request.initialHost,
-                initialSessionName: request.initialSessionName,
-                initialIntent: request.initialIntent,
-                onSessionReady: { key in
-                    // The sheet did the connect; now the terminal is the only
-                    // thing on the stack above Home. Pushing under the sheet
-                    // is fine — the dismissal animation reveals it.
-                    sessionManager.navigationPath = [.terminal(key)]
-                },
-                onAddHost: { showAddHost = true }
-            )
+        .sheet(item: $hostSheetRequest) { request in
+            NavigationStack {
+                HostSessionsView(
+                    host: request.host,
+                    initialSessionName: request.initialSessionName,
+                    onSessionReady: { key in
+                        // The sheet did the connect; now the terminal is the
+                        // only thing on the stack above Home. Pushing under
+                        // the sheet is fine — the dismissal reveals it.
+                        sessionManager.navigationPath = [.terminal(key)]
+                    },
+                    onAddHost: { showAddHost = true }
+                )
+            }
             .environmentObject(hostStore)
             .environmentObject(sessionManager)
         }
         .onChange(of: sessionManager.openRequest) { _, request in
             guard let request else { return }
             sessionManager.openRequest = nil
-            createRequest = CreateSheetRequest(
-                initialHost: hostStore.hosts.first { $0.id == request.hostID },
-                initialSessionName: request.sessionName,
-                initialIntent: request.intent
-            )
+            guard let host = hostStore.hosts.first(where: { $0.id == request.hostID }) else { return }
+            hostSheetRequest = HostSheetRequest(host: host, initialSessionName: request.sessionName)
         }
     }
 
@@ -145,7 +142,6 @@ struct HomeView: View {
             if !recentRows.isEmpty {
                 recentSection
             }
-            verbsSection
             hostsSection
         }
         .bentoForm()
@@ -219,34 +215,9 @@ struct HomeView: View {
         .bentoSectionStyle()
     }
 
-    /// The creation verbs — same set as the Mac launcher, one concept one
-    /// name. Agent leads: that's the hero flow on a phone. Each opens the
-    /// create sheet with that intent; the sheet picks the host (and is
-    /// where a new host gets added — that entry lives there, not here).
-    @ViewBuilder
-    private var verbsSection: some View {
-        Section {
-            Button {
-                createRequest = CreateSheetRequest(initialIntent: .agent)
-            } label: {
-                Label("New Agent Session…", systemImage: "wand.and.stars")
-            }
-            Button {
-                createRequest = CreateSheetRequest(initialIntent: .empty)
-            } label: {
-                Label("New Empty Session", systemImage: "plus.rectangle.on.rectangle")
-            }
-            Button {
-                createRequest = CreateSheetRequest(initialIntent: .plainShell)
-            } label: {
-                Label("New Terminal without tmux", systemImage: "terminal")
-            }
-        } header: {
-            BentoFormHeader("New")
-        }
-        .bentoSectionStyle()
-    }
-
+    /// Creation lives in the host sheet, not here: every create verb needs
+    /// a host to act on, so Home stays Sessions / Recent / Hosts and the
+    /// sheet's New section owns the three creation methods.
     @ViewBuilder
     private var hostsSection: some View {
         Section {
@@ -259,7 +230,7 @@ struct HomeView: View {
             } else {
                 ForEach(filteredHosts) { host in
                     Button {
-                        createRequest = CreateSheetRequest(initialHost: host)
+                        hostSheetRequest = HostSheetRequest(host: host)
                     } label: {
                         HostRow(
                             host: host,

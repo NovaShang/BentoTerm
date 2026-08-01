@@ -1,119 +1,33 @@
 import SwiftUI
 import BentoTerminalCore
 
-// MARK: - Create sheet
+// MARK: - Host sheet
 
-/// The pre-session "where to / what to create" sheet — iOS's form of the
-/// Mac launcher's creation panel. Level 1: pick a host. Level 2: that
-/// host's sessions (live enumeration) plus the creation entries.
+/// The host sheet — what Home hands a host to. The per-host pre-session
+/// screen: that host's tmux sessions (live enumeration) plus the New section
+/// with the three creation methods (the Mac launcher's verbs, host-scoped).
 ///
 /// All SSH round-trips (enumeration, connection, session start) and all
 /// failure display happen HERE, before any terminal exists. The terminal is
 /// only pushed once a real session is attached — so it never has to express
 /// a connection failure (the structural root of the Mac's "open remote tmux
 /// and hang" bug, fixed on both platforms the same way).
-struct CreateSheetView: View {
-    var initialHost: Host?
+struct HostSessionsView: View {
+    let host: Host
     var initialSessionName: String?
-    var initialIntent: CreateIntent?
     /// Called the moment a session is attached and ready to enter.
     var onSessionReady: (SessionKey) -> Void
     var onAddHost: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hostStore: HostStore
-
-    @State private var path = NavigationPath()
-    @State private var prefillPushed = false
-
-    var body: some View {
-        NavigationStack(path: $path) {
-            hostList
-                .navigationDestination(for: Host.self) { host in
-                    HostSessionsContent(
-                        host: host,
-                        initialSessionName: initialSessionName,
-                        initialIntent: initialIntent,
-                        onSessionReady: { key in
-                            onSessionReady(key)
-                            dismiss()
-                        }
-                    )
-                }
-                .navigationTitle("New")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Cancel") { dismiss() }
-                    }
-                }
-        }
-        .task {
-            // Prefill: a cached-session tap or a recent-launch tap routes here
-            // with a specific host. Push straight past the host list.
-            guard !prefillPushed, let host = initialHost else { return }
-            prefillPushed = true
-            path.append(host)
-        }
-    }
-
-    private var hostList: some View {
-        Form {
-            Section {
-                if hostStore.hosts.isEmpty {
-                    Text("No hosts yet — add the machine you want to reach.")
-                        .font(.callout)
-                        .foregroundStyle(Color.bentoInkDim)
-                } else {
-                    ForEach(hostStore.hosts) { host in
-                        NavigationLink(value: host) {
-                            HostRow(host: host)
-                        }
-                    }
-                }
-            } header: {
-                BentoFormHeader("SSH Hosts")
-            } footer: {
-                BentoFormFooter("A host is any machine running sshd and tmux. Pick one to attach to a session or start a new one.")
-            }
-            .bentoSectionStyle()
-
-            Section {
-                Button {
-                    onAddHost()
-                } label: {
-                    Label("Add SSH host…", systemImage: "plus.circle")
-                }
-            }
-            .bentoSectionStyle()
-        }
-        .bentoForm()
-    }
-}
-
-// MARK: - Per-host session content (level 2)
-
-/// Lists the tmux sessions that exist on a host, plus a "new session" row
-/// and a "no tmux" row. Selecting any of them attaches (or starts) the
-/// session and calls `onSessionReady` — the sheet dismisses and the parent
-/// pushes the terminal.
-///
-/// Opened with a `sessionName` it auto-attaches on appear (the cached-session
-/// tap flow — one tap from Home should enter). Opened with an `intent` it
-/// runs that creation flow (agent wizard / empty session / plain shell).
-private struct HostSessionsContent: View {
-    let host: Host
-    var initialSessionName: String?
-    var initialIntent: CreateIntent?
-    var onSessionReady: (SessionKey) -> Void
-
-    @EnvironmentObject private var hostStore: HostStore
     @EnvironmentObject private var sessionManager: SessionManager
+
     @StateObject private var lister: TmuxLister
 
     @State private var newSessionName: String = "bento"
+    @State private var showNameField = false
     @FocusState private var nameFieldFocused: Bool
-    @State private var pendingChoice: TmuxStartChoice?
     @State private var isStartingNew = false
     @State private var showAgentWizard = false
     @State private var autoStarted = false
@@ -123,12 +37,12 @@ private struct HostSessionsContent: View {
 
     init(host: Host,
          initialSessionName: String?,
-         initialIntent: CreateIntent?,
-         onSessionReady: @escaping (SessionKey) -> Void) {
+         onSessionReady: @escaping (SessionKey) -> Void,
+         onAddHost: @escaping () -> Void) {
         self.host = host
         self.initialSessionName = initialSessionName
-        self.initialIntent = initialIntent
         self.onSessionReady = onSessionReady
+        self.onAddHost = onAddHost
         _lister = StateObject(wrappedValue: TmuxLister(host: host))
     }
 
@@ -148,6 +62,10 @@ private struct HostSessionsContent: View {
         lister.sessions.filter { !attachedNames.contains($0) }
     }
 
+    private var hasPlainShellActive: Bool {
+        activeForHost.contains { $0.key.tmuxSessionName.isEmpty }
+    }
+
     var body: some View {
         Form {
             connectionStatusSection
@@ -157,8 +75,8 @@ private struct HostSessionsContent: View {
             }
 
             otherSessionsSection
-            newSessionSection
-            noTmuxSection
+            newSection
+            addHostSection
         }
         .bentoForm()
         .disabled(isStartingNew)
@@ -188,6 +106,9 @@ private struct HostSessionsContent: View {
         .navigationTitle(host.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Cancel") { dismiss() }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     Task { await lister.refresh() }
@@ -199,7 +120,6 @@ private struct HostSessionsContent: View {
         }
         .task {
             await lister.refresh()
-            applyInitialIntent()
             autoAttachIfRequested()
         }
         .alert("Error", isPresented: Binding(
@@ -225,24 +145,9 @@ private struct HostSessionsContent: View {
         }
     }
 
-    /// The creation verb that opened this screen drives what happens when it
-    /// appears. Agent → straight into the wizard. Empty → the name field is
-    /// the cursor's home (the user types the one thing it needs).
-    private func applyInitialIntent() {
-        switch initialIntent {
-        case .agent:
-            showAgentWizard = true
-        case .empty:
-            newSessionName = ""
-            nameFieldFocused = true
-        case .plainShell, .none:
-            break
-        }
-    }
-
-    /// A cached-session tap from Home means "take me back there". Attach on
+    /// A recent-launch tap from Home means "take me back there". Attach on
     /// appear without asking: `new-session -A` re-creates a same-named
-    /// session if it died, so even a stale cache lands somewhere real.
+    /// session if it died, so even a stale recent lands somewhere real.
     private func autoAttachIfRequested() {
         guard !autoStarted, let name = initialSessionName, !name.isEmpty else { return }
         autoStarted = true
@@ -355,65 +260,81 @@ private struct HostSessionsContent: View {
         .bentoSectionStyle()
     }
 
+    /// The three creation methods, host-scoped — same set and same names as
+    /// the Mac launcher's verbs.
     @ViewBuilder
-    private var newSessionSection: some View {
+    private var newSection: some View {
         Section {
-            HStack {
-                Image(systemName: "plus.rectangle.on.rectangle")
-                    .foregroundStyle(Color.bentoEmerald)
-                TextField("Session name", text: $newSessionName)
-                    .autocapitalization(.none)
-                    .autocorrectionDisabled()
-                    .focused($nameFieldFocused)
-                    .submitLabel(.go)
-                    .onSubmit {
-                        let name = newSessionName.trimmingCharacters(in: .whitespaces)
-                        guard !name.isEmpty else { return }
-                        startNewSession(.createOrAttach(name: name))
-                    }
-                Button("Create") {
-                    let name = newSessionName.trimmingCharacters(in: .whitespaces)
-                    guard !name.isEmpty else { return }
-                    startNewSession(.createOrAttach(name: name))
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .tint(Color.bentoEmerald)
-                .disabled(newSessionName.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
             Button {
                 showAgentWizard = true
             } label: {
-                Label("New agent session…", systemImage: "wand.and.stars")
+                Label("New Agent Session…", systemImage: "wand.and.stars")
+            }
+
+            Button {
+                withAnimation { showNameField = true }
+                nameFieldFocused = true
+            } label: {
+                Label("New Empty Session", systemImage: "plus.rectangle.on.rectangle")
+            }
+
+            if showNameField {
+                HStack {
+                    Image(systemName: "plus.rectangle.on.rectangle")
+                        .foregroundStyle(Color.bentoEmerald)
+                    TextField("Session name", text: $newSessionName)
+                        .autocapitalization(.none)
+                        .autocorrectionDisabled()
+                        .focused($nameFieldFocused)
+                        .submitLabel(.go)
+                        .onSubmit(createEmptySession)
+                    Button("Create", action: createEmptySession)
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .tint(Color.bentoEmerald)
+                        .disabled(newSessionName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+
+            Button {
+                startNewSession(.noTmux)
+            } label: {
+                Label("New Terminal without tmux", systemImage: "terminal")
             }
         } header: {
-            BentoFormHeader("New tmux session")
+            BentoFormHeader("New")
         } footer: {
-            BentoFormFooter("Quick session is an empty single-pane shell. Agent session lets you pick an agent (Claude / Codex / …), working directory, and pane layout.")
+            BentoFormFooter(footerText)
         }
         .bentoSectionStyle()
     }
 
+    private var footerText: String {
+        if hasPlainShellActive {
+            return "A plain-shell session is already open — see Active."
+        }
+        return "Agent session picks an agent (Claude / Codex / …), directory and layout. Empty session is a blank single-pane tmux session. Without tmux is a plain shell — no split panes or session persistence."
+    }
+
     @ViewBuilder
-    private var noTmuxSection: some View {
-        let hasNoTmuxActive = activeForHost.contains { $0.key.tmuxSessionName.isEmpty }
+    private var addHostSection: some View {
         Section {
-            if !hasNoTmuxActive {
-                Button {
-                    startNewSession(.noTmux)
-                } label: {
-                    Label("Connect without tmux", systemImage: "terminal")
-                }
+            Button {
+                onAddHost()
+            } label: {
+                Label("Add SSH host…", systemImage: "plus.circle")
             }
-        } footer: {
-            BentoFormFooter(hasNoTmuxActive
-                ? "A plain-shell session is already open — see Active."
-                : "Plain shell. No split panes or session persistence.")
         }
         .bentoSectionStyle()
     }
 
     // MARK: - Helpers
+
+    private func createEmptySession() {
+        let name = newSessionName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        startNewSession(.createOrAttach(name: name))
+    }
 
     private func displayLabel(for key: SessionKey) -> String {
         key.tmuxSessionName.isEmpty ? "Shell" : key.tmuxSessionName
@@ -459,7 +380,7 @@ private struct HostSessionsContent: View {
         Task {
             await vm.connect()
             // Bail if SSH didn't come up — drop the half-registered VM so
-            // the picker stays consistent, and say what happened right here
+            // the sheet stays consistent, and say what happened right here
             // in the sheet (the terminal doesn't exist yet).
             guard case .connected = vm.connectionState else {
                 isStartingNew = false
@@ -473,7 +394,7 @@ private struct HostSessionsContent: View {
             // The attach moment — this is what earns a Recent row (macOS
             // records the same moment: a session you actually entered).
             RecentLaunchStore.shared.record(host: host, sessionName: name)
-            // Refresh the lister so the new session appears in the picker
+            // Refresh the lister so the new session appears in the sheet
             // next time and keeps our attached/unattached split correct.
             await lister.refresh()
             onSessionReady(key)
