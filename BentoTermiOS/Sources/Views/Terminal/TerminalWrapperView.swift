@@ -396,7 +396,8 @@ struct TerminalWrapperView: View {
                 VoiceOverlayView(
                     transcript: voiceController.transcript,
                     activeDirection: voiceController.activeDirection,
-                    isRecording: voiceController.isRecording
+                    isRecording: voiceController.isRecording,
+                    fingerOffset: voiceController.fingerOffset
                 )
                 .position(
                     x: voiceController.fingerScreenPosition.x,

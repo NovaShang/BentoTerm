@@ -131,6 +131,10 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] d in self?.voiceOverlay?.direction = d }
             .store(in: &cancellables)
+        voiceController.$fingerOffset
+            .receive(on: RunLoop.main)
+            .sink { [weak self] o in self?.voiceOverlay?.fingerOffset = o }
+            .store(in: &cancellables)
         voiceController.$showPreview
             .receive(on: RunLoop.main)
             .sink { [weak self] show in

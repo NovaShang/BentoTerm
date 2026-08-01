@@ -8,8 +8,11 @@ struct VoiceOverlayView: View {
     let transcript: String
     let activeDirection: VoiceDirection
     let isRecording: Bool
+    let fingerOffset: CGSize
 
     var body: some View {
-        VoiceCompassView(transcript: transcript, direction: activeDirection)
+        VoiceCompassView(transcript: transcript,
+                         direction: activeDirection,
+                         fingerOffset: fingerOffset)
     }
 }

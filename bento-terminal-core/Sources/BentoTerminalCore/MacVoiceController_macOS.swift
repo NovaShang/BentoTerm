@@ -12,6 +12,10 @@ public final class MacVoiceController: ObservableObject {
     @Published public private(set) var transcript = ""
     @Published public private(set) var activeDirection: VoiceDirection = .none
 
+    /// Drag delta from the press origin (y-down point space), fed to the shared
+    /// compass so the finger ball can track the drag.
+    @Published public private(set) var fingerOffset: CGSize = .zero
+
     private let session = VoiceSession()
     private var originScreen: CGPoint = .zero
     private var errorClear: DispatchWorkItem?
@@ -49,6 +53,7 @@ public final class MacVoiceController: ObservableObject {
         isRecording = true
         transcript = ""
         activeDirection = .none
+        fingerOffset = .zero
         session.start(
             onPartial: { [weak self] t in self?.transcript = t },
             onError: { [weak self] msg in self?.fail(msg) })
@@ -59,6 +64,7 @@ public final class MacVoiceController: ObservableObject {
         guard isRecording else { return }
         // macOS screen coords are y-up; flip dy so an upward drag reads as `.up`.
         let t = CGSize(width: p.x - originScreen.x, height: -(p.y - originScreen.y))
+        fingerOffset = t
         activeDirection = voiceDirection(forTranslation: t)
     }
 
@@ -199,7 +205,7 @@ struct MacVoicePreviewView: View {
 /// it never intercepts the mouse (the recording drag belongs to the surface).
 @MainActor
 public final class MacVoiceOverlay: NSView {
-    public static let preferredSize = NSSize(width: 360, height: 380)
+    public static let preferredSize = NSSize(width: 360, height: 520)
 
     private let hosting: NSHostingView<VoiceCompassView>
 
@@ -219,9 +225,12 @@ public final class MacVoiceOverlay: NSView {
 
     public var transcript: String = "" { didSet { rebuild() } }
     public var direction: VoiceDirection = .none { didSet { rebuild() } }
+    public var fingerOffset: CGSize = .zero { didSet { rebuild() } }
 
     private func rebuild() {
-        hosting.rootView = VoiceCompassView(transcript: transcript, direction: direction)
+        hosting.rootView = VoiceCompassView(transcript: transcript,
+                                            direction: direction,
+                                            fingerOffset: fingerOffset)
     }
 }
 

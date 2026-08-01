@@ -98,6 +98,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     deinit {
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
         renderLink?.invalidate()
         renderLink = nil
         if let surface { ghostty_surface_free(surface) }
@@ -115,6 +116,8 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     public func teardown() {
         guard !isTornDown else { return }
         isTornDown = true
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        lifecycleObservers.removeAll()
         renderLink?.invalidate()
         renderLink = nil
         if let surface { ghostty_surface_free(surface) }
@@ -126,17 +129,78 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     public override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil {
+            observeAppLifecycleIfNeeded()
             createSurfaceIfNeeded()
             synchronizeGhosttyLayerGeometry()
             updateSurfaceSize()
-            startRenderLink()
+            updateRenderActive()
         } else {
             // Left the hierarchy — stop drawing so we never render into a layer
             // that's being torn down (Metal abort). The surface is freed in
             // teardown()/deinit.
-            renderLink?.invalidate()
-            renderLink = nil
+            stopRenderLink()
         }
+    }
+
+    // MARK: - Render gating
+
+    /// True between `didEnterBackground` and `willEnterForeground`.
+    ///
+    /// iOS refuses GPU submissions from a background app, and this app keeps
+    /// itself alive there for ~30 s to hold the SSH connection
+    /// (`SessionManager.beginBackgroundTask`) — so without this the display link
+    /// goes on ticking with no permission to draw. `ghostty_surface_draw` blocks
+    /// the main thread on `waitUntilCompleted`, so the rejected command buffer
+    /// both wedges the whole app and makes ghostty report its renderer
+    /// unhealthy, which surfaces as a "Renderer stopped — this pane won't
+    /// update" banner that never clears because the renderer never recovers.
+    ///
+    /// The macOS host has carried the equivalent guard since it hit the same
+    /// stall on occluded and miniaturized windows (`updateRenderActive` there);
+    /// this is the iOS half of it.
+    private var isBackgrounded = false
+    private var lifecycleObservers: [NSObjectProtocol] = []
+
+    private func observeAppLifecycleIfNeeded() {
+        guard lifecycleObservers.isEmpty else { return }
+        // A pane can be built during the background grace window (a reconnect
+        // that lands while the phone is in a pocket), and it would never see a
+        // `didEnterBackground` for the state it was already in.
+        isBackgrounded = UIApplication.shared.applicationState == .background
+        let nc = NotificationCenter.default
+        for (name, backgrounded) in [
+            (UIApplication.didEnterBackgroundNotification, true),
+            (UIApplication.willEnterForegroundNotification, false),
+        ] {
+            lifecycleObservers.append(
+                nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    guard let self else { return }
+                    self.isBackgrounded = backgrounded
+                    self.updateRenderActive()
+                })
+        }
+    }
+
+    /// Run the render loop only while there is a window and the app is in the
+    /// foreground, and tell ghostty when it is occluded so it skips its own
+    /// rendering too.
+    private func updateRenderActive() {
+        guard !isTornDown else { return }
+        let active = window != nil && !isBackgrounded
+        if let surface { ghostty_surface_set_occlusion(surface, active) }
+        if active {
+            // Nothing was drawn while we were away and the engine has no reason
+            // to think the screen is stale — ask for one frame on return.
+            needsDraw = true
+            startRenderLink()
+        } else {
+            stopRenderLink()
+        }
+    }
+
+    private func stopRenderLink() {
+        renderLink?.invalidate()
+        renderLink = nil
     }
 
     public override func layoutSubviews() {
@@ -190,7 +254,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         syncColorScheme()
         ghostty_surface_refresh(created)
         ghostty_surface_draw(created)
-        startRenderLink()
+        updateRenderActive()
 
         // Flush any bytes that arrived before the surface existed.
         let queued = pendingBytes
@@ -272,7 +336,8 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     }
 
     private func startRenderLink() {
-        guard renderLink == nil, surface != nil, window != nil else { return }
+        guard renderLink == nil, surface != nil, window != nil,
+              !isBackgrounded, !isTornDown else { return }
         // Target a weak proxy, NOT self: CADisplayLink retains its target, so
         // `target: self` would be a retain cycle — the view would never deinit,
         // the link would keep firing draws forever (even off-screen), and a
@@ -283,8 +348,10 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     }
 
     fileprivate func renderTick() {
-        // Never draw while detached from a window — the layer may be mid-teardown.
-        guard let surface, window != nil else { return }
+        // Never draw while detached from a window — the layer may be mid-teardown
+        // — nor while backgrounded, where the GPU submission is rejected and the
+        // blocking draw wedges the main thread. See `isBackgrounded`.
+        guard let surface, window != nil, !isBackgrounded else { return }
         // Draw only when dirty (output/interaction) or when the low idle
         // backstop is due (cursor blink + recovery for any un-marked change) —
         // not unconditionally on every display-link tick. Until the grid

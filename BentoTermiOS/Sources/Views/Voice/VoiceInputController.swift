@@ -23,6 +23,10 @@ final class VoiceInputController: ObservableObject {
     @Published var showOverlay = false
     @Published var fingerScreenPosition: CGPoint = .zero
 
+    /// Drag delta from the press origin (y-down point space), fed to the shared
+    /// compass so the finger ball can track the drag.
+    @Published var fingerOffset: CGSize = .zero
+
     /// Right-swipe "transcribe → preview → edit → send" flow. `previewText` is the
     /// editable transcription shown in the inline compose bar; `previewLoading` is
     /// true while the higher-accuracy batch model is still running.
@@ -92,6 +96,7 @@ final class VoiceInputController: ObservableObject {
         } else {
             fingerScreenPosition = anchorScreenPoint
             holdOrigin = anchorScreenPoint
+            fingerOffset = .zero
             startRecording()
         }
     }
@@ -109,6 +114,7 @@ final class VoiceInputController: ObservableObject {
             // active arrow, not by moving the overlay.
             holdOrigin = location
             fingerScreenPosition = location
+            fingerOffset = .zero
             startRecording()
 
         case .changed:
@@ -259,9 +265,10 @@ final class VoiceInputController: ObservableObject {
 
     private func updateDirection(currentLocation: CGPoint) {
         // Dead-zone + dominant-axis classification is shared with macOS in core.
-        let newDirection = voiceDirection(forTranslation: CGSize(
-            width: currentLocation.x - holdOrigin.x,
-            height: currentLocation.y - holdOrigin.y))
+        let delta = CGSize(width: currentLocation.x - holdOrigin.x,
+                           height: currentLocation.y - holdOrigin.y)
+        fingerOffset = delta
+        let newDirection = voiceDirection(forTranslation: delta)
 
         if newDirection != activeDirection {
             activeDirection = newDirection
