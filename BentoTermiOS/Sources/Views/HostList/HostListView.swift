@@ -15,7 +15,6 @@ import BentoTerminalCore
 struct HomeView: View {
     @EnvironmentObject private var hostStore: HostStore
     @EnvironmentObject private var sessionManager: SessionManager
-    @ObservedObject private var sessionCache = SessionCacheStore.shared
     @ObservedObject private var recentLaunches = RecentLaunchStore.shared
 
     @State private var showAddHost = false
@@ -34,14 +33,6 @@ struct HomeView: View {
         var initialIntent: CreateIntent?
     }
 
-    /// A session on some host that isn't attached from this phone.
-    private struct CachedSession: Identifiable {
-        let host: Host
-        let name: String
-        let capturedAt: Date
-        var id: String { "\(host.id.uuidString).\(name)" }
-    }
-
     private var filteredHosts: [Host] {
         if searchText.isEmpty { return hostStore.hosts }
         return hostStore.hosts.filter {
@@ -51,26 +42,9 @@ struct HomeView: View {
         }
     }
 
-    /// Cached sessions of hosts that still exist, newest capture first.
-    private var cachedEntries: [CachedSession] {
-        var result: [CachedSession] = []
-        for (hostID, entry) in sessionCache.byHostID {
-            guard let host = hostStore.hosts.first(where: { $0.id == hostID }) else { continue }
-            let attached = sessionManager.sessions(forHostID: hostID).map { $0.key.tmuxSessionName }
-            for name in entry.names where !attached.contains(name) {
-                result.append(CachedSession(host: host, name: name, capturedAt: entry.capturedAt))
-            }
-        }
-        return result.sorted { $0.capturedAt > $1.capturedAt }
-    }
-
     /// Recent launches whose host still exists, newest first.
     private var recentRows: [RecentLaunchStore.Launch] {
         recentLaunches.launches.filter { l in hostStore.hosts.contains { $0.id == l.hostID } }
-    }
-
-    private var hasAnySessions: Bool {
-        !sessionManager.activeSessions.isEmpty || !cachedEntries.isEmpty
     }
 
     var body: some View {
@@ -113,17 +87,6 @@ struct HomeView: View {
                     Image(systemName: "gearshape")
                         .foregroundStyle(Color.bentoInkDim)
                 }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showAddHost = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.bentoEmerald)
-                }
-                .accessibilityLabel("Add SSH host")
-                .accessibilityIdentifier("plus")
             }
         }
         .sheet(isPresented: $showAddHost) {
@@ -189,9 +152,9 @@ struct HomeView: View {
         .searchable(text: $searchText, prompt: "Search hosts")
     }
 
-    /// The state surface: attached sessions (live) + cached-but-not-connected
-    /// (last-known, with staleness). One list — the question Home answers is
-    /// "what's running", and the host is a label on each row.
+    /// The state surface: exactly the sessions currently open from this
+    /// phone. The phone is a remote control — what it claims to see is what
+    /// it actually holds a connection to; nothing cached, nothing guessed.
     @ViewBuilder
     private var sessionsSection: some View {
         Section {
@@ -199,15 +162,8 @@ struct HomeView: View {
                 ActiveSessionRow(entry: entry)
                     .environmentObject(sessionManager)
             }
-            ForEach(cachedEntries) { entry in
-                CachedSessionRow(
-                    name: entry.name,
-                    host: entry.host,
-                    capturedAt: entry.capturedAt
-                )
-            }
-            if !hasAnySessions {
-                Text("Nothing running right now. Sessions you leave going on a host show up here.")
+            if sessionManager.activeSessions.isEmpty {
+                Text("Nothing running right now. Sessions you open show up here.")
                     .font(.callout)
                     .foregroundStyle(Color.bentoInkDim)
             }
@@ -265,7 +221,8 @@ struct HomeView: View {
 
     /// The creation verbs — same set as the Mac launcher, one concept one
     /// name. Agent leads: that's the hero flow on a phone. Each opens the
-    /// create sheet with that intent; the sheet picks the host.
+    /// create sheet with that intent; the sheet picks the host (and is
+    /// where a new host gets added — that entry lives there, not here).
     @ViewBuilder
     private var verbsSection: some View {
         Section {
@@ -283,11 +240,6 @@ struct HomeView: View {
                 createRequest = CreateSheetRequest(initialIntent: .plainShell)
             } label: {
                 Label("New Terminal without tmux", systemImage: "terminal")
-            }
-            Button {
-                showAddHost = true
-            } label: {
-                Label("New SSH Connection…", systemImage: "network")
             }
         } header: {
             BentoFormHeader("New")
@@ -414,58 +366,6 @@ struct HostRow: View {
             }
         }
         .padding(.vertical, 4)
-    }
-}
-
-/// A session that exists on a host but isn't attached from this phone: the
-/// cached snapshot Home shows without opening an SSH connection. Honest
-/// about being a snapshot — the staleness is part of the row.
-struct CachedSessionRow: View {
-    let name: String
-    let host: Host
-    let capturedAt: Date
-
-    @EnvironmentObject private var sessionManager: SessionManager
-
-    var body: some View {
-        Button {
-            sessionManager.open(
-                session: SessionKey(hostID: host.id, tmuxSessionName: name),
-                host: host
-            )
-        } label: {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.bentoSurfaceHi)
-                    Image(systemName: "rectangle.stack")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Color.bentoInkMute)
-                }
-                .frame(width: 34, height: 34)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.bentoInk)
-                        .lineLimit(1)
-                    Text("\(host.displayName) · not connected")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.bentoInkDim)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
-
-                Text(capturedAt, style: .relative)
-                    .font(.caption)
-                    .foregroundStyle(Color.bentoInkMute)
-                    .lineLimit(1)
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 

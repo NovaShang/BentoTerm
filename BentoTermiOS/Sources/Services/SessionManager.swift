@@ -189,8 +189,6 @@ final class SessionManager: ObservableObject {
         for entry in activeSessions where entry.key.hostID == host.id {
             disconnect(key: entry.key)
         }
-        // Its cached session list is meaningless without the host.
-        SessionCacheStore.shared.clear(hostID: host.id)
     }
 
     // MARK: - Scene phase
@@ -392,9 +390,6 @@ final class TmuxLister: ObservableObject {
             return
         }
         sessions = TmuxParsers.parseTmuxLs(output, startMarker: startMarker, endMarker: endMarker)
-        // A successful enumeration refreshes the Home screen's cache. tmux
-        // was alive and answered; whatever it reported IS the current state.
-        SessionCacheStore.shared.record(hostID: host.id, names: sessions)
     }
 
     private func routeData(_ data: Data) {
@@ -406,60 +401,6 @@ final class TmuxLister: ObservableObject {
             captureContinuation = nil
             cont?.resume(returning: str)
         }
-    }
-}
-
-// MARK: - Session cache (per-host last-known tmux ls)
-
-/// Last-known tmux session list per host, persisted so Home can show what
-/// is probably running WITHOUT opening an SSH connection. The phone is a
-/// remote control: remote state is inherently a snapshot, and the cache
-/// carries its capture time so Home can say "5 minutes ago" instead of
-/// pretending to be live.
-///
-/// Written on every successful enumeration (TmuxLister), read by Home for
-/// the "not connected" rows. Stale rows are safe to show: tapping one
-/// re-enumerates live, and attach is `new-session -A`, which recreates a
-/// same-named session rather than erroring.
-@MainActor
-final class SessionCacheStore: ObservableObject {
-    static let shared = SessionCacheStore()
-
-    struct Entry: Codable, Equatable {
-        var names: [String]
-        var capturedAt: Date
-    }
-
-    @Published private(set) var byHostID: [UUID: Entry] = [:]
-
-    private let defaultsKey = "cached_tmux_sessions_v1"
-
-    init() { load() }
-
-    func entry(for hostID: UUID) -> Entry? { byHostID[hostID] }
-
-    func record(hostID: UUID, names: [String]) {
-        byHostID[hostID] = Entry(names: names, capturedAt: Date())
-        save()
-    }
-
-    func clear(hostID: UUID) {
-        byHostID.removeValue(forKey: hostID)
-        save()
-    }
-
-    private func load() {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode([String: Entry].self, from: data)
-        else { return }
-        byHostID = Dictionary(uniqueKeysWithValues: decoded.map { (UUID(uuidString: $0.key), $0.value) }
-            .compactMap { id, entry in id.map { ($0, entry) } })
-    }
-
-    private func save() {
-        let encoded = Dictionary(uniqueKeysWithValues: byHostID.map { ($0.key.uuidString, $0.value) })
-        guard let data = try? JSONEncoder().encode(encoded) else { return }
-        UserDefaults.standard.set(data, forKey: defaultsKey)
     }
 }
 
