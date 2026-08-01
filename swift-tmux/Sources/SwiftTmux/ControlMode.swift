@@ -71,6 +71,12 @@ public final class TmuxControlMode: @unchecked Sendable {
         /// `reset()` so each new connection discards exactly one block.
         var greetingConsumed = false
         var controlModeWaiters: [PendingBoolEntry] = []
+        /// True once ANY byte has arrived on this connection. Distinct from
+        /// `greetingConsumed`: it only says the far end is alive and talking,
+        /// which is what a caller needs before typing a launch line into what
+        /// it hopes is a shell.
+        var sawAnyOutput = false
+        var outputWaiters: [PendingBoolEntry] = []
         /// Whatever arrived on this connection BEFORE control mode started.
         ///
         /// On a healthy connection this is empty or a scrap of shell echo, and
@@ -196,7 +202,48 @@ public final class TmuxControlMode: @unchecked Sendable {
         bufferLock.withLock { buffer in
             buffer.append(data)
         }
+        if !data.isEmpty {
+            let waiters = responseLock.withLock { state -> [PendingBoolEntry] in
+                guard !state.sawAnyOutput else { return [] }
+                state.sawAnyOutput = true
+                let w = state.outputWaiters
+                state.outputWaiters.removeAll()
+                return w
+            }
+            for waiter in waiters { waiter.continuation.resume(returning: true) }
+        }
         processLines()
+    }
+
+    /// Wait until the far end has produced any output at all, or `timeout`.
+    ///
+    /// The caller that needs this is the one about to type `tmux -CC …` into a
+    /// freshly opened shell: written before the shell exists, the line is
+    /// swallowed by the pty and tmux never starts — and everything downstream
+    /// then talks control-mode syntax at a bare prompt. Returns whether output
+    /// was seen; a silent shell still gets the launch line, as before.
+    public func awaitAnyOutput(timeout: Duration = .seconds(3)) async -> Bool {
+        let id: UInt64 = responseLock.withLock { state in
+            state.nextEntryID += 1
+            return state.nextEntryID
+        }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let alreadySeen = responseLock.withLock { state -> Bool in
+                if state.sawAnyOutput { return true }
+                state.outputWaiters.append(PendingBoolEntry(id: id, continuation: continuation))
+                return false
+            }
+            if alreadySeen { continuation.resume(returning: true); return }
+            Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard let self else { return }
+                let cont = self.responseLock.withLock { state -> CheckedContinuation<Bool, Never>? in
+                    guard let idx = state.outputWaiters.firstIndex(where: { $0.id == id }) else { return nil }
+                    return state.outputWaiters.remove(at: idx).continuation
+                }
+                cont?.resume(returning: false)
+            }
+        }
     }
 
     /// Send a tmux command and await the parsed response.
@@ -309,6 +356,7 @@ public final class TmuxControlMode: @unchecked Sendable {
     ///      old instances: input still works, rendering is dead.
     public func reset() {
         bufferLock.withLock { $0.removeAll(keepingCapacity: false) }
+        var outputWaiters: [PendingBoolEntry] = []
         let (orphans, waiters) = responseLock.withLock { state -> ([PendingEntry], [PendingBoolEntry]) in
             let o = state.pendingQueue
             let w = state.controlModeWaiters
@@ -316,6 +364,9 @@ public final class TmuxControlMode: @unchecked Sendable {
             state.controlModeWaiters.removeAll()
             state.currentBlock = nil
             state.greetingConsumed = false
+            state.sawAnyOutput = false
+            outputWaiters = state.outputWaiters
+            state.outputWaiters.removeAll()
             state.preGreetingLines.removeAll()
             return (o, w)
         }
@@ -328,6 +379,9 @@ public final class TmuxControlMode: @unchecked Sendable {
             cont.resume(returning: TmuxCommandResponse(commandNumber: -1, isError: true, output: "connection reset"))
         }
         for waiter in waiters {
+            waiter.continuation.resume(returning: false)
+        }
+        for waiter in outputWaiters {
             waiter.continuation.resume(returning: false)
         }
     }
@@ -345,11 +399,17 @@ public final class TmuxControlMode: @unchecked Sendable {
     /// most of a user's taps.
     public func sendFireAndForget(_ command: TmuxCommand) {
         let cmdString = command.commandString + "\n"
-        log("tmux send (fire): \(cmdString.trimmingCharacters(in: .whitespacesAndNewlines))")
-        responseLock.withLock { state in
+        let sent = responseLock.withLock { state -> Bool in
+            guard state.greetingConsumed else { return false }
             state.nextEntryID += 1
             state.pendingQueue.append(PendingEntry(id: state.nextEntryID, kind: .discard))
             sendToSSH?(cmdString)
+            return true
+        }
+        if sent {
+            log("tmux send (fire): \(cmdString.trimmingCharacters(in: .whitespacesAndNewlines))")
+        } else {
+            log("tmux dropped pre-greeting command: \(cmdString.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
     }
 
@@ -407,11 +467,18 @@ public final class TmuxControlMode: @unchecked Sendable {
         // keystroke/focus-report flush donated an empty block to whichever
         // send() was pending — display-message callers (path-preview cwd,
         // duplicate-window seeds) mostly received ⟨⟩ instead of their output.
-        responseLock.withLock { state in
+        // Dropped, not queued, until tmux has greeted. Between `usingTmux`
+        // going true and the greeting arriving, this channel is still a plain
+        // shell — a scroll fling here typed hundreds of `send-keys` lines at a
+        // zsh prompt, each echoing `command not found` back into the parser.
+        let sent = responseLock.withLock { state -> Bool in
+            guard state.greetingConsumed else { return false }
             state.nextEntryID += 1
             state.pendingQueue.append(PendingEntry(id: state.nextEntryID, kind: .discard))
             sendToSSH?(cmd)
+            return true
         }
+        if !sent { log("tmux dropped pre-greeting pane input (\(hex.count / 2) bytes)") }
     }
 
     private static let hexDigits = Array("0123456789abcdef".utf8)

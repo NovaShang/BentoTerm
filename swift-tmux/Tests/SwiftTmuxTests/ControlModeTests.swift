@@ -439,7 +439,9 @@ struct InputHexEncodingTests {
     /// `sendData` must hex-encode every byte for `send-keys -H`: lowercase,
     /// two digits, single-space separated — including 0x00 and 0xff.
     @Test func sendDataHexEncodesBytes() async {
-        let service = TmuxControlMode()
+        // Attached: pane input is dropped before tmux greets, since the channel
+        // is still a plain shell until then.
+        let (service, _) = makeAttachedService()
         let sent = SendableBox<[String]>([])
         service.sendToSSH = { cmd in sent.update { $0.append(cmd) } }
 
@@ -754,5 +756,43 @@ final class SendableBox<T>: @unchecked Sendable {
         #expect(!resp.isError)
         #expect(resp.output.trimmingCharacters(in: .whitespacesAndNewlines)
                 == "/Users/nova/code/speakterm")
+    }
+}
+
+@Suite("Pre-greeting writes")
+struct PreGreetingWriteTests {
+    /// Between `usingTmux` going true and tmux greeting, the channel is still a
+    /// plain shell. Anything written there is typed at a prompt — a scroll fling
+    /// once put hundreds of `send-keys` lines into zsh, each echoing back
+    /// `command not found` into the parser.
+    @Test func paneInputIsDroppedBeforeTheGreeting() async {
+        let service = TmuxControlMode()          // no greeting fed
+        let sent = SendableBox<[String]>([])
+        service.sendToSSH = { cmd in sent.update { $0.append(cmd) } }
+
+        service.sendData(to: TmuxPaneID(0), data: Data([0x61]))
+        service.sendFireAndForget(.selectPane(id: TmuxPaneID(0)))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(sent.current.isEmpty)
+
+        // Once tmux greets, the same writes go out.
+        service.feedData(Data("%begin 0 0 0\n%end 0 0 0\n".utf8))
+        service.sendData(to: TmuxPaneID(0), data: Data([0x61]))
+        service.sendFireAndForget(.selectPane(id: TmuxPaneID(0)))
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(sent.current.count == 2)
+    }
+
+    /// `reset()` unlatches it, so a reconnect cannot inherit the old
+    /// connection's permission to write.
+    @Test func resetRevokesTheGreeting() async {
+        let (service, _) = makeAttachedService()
+        let sent = SendableBox<[String]>([])
+        service.sendToSSH = { cmd in sent.update { $0.append(cmd) } }
+
+        service.reset()
+        service.sendFireAndForget(.selectPane(id: TmuxPaneID(0)))
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(sent.current.isEmpty)
     }
 }

@@ -807,7 +807,8 @@ public final class TerminalViewModel: ObservableObject {
         groupWith: String?,
         resizeToScreen: Bool,
         path: String? = nil,
-        command: String? = nil
+        command: String? = nil,
+        awaitShellFirst: Bool = false
     ) async {
         usingTmux = true
         activeTmuxSessionName = sessionName
@@ -821,6 +822,17 @@ public final class TerminalViewModel: ObservableObject {
         if transport.startsInTmuxControlMode {
             dlog("tmux -CC launched by the transport itself — awaiting greeting")
         } else {
+            // A reattach opens the shell and types this line in the same hop —
+            // no `tmux ls`, no picker, nothing that would have proved a shell
+            // is there yet. Written into a pty that has not finished spawning,
+            // the line is swallowed, tmux never starts, and everything below
+            // ends up speaking control-mode syntax at a bare prompt (observed:
+            // `zsh: command not found: send-keys` on repeat, a session that
+            // reports ready, and a reconnect loop that cannot converge).
+            // A silent shell still gets the line, as before.
+            if awaitShellFirst, !(await tmuxService.awaitAnyOutput(timeout: .seconds(3))) {
+                dlog("no shell output within 3s of startShell — writing the launch line anyway")
+            }
             let launchCmd = tmuxService.launchCommand(
                 sessionName: sessionName, groupWith: groupWith, path: path, command: command)
             dlog("Launching tmux: \(launchCmd.trimmingCharacters(in: .whitespacesAndNewlines))")
@@ -855,7 +867,22 @@ public final class TerminalViewModel: ObservableObject {
                     fallback: "Couldn’t start tmux on \(host.name).")
                 return
             }
-            dlog("tmux -CC greeting not seen within 12s — proceeding anyway")
+            // Proceeding used to be the tolerant choice here, on the theory
+            // that a login shell might merely be slow. It is not tolerant: with
+            // `usingTmux` already true, every later command is typed into that
+            // shell, `isTmuxReady` is announced against a bare prompt, and the
+            // poll watchdog reconnects into the same state forever. Twelve
+            // seconds of silence is not a slow `.zshrc`; tmux is not coming.
+            dlog("tmux -CC greeting not seen within 12s — tmux did not start")
+            usingTmux = false
+            if isReconnecting {
+                // Let the reconnect loop retry with backoff rather than declare
+                // a session that would type control commands at a shell.
+                failedDuringReattach = true
+                return
+            }
+            failWithRemoteDiagnosis(fallback: "Couldn’t start tmux on \(host.name).")
+            return
         }
 
         // Only resize the tmux client viewport when we created a new
@@ -1821,7 +1848,8 @@ public final class TerminalViewModel: ObservableObject {
         // Skip session discovery entirely — we know the session name, and
         // `tmux -CC new-session -A` attaches-or-creates in one step.
         // resizeToScreen:false preserves the session's server-side geometry.
-        await launchTmux(sessionName: name, groupWith: nil, resizeToScreen: false)
+        await launchTmux(sessionName: name, groupWith: nil, resizeToScreen: false,
+                         awaitShellFirst: true)
         if isTmuxReady {
             await reseedAllPanes()
         }
