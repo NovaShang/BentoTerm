@@ -120,24 +120,16 @@ struct AgentWizardWindow: View {
     private func launch() async {
         do {
             error = nil
-            let kind = TerminalAppKind.preferred
-            // Native Bento terminal: spin the agent session up directly in our
-            // in-app libghostty window (tmux -CC over a local pty) instead of
-            // bouncing to a third-party terminal.
-            if kind.isNative {
-                let coreSpec = BentoTerminalCore.AgentSpec(
-                    sessionName: spec.sessionName,
-                    workingDir: spec.workingDir,
-                    agentCommand: spec.agentCommand,
-                    layout: BentoTerminalCore.TmuxLayout(rawValue: spec.layout.rawValue) ?? .solo
-                )
-                await MainActor.run { BentoTerminalWindow.newWindow(agent: coreSpec) }
-                TelemetryService.shared.record(.workspaceCreated)
-                dismiss()
-                return
-            }
-            let script = TmuxCLI.buildAgentScript(spec: spec, useTmuxControlMode: kind.supportsTmuxControlMode)
-            try await TmuxCLI.openInTerminal(command: script, kind: kind)
+            // Agent sessions always spin up in Bento's own in-app libghostty
+            // window (tmux -CC over a local pty) — sessions never bounce out
+            // to a third-party terminal anymore.
+            let coreSpec = BentoTerminalCore.AgentSpec(
+                sessionName: spec.sessionName,
+                workingDir: spec.workingDir,
+                agentCommand: spec.agentCommand,
+                layout: BentoTerminalCore.TmuxLayout(rawValue: spec.layout.rawValue) ?? .solo
+            )
+            await MainActor.run { BentoTerminalWindow.newWindow(agent: coreSpec) }
             TelemetryService.shared.record(.workspaceCreated)
             dismiss()
         } catch {

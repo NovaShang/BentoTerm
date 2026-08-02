@@ -7,7 +7,6 @@ import BentoFoundationKit
 /// in the canonical "preferences window" chrome with toolbar + grouped form.
 struct SettingsView: View {
     @ObservedObject private var themeStore = ThemeStore.shared
-    @State private var preferredTerminal: TerminalAppKind = TerminalAppKind.preferred
     @AppStorage("terminal_font_size") private var fontSize: Double = 13
     @AppStorage("terminal_font_family") private var fontFamily: String = "sf-mono"
     @AppStorage(BentoTerminalWindow.defaultSessionNameKey) private var defaultSessionName: String = "bento"
@@ -165,25 +164,6 @@ struct SettingsView: View {
                 Text("The Dark theme is used in dark appearance, the Light theme in light. Applies live to open windows.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-
-            Section {
-                Toggle("Auto-hide toolbar in full screen", isOn: $autoHideToolbar)
-            } header: { Text("Full Screen") } footer: {
-                Text("Hide the toolbar and session tabs in full screen, revealing them when the pointer reaches the top. Takes effect the next time you enter full screen.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section {
-                TextField("Default session name", text: $defaultSessionName, prompt: Text("bento"))
-                Picker("Open a new session", selection: $newSessionPlacement) {
-                    ForEach(BentoTerminalWindow.NewSessionPlacement.allCases, id: \.rawValue) {
-                        Text($0.title).tag($0.rawValue)
-                    }
-                }
-            } header: { Text("Sessions") } footer: {
-                Text("Clicking the app icon opens the terminal window and reconnects the session you last had open. With no previous session, it creates one with this name.\n\nmacOS already has a system-wide answer for tabs vs. windows (System Settings → Desktop & Dock → “Prefer tabs when opening documents”), which Bento follows by default. Either way you can still merge windows into tabs or drag a tab out into its own window.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
         }
         .formStyle(.grouped)
         .fileImporter(isPresented: $showThemeImporter,
@@ -210,20 +190,22 @@ struct SettingsView: View {
     private var generalTab: some View {
         Form {
             Section {
-                Picker("Open tmux sessions in", selection: $preferredTerminal) {
-                    ForEach(TerminalAppKind.allInstalled) { kind in
-                        Text(kind.displayName).tag(kind)
+                Toggle("Auto-hide toolbar in full screen", isOn: $autoHideToolbar)
+            } header: { Text("Full Screen") } footer: {
+                Text("Hide the toolbar and session tabs in full screen, revealing them when the pointer reaches the top. Takes effect the next time you enter full screen.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                TextField("Default session name", text: $defaultSessionName, prompt: Text("bento"))
+                Picker("Open a new session", selection: $newSessionPlacement) {
+                    ForEach(BentoTerminalWindow.NewSessionPlacement.allCases, id: \.rawValue) {
+                        Text($0.title).tag($0.rawValue)
                     }
                 }
-                .onChange(of: preferredTerminal) { _, new in
-                    TerminalAppKind.preferred = new
-                }
-            } header: {
-                Text("Terminal")
-            } footer: {
-                Text(terminalFooter)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            } header: { Text("Sessions") } footer: {
+                Text("Clicking the app icon opens the terminal window and reconnects the session you last had open. With no previous session, it creates one with this name.\n\nmacOS already has a system-wide answer for tabs vs. windows (System Settings → Desktop & Dock → “Prefer tabs when opening documents”), which Bento follows by default. Either way you can still merge windows into tabs or drag a tab out into its own window.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section {
@@ -250,15 +232,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-    }
-
-    private var terminalFooter: String {
-        if preferredTerminal.isNative {
-            return "Sessions open in Bento's own tiled terminal (libghostty + `tmux -CC`), in-app."
-        }
-        return preferredTerminal.supportsTmuxControlMode
-            ? "Bento attaches with `tmux -CC` so \(preferredTerminal.displayName) renders each tmux pane as a native window."
-            : "Bento attaches with plain `tmux attach`; \(preferredTerminal.displayName) shows the standard tmux UI."
     }
 
     private var aboutTab: some View {

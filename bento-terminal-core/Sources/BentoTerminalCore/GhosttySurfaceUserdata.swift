@@ -5,7 +5,6 @@ import GhosttyKit
 /// actions to. Both surface variants (iOS UIView, macOS NSView) conform, so
 /// the runtime never names a platform type directly — it only knows that the
 /// opaque userdata points at one of these.
-@MainActor
 public protocol GhosttySurfaceUserdata: AnyObject {
     /// Bytes the engine wants written to the host (the `write_to_host_cb`
     /// path — keystrokes, paste, etc.), routed to the surface that owns the

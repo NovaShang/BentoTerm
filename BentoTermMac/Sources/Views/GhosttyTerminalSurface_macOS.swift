@@ -20,7 +20,7 @@ private let _wireInputSourceCache: Void = {
 /// `write_to_host` callback. The view is a CAMetalLayer that libghostty renders
 /// into. Mac code (BentoTermMac terminal window) uses it through the protocol,
 /// identically to iOS.
-public final class GhosttyTerminalSurface: NSView, TerminalSurface, GhosttySurfaceUserdata {
+public final class GhosttyTerminalSurface: NSView, TerminalSurface {
 
     public var onInput: ((Data) -> Void)?
     public var onSizeChanged: ((TerminalSurfaceSize) -> Void)?
@@ -410,7 +410,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, GhosttySurfa
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
     }
 
-    private func startRenderLink() {
+    nonisolated private func startRenderLink() {
         if renderLink == nil {
             var link: CVDisplayLink?
             CVDisplayLinkCreateWithActiveCGDisplays(&link)
@@ -427,7 +427,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, GhosttySurfa
         if let renderLink, !CVDisplayLinkIsRunning(renderLink) { CVDisplayLinkStart(renderLink) }
     }
 
-    private func stopRenderLink() {
+    nonisolated private func stopRenderLink() {
         if let renderLink, CVDisplayLinkIsRunning(renderLink) { CVDisplayLinkStop(renderLink) }
     }
 
@@ -453,7 +453,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, GhosttySurfa
     /// (output/interaction → full frame rate) or, when idle, at the low backstop
     /// rate (cursor blink + recovery for any un-marked change). This is what
     /// turns the always-on 60fps redraw of every surface into a dirty-driven one.
-    fileprivate func enqueueRenderTick() {
+    nonisolated fileprivate func enqueueRenderTick() {
         scheduleDraw(allowIdle: true, throttle: false)
     }
 
@@ -463,7 +463,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, GhosttySurfa
     /// freshly-echoed keystroke paints immediately instead of waiting up to a
     /// full frame for the next display-link tick to notice it's dirty — measured
     /// as the dominant (and most jittery) segment of typing latency.
-    private func scheduleDraw(allowIdle: Bool, throttle: Bool) {
+    nonisolated private func scheduleDraw(allowIdle: Bool, throttle: Bool) {
         let now = DispatchTime.now().uptimeNanoseconds
         surfaceLock.lock()
         if renderInFlight || isTornDown { surfaceLock.unlock(); return }
@@ -486,13 +486,13 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, GhosttySurfa
     /// Mark the surface dirty so the next display-link tick draws it. Lock-guarded
     /// and callable from any thread — ghostty's RENDER action can arrive off the
     /// main thread, and output (`feed`) runs on `ioQueue`.
-    public func setNeedsDraw() {
+    nonisolated public func setNeedsDraw() {
         surfaceLock.lock(); needsDraw = true; surfaceLock.unlock()
     }
 
     /// Runs on `renderQueue` (NOT main). The synchronous GPU wait inside
     /// `ghostty_surface_draw` therefore blocks only this queue if a frame stalls.
-    private func renderTick() {
+    nonisolated private func renderTick() {
         surfaceLock.lock()
         let s = surface
         let torn = isTornDown
@@ -534,7 +534,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, GhosttySurfa
         ioQueue.async { [weak self] in self?.processFeed(data) }
     }
 
-    private func processFeed(_ data: Data) {
+    nonisolated private func processFeed(_ data: Data) {
         // Read the surface pointer under the lock. If it's gone (torn down) bail;
         // if it's not created yet, buffer. `s` stays valid for the rest of this
         // method because the free is chained behind both queues (see
@@ -2049,3 +2049,4 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, GhosttySurfa
 // main-actor-isolated (NSView). @preconcurrency silences the crossing check —
 // the input-context callbacks only ever arrive on the main thread.
 extension GhosttyTerminalSurface: @preconcurrency NSTextInputClient {}
+extension GhosttyTerminalSurface: @preconcurrency GhosttySurfaceUserdata {}

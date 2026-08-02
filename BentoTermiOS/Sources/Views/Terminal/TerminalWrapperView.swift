@@ -522,10 +522,9 @@ struct TerminalWrapperView: View {
             GeometryReader { geo in
                 let anchor = compassAnchor(in: geo)
                 let press = voiceController.fingerScreenPosition
-                VoiceOverlayView(
+                VoiceCompassView(
                     transcript: voiceController.transcript,
-                    activeDirection: voiceController.activeDirection,
-                    isRecording: voiceController.isRecording,
+                    direction: voiceController.activeDirection,
                     // The marble tracks the real finger, so add back however far
                     // the anchor was pushed off the press point by clamping —
                     // otherwise it sits offset by exactly that much.

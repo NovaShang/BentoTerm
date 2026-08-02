@@ -11,7 +11,7 @@ import GhosttyKit
 /// the runtime's `write_to_host` callback (the "external backend" path — no local
 /// PTY, which iOS forbids). Host code (TerminalContainerVC) treats this purely
 /// through the `TerminalSurface` protocol.
-public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput, GhosttySurfaceUserdata {
+public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput {
 
     // MARK: TerminalSurface callbacks
     public var onInput: ((Data) -> Void)?
@@ -1274,3 +1274,5 @@ private extension UIColor {
     }
 }
 #endif
+
+extension GhosttyTerminalSurface: @preconcurrency GhosttySurfaceUserdata {}
