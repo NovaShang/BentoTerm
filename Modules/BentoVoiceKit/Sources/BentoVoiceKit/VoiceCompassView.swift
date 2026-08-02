@@ -2,28 +2,33 @@ import SwiftUI
 import BentoFoundationKit
 
 /// The voice overlay's visual layer, shared by iOS + macOS: a glowing glass mic
-/// orb + faint neutral-zone ring at center, four glass direction buttons that
-/// highlight + grow on the active direction, and a glass "finger ball" that
-/// tracks the drag 1:1. The transcript bubble also holds the status row and a
+/// orb at center, four glass direction buttons that highlight + grow on the
+/// active direction, and a glass "finger ball" that rides the ACTIVE AXIS out
+/// from the center mic. The transcript bubble also holds the status row and a
 /// dim one-line action hint ("Release to …") inside it. Pure SwiftUI — no
 /// UIKit/AppKit — so it renders identically wherever it's hosted.
 ///
 /// Liquid Glass on iOS 26 / macOS 26: the targets + finger ball are grouped in
 /// one `GlassEffectContainer` — that fusion IS the point, the material blends
 /// and the elements share the proximity response (the "soul"). Each is an
-/// `.interactive()` glass surface. Highlight = a FAINT BRIGHT BASE (low-opacity
-/// white glass tint) + a brighter icon + the GLASS DISC GROWING 60->74, morphed
-/// by the container through `.glassEffectID(_:in:)` + `.glassEffectTransition(
-/// .matchedGeometry)` — the supported way to animate glass; hand-animating the
-/// frame/scale fought the framework — never a saturated theme fill. Emerald lives only
-/// on the center mic orb. The finger ball is a pure clear-glass marble (no ring,
-/// no shadow). Below 26 -> flat bento surfaces.
+/// `.interactive()` glass surface. Highlight = the direction's SEMANTIC LIT
+/// COLOR (send green / cancel red / convert blue / correct orange; the center
+/// stays emerald) as a bright base + a WHITE icon + the GLASS DISC GROWING
+/// 60->74, morphed by the container through `.glassEffectID(_:in:)` +
+/// `.glassEffectTransition(.matchedGeometry)` — the supported way to animate
+/// glass; hand-animating the frame/scale fought the framework. Emerald lives
+/// only on the center mic orb. The finger ball is a pure clear-glass marble
+/// (no ring, no shadow). Below 26 -> flat bento surfaces.
 ///
 /// `fingerOffset` is the drag delta from the press origin (y-down point space;
-/// both hosts flip macOS's y-up before passing). The ball tracks it with NO
-/// animation — a finger proxy must be 1:1; a spring here lags, freezes on
-/// direction change, then snaps. It fades in as the finger leaves center and is
-/// clamped so a far drag can't push it off the overlay.
+/// both hosts flip macOS's y-up before passing). The ball is PROJECTED onto the
+/// active axis — the same dominant-axis classification the controller
+/// publishes — so it starts fused at the center mic and slides out along that
+/// axis by the drag's component on it: a diagonal drag rides the dominant axis
+/// instead of leaving the cross. It moves with NO animation (a finger proxy
+/// must be 1:1; a spring here lags, freezes on direction change, then snaps),
+/// fades in as the drag leaves center, and is clamped so a far drag can't push
+/// it off the overlay.
 public struct VoiceCompassView: View {
     /// Overlay footprint, and how far its content reaches from the center anchor.
     /// Hosts need these to keep the compass clear of screen edges — the compass is
@@ -76,10 +81,21 @@ public struct VoiceCompassView: View {
     private var inkDim: Color { ink.opacity(isDark ? 0.6 : 0.55) }
     /// The action hint — quietest thing in the bubble.
     private var inkMute: Color { ink.opacity(isDark ? 0.5 : 0.45) }
-    /// Activation base + glow. White brightens dark glass; on light glass it
-    /// washes out, so tint/glow with the ink color instead.
-    private var hotTint: Color { isDark ? Color.white.opacity(0.28) : ink.opacity(0.16) }
-    private var hotGlow: Color { isDark ? Color.white.opacity(0.45) : ink.opacity(0.25) }
+    /// Activation color per direction — the semantic "lit" colors: send=green,
+    /// cancel=red, convert=blue, correct=orange, center keeps the brand emerald
+    /// anchor. The active disc tints with its own bright color (white icon on
+    /// top, no appearance split — a saturated tint reads on both light and dark
+    /// glass). (No built-in glow API exists in this SDK — probe-verified — so
+    /// the glow stays a shadow, as before.)
+    private func color(for d: VoiceDirection) -> Color {
+        switch d {
+        case .up:    return .green
+        case .down:  return .red
+        case .left:  return .blue
+        case .right: return .orange
+        case .none:  return accent
+        }
+    }
 
     public var body: some View {
         ZStack {
@@ -180,22 +196,23 @@ public struct VoiceCompassView: View {
     }
 
     /// The center is a TARGET too — releasing here inserts the text — so it gets
-    /// the same treatment as the four around it: same grow, same faint-bright
-    /// base, same white icon, morphed by the container on the shared curve.
-    /// Its hot state is `direction == .none`, which also covers "just pressed,
-    /// haven't moved": releasing then does insert the text, so reading as the
-    /// default target is correct. Emerald stays as the idle tint — the one brand
-    /// anchor — and the mic keeps breathing to signal live recording.
+    /// the same treatment as the four around it: same grow, same bright base
+    /// (the brand emerald), same white icon, morphed by the container on the
+    /// shared curve. Its hot state is `direction == .none`, which also covers
+    /// "just pressed, haven't moved": releasing then does insert the text, so
+    /// reading as the default target is correct. Emerald is the one brand
+    /// anchor — idle it tints the icon, hot it lights the disc — and the mic
+    /// keeps breathing to signal live recording.
     private var centerOrb: some View {
         let hot = direction == .none
         return Image(systemName: "mic.fill")
             .font(.system(size: 22, weight: .semibold))
-            .foregroundStyle(hot ? ink : accent)
+            .foregroundStyle(hot ? .white : accent)
             .symbolEffect(.pulse, options: .repeating)
             .frame(width: hot ? 70 : 56, height: hot ? 70 : 56)
-            .glassSurface(.circle, tint: hot ? hotTint : nil,
+            .glassSurface(.circle, tint: hot ? accent : nil,
                           id: "center", namespace: glassNS)
-            .shadow(color: hot ? hotGlow : accent.opacity(0.5),
+            .shadow(color: hot ? accent.opacity(0.9) : accent.opacity(0.5),
                     radius: hot ? 14 : 16)
     }
 
@@ -212,34 +229,60 @@ public struct VoiceCompassView: View {
     /// running at once — my spring on the frame vs. the container's morph.
     private func directionButton(_ d: VoiceDirection, dx: CGFloat, dy: CGFloat) -> some View {
         let hot = d == direction
+        let c = color(for: d)
         return Image(systemName: symbol(for: d))
             .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(hot ? ink : inkDim)
+            .foregroundStyle(hot ? .white : inkDim)
             .frame(width: hot ? 74 : 60, height: hot ? 74 : 60)
-            .glassSurface(.circle, tint: hot ? hotTint : nil,
+            .glassSurface(.circle, tint: hot ? c : nil,
                           id: d.rawValue, namespace: glassNS)
-            .shadow(color: hot ? hotGlow : .clear, radius: hot ? 14 : 0)
+            .shadow(color: hot ? c.opacity(0.9) : .clear, radius: hot ? 14 : 0)
             .offset(x: dx, y: dy)
     }
 
-    /// Clear-glass marble that tracks the drag 1:1 (NO animation — a spring lags
-    /// and "sticks" on direction change). Bigger than the targets so it reads as
-    /// the finger itself. Pure glass — no ring, no shadow — so it's one surface,
-    /// never glass + a drifting outline. Fades in once the finger leaves center
-    /// and is clamped so a far swipe can't push it off the overlay.
+    /// Clear-glass marble that rides the ACTIVE AXIS out from the center mic —
+    /// the same dominant-axis classification the controller publishes, so it and
+    /// the highlighted target always agree. Only the drag's component on that
+    /// axis survives (`axisComponent`): a diagonal drag rides the dominant axis
+    /// instead of leaving the cross. Small (39pt — user shrank it 50% from 78)
+    /// so it reads as a cursor, not a finger. 1:1 instant (NO animation — a
+    /// spring lags and "sticks" on direction change), clamped so a far swipe
+    /// can't push it off the overlay. Pure glass — no ring, no shadow — so it's
+    /// one surface, never glass + a drifting outline. Fades in once the drag
+    /// leaves center; at `.none` the component is 0, so it stays fused on the
+    /// mic.
     @ViewBuilder
     private var fingerBall: some View {
-        let mag = hypot(fingerOffset.width, fingerOffset.height)
-        let maxR: CGFloat = 150
-        let k = mag > maxR ? maxR / mag : 1
+        let s = axisComponent(fingerOffset)
+        let mag = abs(s)
+        // Travel cap: the four targets sit at radius 80 with a ~33pt half-width,
+        // so 120 puts the marble's center just past their outer edge — it pokes
+        // past the ring a little and no further.
+        let maxR: CGFloat = 120
+        let travel = mag > maxR ? s * (maxR / mag) : s
         Circle()
             .fill(Color.clear)
-            .frame(width: 78, height: 78)
+            .frame(width: 39, height: 39)
             // A touch of ink tint so the marble is legible on light glass too,
             // where clear-on-clear all but disappears.
             .glassSurface(.circle, tint: isDark ? nil : ink.opacity(0.10))
-            .offset(x: fingerOffset.width * k, y: fingerOffset.height * k)
+            .offset(x: horizontal ? travel : 0, y: vertical ? travel : 0)
             .opacity(min(1, mag / 26))
+    }
+
+    /// The axis directions, so the ball only ever travels on one line.
+    private var horizontal: Bool { direction == .left || direction == .right }
+    private var vertical: Bool { direction == .up || direction == .down }
+
+    /// Signed distance of the drag along the active axis (y-down points), 0
+    /// while centered/unclassified. This projection is what locks the marble
+    /// onto the cross — the off-axis component is discarded.
+    private func axisComponent(_ t: CGSize) -> CGFloat {
+        switch direction {
+        case .up, .down:    return t.height
+        case .left, .right: return t.width
+        case .none:         return 0
+        }
     }
 
     private var hintText: String {
