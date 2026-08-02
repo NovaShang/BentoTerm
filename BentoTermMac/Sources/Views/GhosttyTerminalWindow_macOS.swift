@@ -705,8 +705,11 @@ final class SessionTab {
                 hostLabel: "This Mac",
                 isLocal: true,
                 remoteBlock: remote ? sshBlock : nil)
+            surface.onOpenPreview = { path, line, context in
+                BentoTerminalWindow.openPreview(path: path, line: line, context: context)
+            }
             vm.onRawDataReceived = { [weak surface] data in
-                DispatchQueue.main.async { surface?.feed(data) }
+                Task { @MainActor [weak surface] in surface?.feed(data) }
             }
             vm.onPredictionText = { [weak surface] text in surface?.setPredictedText(text) }
             self.plainSurface = surface

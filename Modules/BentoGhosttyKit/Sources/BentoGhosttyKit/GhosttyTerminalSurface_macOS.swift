@@ -1,7 +1,6 @@
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import BentoFilePreviewKit
 import BentoFoundationKit
-import BentoGhosttyKit
-#if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Carbon   // TIS* — identifies whether the input source is a plain layout
 import GhosttyKit
@@ -21,6 +20,10 @@ private let _wireInputSourceCache: Void = {
 /// `write_to_host` callback. The view is a CAMetalLayer that libghostty renders
 /// into. Mac code (BentoTermMac terminal window) uses it through the protocol,
 /// identically to iOS.
+// Explicit @MainActor (not inherited from NSView): cross-module, inference
+// through AppKit's @preconcurrency annotation degrades to task-isolated, and
+// Swift 6 callers then reject sending the surface through async hops.
+@MainActor
 public final class GhosttyTerminalSurface: NSView, TerminalSurface {
 
     public var onInput: ((Data) -> Void)?
@@ -70,12 +73,12 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     private let ioQueue = DispatchQueue(label: "com.novashang.bento.io", qos: .userInteractive)
     nonisolated(unsafe) private let surfaceLock = NSLock()
     /// TEMP: pane-id label + one-shot flags for the white-screen-on-switch trace. REMOVE when fixed.
-    var debugLabel = "?"
-    private var diagLoggedFeed = false
-    private var diagLoggedDraw = false
+    nonisolated(unsafe) public var debugLabel = "?"
+    nonisolated(unsafe) private var diagLoggedFeed = false
+    nonisolated(unsafe) private var diagLoggedDraw = false
     /// Coalesce display-link ticks: never queue a second draw while one is still
     /// in flight (a stalled frame would otherwise pile up thousands of draws).
-    private var renderInFlight = false
+    nonisolated(unsafe) private var renderInFlight = false
     /// Dirty flag: the display link only draws when something changed, instead of
     /// an unconditional 60fps redraw of every surface (which kept the GPU and this
     /// queue busy all day on an idle background app — battery drain). Set true by any
@@ -83,12 +86,12 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     /// when a draw is scheduled. Starts true so the first frames draw (which also
     /// poll ghostty's grid size to start the pty — see reportSizeIfNeeded).
     /// Guarded by `surfaceLock` since `setNeedsDraw` is called from any thread.
-    private var needsDraw = true
+    nonisolated(unsafe) private var needsDraw = true
     /// Timestamp of the last scheduled draw. Drives a low idle redraw rate so the
     /// cursor keeps blinking (the prebuilt libghostty drives blink internally and
     /// never emits a RENDER action) and any un-marked local change still recovers.
     /// Touched only under `surfaceLock`.
-    private var lastDrawNs: UInt64 = 0
+    nonisolated(unsafe) private var lastDrawNs: UInt64 = 0
     private static let idleRedrawIntervalNs: UInt64 = 250_000_000   // 250ms ≈ 4fps
     /// Floor between *draw-on-arrival* kicks (a draw fired straight from output
     /// processing instead of waiting for the next CVDisplayLink tick). Keeps a
@@ -101,8 +104,8 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     /// `set_size` (window resize / font change), which calls `reportSizeIfNeeded`
     /// directly. Without this every drawn frame of every pane posts a size-poll to
     /// the main thread — hundreds/sec across many live panes. Guarded by `surfaceLock`.
-    private var gridSettled = false
-    private var pendingBytes: [Data] = []
+    nonisolated(unsafe) private var gridSettled = false
+    nonisolated(unsafe) private var pendingBytes: [Data] = []
     private var lastAppliedFontSize: Float = 0
 
     // IME state. `markedText` holds the in-flight composition (e.g. pinyin
@@ -111,7 +114,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     // special keys (Enter/Tab/arrows) via the engine.
     private var markedText = NSMutableAttributedString()
     private var keyEventForIME: NSEvent?
-    private var isTornDown = false
+    nonisolated(unsafe) private var isTornDown = false
 
     // Scroll-review-compose: local draft capture while scrolled into history.
     // See docs/scroll-review-compose.md and ScrollReviewCompose.swift.
@@ -126,6 +129,10 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     // Path preview (⌘hover to highlight, ⌘click to open, also on the context
     // menu). The host attaches a `PathPreviewContext` when the pane's files are
     // reachable (local panes; remote fetch is wired per-transport); nil = off.
+    /// Open the preview for a confirmed hit. Wired by the host to the app's
+    /// preview panel (`BentoTerminalWindow.openPreview`) — the surface layer
+    /// must not name the app window type.
+    public var onOpenPreview: ((String, Int?, PathPreviewContext) -> Void)?
     public var pathPreviewContext: PathPreviewContext?
     /// Wrap width for the visual-row math. tmux panes pass `pane.width`; nil
     /// falls back to ghostty's grid.
@@ -573,7 +580,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     /// captured the raw pointer before the detach — have finished before the
     /// free runs. Captures only the queue + pointer, never `self` (safe from
     /// `deinit`).
-    private func enqueueSurfaceFree(_ s: ghostty_surface_t) {
+    nonisolated private func enqueueSurfaceFree(_ s: ghostty_surface_t) {
         let rq = renderQueue
         ioQueue.async { rq.async { ghostty_surface_free(s) } }
     }
@@ -1639,7 +1646,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
         clearPathHover()
         let hits = scan.hits
         if hits[0].fastPath {
-            BentoTerminalWindow.openPreview(path: hits[0].path, line: hits[0].line, context: context)
+            onOpenPreview?(hits[0].path, hits[0].line, context)
             return
         }
         pathClickSeq += 1
@@ -1649,8 +1656,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
                 paths: hits.map(\.path), rootHints: scan.rootHints,
                 context: context) else { return }
             guard let self, self.pathClickSeq == seq, !self.isTornDown else { return }
-            BentoTerminalWindow.openPreview(
-                path: res.resolvedPath, line: hits[res.index].line, context: context)
+            onOpenPreview?(res.resolvedPath, hits[res.index].line, context)
         }
     }
 
@@ -1697,8 +1703,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     private func presentPathPreview(_ hit: SurfacePathHitEngine.Hit) {
         guard let context = pathPreviewContext else { return }
         clearPathHover()
-        BentoTerminalWindow.openPreview(
-            path: hit.candidate.path, line: hit.candidate.line, context: context)
+        onOpenPreview?(hit.candidate.path, hit.candidate.line, context)
     }
 
     public override func flagsChanged(with event: NSEvent) {
@@ -1794,13 +1799,13 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     /// True while the find bar holds the keyboard. The host checks this before
     /// re-asserting first responder on the surface — otherwise its periodic
     /// `updateActiveBorders` would yank the caret out of the field mid-typing.
-    var searchFieldHasFocus: Bool { searchBar?.fieldHasFocus ?? false }
+    public var searchFieldHasFocus: Bool { searchBar?.fieldHasFocus ?? false }
 
-    var isSearchOpen: Bool { searchBar != nil }
+    public var isSearchOpen: Bool { searchBar != nil }
 
     /// Open the find bar. `prefill` (⌘F with a selection, or the engine's own
     /// START_SEARCH) seeds the field and searches immediately.
-    func beginSearch(prefill: String? = nil) {
+    public func beginSearch(prefill: String? = nil) {
         let bar = searchBar ?? makeSearchBar()
         // A multi-line selection is a region, not a needle — don't seed from it.
         let seed = prefill ?? surface.flatMap { GhosttySel.selectedText($0) }
@@ -1813,7 +1818,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     }
 
     /// Close the find bar and hand the keyboard back to the terminal.
-    func endSearchUI() {
+    public func endSearchUI() {
         guard let bar = searchBar else { return }
         bar.cancelPendingQuery()
         bar.removeFromSuperview()
@@ -1832,11 +1837,11 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
         setNeedsDraw()
     }
 
-    func findNext() { navigateSearch(forward: true) }
-    func findPrevious() { navigateSearch(forward: false) }
+    public func findNext() { navigateSearch(forward: true) }
+    public func findPrevious() { navigateSearch(forward: false) }
 
     /// ⌘E — Use Selection for Find (the standard macOS pair with ⌘F/⌘G).
-    func useSelectionForFind() {
+    public func useSelectionForFind() {
         guard let surface, let text = GhosttySel.selectedText(surface),
               !text.isEmpty, !text.contains("\n") else { return }
         let bar = searchBar ?? makeSearchBar()
@@ -1938,7 +1943,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
 
     /// The whole scrollback as text (one line per row, top-aligned with the
     /// SCROLLBAR row space).
-    func readScrollback() -> String? {
+    public func readScrollback() -> String? {
         guard let surface else { return nil }
         return GhosttySel.readRegion(surface, tag: GHOSTTY_POINT_SCREEN)?.text
     }
@@ -2049,10 +2054,13 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
         ghostty_surface_refresh(surface)
     }
 }
-#endif
 
 // NSTextInputClient is an unisolated AppKit protocol; the class is
 // main-actor-isolated (NSView). @preconcurrency silences the crossing check —
 // the input-context callbacks only ever arrive on the main thread.
 extension GhosttyTerminalSurface: @preconcurrency NSTextInputClient {}
 extension GhosttyTerminalSurface: @preconcurrency GhosttySurfaceUserdata {}
+// MainActor-isolated NSView — Swift 6 app code captures it in @Sendable
+// closures to hop work onto the main actor; the isolation travels with it.
+extension GhosttyTerminalSurface: @unchecked Sendable {}
+#endif

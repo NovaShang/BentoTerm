@@ -1,12 +1,14 @@
 // swift-tools-version: 5.10
 import PackageDescription
 
-// BentoGhosttyKit: the managed-host layer for libghostty. The GhosttyKit
+// BentoGhosttyKit: the terminal surface layer for libghostty. The GhosttyKit
 // package carries only the prebuilt xcframework; this package owns everything
 // Bento does with it — runtime lifecycle, C-callback routing, selection /
-// mouse / clipboard bridging, and the ghostty-typed surface callback protocol.
+// mouse / clipboard bridging, the ghostty-typed surface callback protocol,
+// and the two platform surfaces (iOS UIView / macOS NSView) with their own
+// child widgets (find bar, compose bar, hint chip, path highlight).
 // Core's shared engine never names a ghostty type; it talks to the
-// engine-agnostic TerminalSurface protocol.
+// engine-agnostic TerminalSurface protocol, which these surfaces implement.
 let package = Package(
     name: "BentoGhosttyKit",
     platforms: [
@@ -19,6 +21,8 @@ let package = Package(
     dependencies: [
         .package(path: "../GhosttyKit"),
         .package(path: "../BentoFoundationKit"),
+        .package(path: "../BentoFilePreviewKit"),
+        .package(path: "../../bento-terminal-core"),
     ],
     targets: [
         .target(
@@ -26,6 +30,11 @@ let package = Package(
             dependencies: [
                 .product(name: "GhosttyKit", package: "GhosttyKit"),
                 "BentoFoundationKit",
+                "BentoFilePreviewKit",
+                // Explicit package identity: the bare-string shorthand can't
+                // resolve this one — identity "bento-terminal-core" (lowercase,
+                // dashed) doesn't match the product name after normalization.
+                .product(name: "BentoTerminalCore", package: "bento-terminal-core"),
             ],
             // The static libghostty needs these at link time. They live on the
             // consumers of the binary (this package — previously core) because
@@ -40,6 +49,10 @@ let package = Package(
                 .linkedFramework("UIKit", .when(platforms: [.iOS])),
                 .linkedFramework("QuartzCore", .when(platforms: [.iOS])),
             ]
+        ),
+        .testTarget(
+            name: "BentoGhosttyKitTests",
+            dependencies: ["BentoGhosttyKit"]
         ),
     ]
 )

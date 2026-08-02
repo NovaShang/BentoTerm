@@ -1,6 +1,5 @@
 import BentoFilePreviewKit
 import BentoFoundationKit
-import BentoGhosttyKit
 import BentoTerminalCore
 #if canImport(UIKit)
 import UIKit
@@ -13,6 +12,10 @@ import GhosttyKit
 /// the runtime's `write_to_host` callback (the "external backend" path — no local
 /// PTY, which iOS forbids). Host code (TerminalContainerVC) treats this purely
 /// through the `TerminalSurface` protocol.
+// Explicit @MainActor (not inherited from UIView): cross-module, inference
+// through UIKit's @preconcurrency annotation degrades to task-isolated, and
+// Swift 6 callers then reject sending the surface through async hops.
+@MainActor
 public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput {
 
     // MARK: TerminalSurface callbacks
@@ -1246,7 +1249,10 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
 private final class DisplayLinkProxy {
     weak var surface: GhosttyTerminalSurface?
     init(_ surface: GhosttyTerminalSurface) { self.surface = surface }
-    @objc func tick() { surface?.renderTick() }
+    @objc func tick() {
+        // CADisplayLink fires on the main run loop (added with .main mode).
+        MainActor.assumeIsolated { surface?.renderTick() }
+    }
 }
 
 /// Integer-offset position/range for the terminal's degenerate UITextInput
@@ -1275,6 +1281,5 @@ private extension UIColor {
         )
     }
 }
-#endif
-
 extension GhosttyTerminalSurface: @preconcurrency GhosttySurfaceUserdata {}
+#endif

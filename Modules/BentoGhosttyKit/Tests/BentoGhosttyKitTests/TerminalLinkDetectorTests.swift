@@ -1,5 +1,5 @@
 import XCTest
-@testable import BentoTerminalCore
+@testable import BentoGhosttyKit
 
 final class TerminalLinkDetectorTests: XCTestCase {
 

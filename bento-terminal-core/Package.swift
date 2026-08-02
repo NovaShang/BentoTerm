@@ -1,10 +1,10 @@
 // swift-tools-version: 5.10
 import PackageDescription
 
-// BentoGhosttyKit (the libghostty managed-host layer) lives in
-// Modules/BentoGhosttyKit as its own package — the engine here talks to
-// surfaces only through the ghostty-free TerminalSurface protocol, and the
-// Mac/iOS app targets import GhosttyKit (the raw xcframework) directly.
+// The engine talks to surfaces only through the ghostty-free TerminalSurface
+// protocol. Everything libghostty-flavored lives ABOVE this package:
+// BentoGhosttyKit (runtime + the two platform surfaces) depends on core, and
+// the app targets import it directly.
 let package = Package(
     name: "BentoTerminalCore",
     platforms: [
@@ -15,7 +15,6 @@ let package = Package(
         .library(name: "BentoTerminalCore", targets: ["BentoTerminalCore"]),
     ],
     dependencies: [
-        .package(path: "../Modules/BentoGhosttyKit"),
         .package(path: "../Modules/BentoTmuxKit"),
         .package(path: "../Modules/BentoAgentKit"),
         .package(path: "../Modules/BentoVoiceKit"),
@@ -26,7 +25,6 @@ let package = Package(
         .target(
             name: "BentoTerminalCore",
             dependencies: [
-                .product(name: "BentoGhosttyKit", package: "BentoGhosttyKit"),
                 .product(name: "BentoTmuxKit", package: "BentoTmuxKit"),
                 .product(name: "BentoAgentKit", package: "BentoAgentKit"),
                 "BentoVoiceKit",

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import BentoTerminalCore
+@testable import BentoGhosttyKit
 
 /// The bytes a mouse-reporting program actually receives. Expectations are the
 /// xterm control sequences as documented (ctlseqs "Mouse Tracking"), spelled out

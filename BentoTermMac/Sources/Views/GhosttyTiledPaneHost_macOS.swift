@@ -262,6 +262,10 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             surface?.feed(data)
         }
         surface.onInput = { [weak paneVM] data in paneVM?.sendInput(data) }
+        surface.onOpenPreview = { [weak self] path, line, context in
+            guard let self else { return }
+            BentoTerminalWindow.openPreview(path: path, line: line, context: context)
+        }
         surface.onSelect = { [weak self] in self?.viewModel.selectPane(paneID) }
         // Wheel in a pane tmux has in copy-mode → tmux's own scroll, not ours.
         surface.onCopyModeScroll = { [weak self] rows in

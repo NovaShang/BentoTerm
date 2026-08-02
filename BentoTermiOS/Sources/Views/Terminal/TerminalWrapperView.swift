@@ -6,6 +6,7 @@ import BentoAgentKit
 import BentoTerminalCore
 import BentoFilePreviewKit
 import BentoFoundationKit
+import BentoGhosttyKit
 
 /// Bridges the UIKit terminal views into SwiftUI navigation.
 /// The session has already been picked (and the SSH is up) before this view
