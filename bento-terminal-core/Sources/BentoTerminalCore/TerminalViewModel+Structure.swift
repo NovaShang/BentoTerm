@@ -123,7 +123,7 @@ public extension TerminalViewModel {
     }
 
     /// One-shot read of the session's remembered mode (`@bento_mode`).
-    private func loadModePreferenceIfNeeded() {
+    func loadModePreferenceIfNeeded() {
         guard usingTmux, !modePreferenceLoaded else { return }
         modePreferenceLoaded = true
         Task { [weak self] in
@@ -201,7 +201,7 @@ public extension TerminalViewModel {
         windowBodyName(windowID, window: windows.first { $0.id == windowID })
     }
 
-    private func windowBodyName(_ windowID: TmuxWindowID, window: TmuxWindow?) -> String {
+    func windowBodyName(_ windowID: TmuxWindowID, window: TmuxWindow?) -> String {
         let winPanes = panes(in: windowID)
         let windowName = window?.name.trimmingCharacters(in: .whitespaces)
         if winPanes.count > 1 {
@@ -302,7 +302,7 @@ public extension TerminalViewModel {
     ///     so it's shell-quoted (`.shell`).
     ///  3. A bare shell prompt (zsh/bash/…) means nothing is running → no command,
     ///     i.e. a plain shell in the same directory (no pointless nested shell).
-    private func resolveSeed(_ seed: WindowSeed) async -> (String?, SpawnCommand?) {
+    func resolveSeed(_ seed: WindowSeed) async -> (String?, SpawnCommand?) {
         switch seed {
         case .custom(let path, let command):
             // A creation the user spelled out. Remember it (the policy drops
@@ -365,18 +365,18 @@ public extension TerminalViewModel {
     /// Whether a `#{pane_current_command}` value is just a login/interactive
     /// shell (so "duplicate" should open a plain shell, not re-run the shell as
     /// a program). tmux reports the leaf name, sometimes with a login `-` prefix.
-    private static func isShellName(_ command: String) -> Bool {
+    static func isShellName(_ command: String) -> Bool {
         let name = command.hasPrefix("-") ? String(command.dropFirst()) : command
         return ["zsh", "bash", "sh", "fish", "dash", "tcsh", "csh", "ksh"].contains(name)
     }
 
-    private func displayValue(_ format: String, pane: TmuxPaneID) async -> String? {
+    func displayValue(_ format: String, pane: TmuxPaneID) async -> String? {
         let resp = await tmuxService.send(.displayMessage(format: format, target: pane))
         guard !resp.isError else { return nil }
         return blankToNil(resp.output.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    private func blankToNil(_ s: String?) -> String? {
+    func blankToNil(_ s: String?) -> String? {
         guard let s, !s.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
         return s
     }
@@ -401,7 +401,7 @@ public extension TerminalViewModel {
     /// Record the current window/pane shape so it can be rebuilt after a
     /// spread. Captures every window, including ones already holding a single
     /// pane — their names are part of the shape too.
-    private func saveStructureSnapshot() async {
+    func saveStructureSnapshot() async {
         let byWindow = panesByWindow
         let snapshot = TmuxStructureSnapshot(windows: windows.compactMap { window in
             let panes = byWindow[window.id] ?? []
@@ -422,7 +422,7 @@ public extension TerminalViewModel {
 
     /// The snapshot to restore from, preferring the structure record and
     /// falling back to the single-window pair written by older builds.
-    private func loadStructureSnapshot() async -> TmuxStructureSnapshot? {
+    func loadStructureSnapshot() async -> TmuxStructureSnapshot? {
         if let snapshot = TmuxStructureSnapshot.decode(await readSessionOption(Self.structureOption)) {
             return snapshot
         }
@@ -440,7 +440,7 @@ public extension TerminalViewModel {
         ])
     }
 
-    private func clearStructureSnapshot() async {
+    func clearStructureSnapshot() async {
         _ = await tmuxService.send(.setSessionOption(name: Self.structureOption, value: ""))
         _ = await tmuxService.send(.setSessionOption(name: Self.savedLayoutOption, value: ""))
         _ = await tmuxService.send(.setSessionOption(name: Self.savedOrderOption, value: ""))
@@ -627,7 +627,7 @@ public extension TerminalViewModel {
     /// after each join reclaims the space; a retry covers the boundary case. A
     /// pane that genuinely doesn't fit stays in its own window, and `prev` stays
     /// on a pane that IS in the base window so the next join still targets it.
-    private func rebuildWindow(_ step: TmuxStructureSnapshot.RestoreStep) async {
+    func rebuildWindow(_ step: TmuxStructureSnapshot.RestoreStep) async {
         guard !step.join.isEmpty else { return }
         await refreshPanes()
         let baseWin = sessionPanes.first(where: { $0.id == step.base })?.windowID
@@ -677,7 +677,7 @@ public extension TerminalViewModel {
         return name
     }
 
-    private func attachedClientNames() async -> Set<String> {
+    func attachedClientNames() async -> Set<String> {
         let resp = await tmuxService.send(.listClients)
         guard !resp.isError else { return [] }
         // `#{client_name}:#{client_session}` — the name may itself contain no
@@ -839,14 +839,14 @@ public extension TerminalViewModel {
         }
     }
 
-    private func readWindowOption(_ name: String) async -> String? {
+    func readWindowOption(_ name: String) async -> String? {
         let resp = await tmuxService.send(.showWindowOption(name: name))
         guard !resp.isError else { return nil }
         let value = resp.output.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? nil : value
     }
 
-    private func currentWindowSize(_ windowID: TmuxWindowID) async -> (cols: Int, rows: Int)? {
+    func currentWindowSize(_ windowID: TmuxWindowID) async -> (cols: Int, rows: Int)? {
         let resp = await tmuxService.send(
             .displayMessage(format: "#{window_width}x#{window_height}", target: nil))
         guard !resp.isError else { return nil }
@@ -938,7 +938,7 @@ public extension TerminalViewModel {
     /// the UI can ask and call again with an explicit landing. A join the
     /// target genuinely can't fit (pane too small even after re-tiling)
     /// falls back to the window path rather than failing.
-    private func moveToSession(_ target: String,
+    func moveToSession(_ target: String,
                                isLast: Bool,
                                landing: MoveLanding,
                                kind: String,
@@ -1015,8 +1015,8 @@ public extension TerminalViewModel {
     /// it, but commands reach any session): the same reading
     /// `recomputeSessionMode` does locally — structure decides, and only the
     /// degenerate 1×1 falls back to the remembered `@bento_mode`.
-    private enum TargetShape { case tiled, list, unsettled }
-    private func probeSessionShape(_ name: String) async -> TargetShape {
+    enum TargetShape { case tiled, list, unsettled }
+    func probeSessionShape(_ name: String) async -> TargetShape {
         let resp = await tmuxService.send(.listPanes(target: name, sessionWide: true))
         guard !resp.isError else { return .unsettled }
         var byWindow: [TmuxWindowID: Int] = [:]
@@ -1037,12 +1037,12 @@ public extension TerminalViewModel {
         return byWindow.values.contains { $0 > 1 } ? .unsettled : .list
     }
 
-    private enum EnsureSession { case existed, created, failed }
+    enum EnsureSession { case existed, created, failed }
 
     /// Create `name` server-side when the cached session list doesn't know
     /// it. Tolerates a stale cache: "duplicate session" means the target
     /// exists after all, which is exactly what the move needs.
-    private func ensureSessionExists(_ name: String) async -> EnsureSession {
+    func ensureSessionExists(_ name: String) async -> EnsureSession {
         guard !availableTmuxSessions.contains(name) else { return .existed }
         let resp = await tmuxService.send(.newSession(name: name))
         if resp.isError {
@@ -1055,7 +1055,7 @@ public extension TerminalViewModel {
     /// Read a session option's value; nil when unset/empty. `show-options -qv`
     /// prints the bare value (quoted only if it contains spaces — strip that).
     /// `target` reads another session's option (nil = the attached session).
-    private func readSessionOption(_ name: String, target: String? = nil) async -> String? {
+    func readSessionOption(_ name: String, target: String? = nil) async -> String? {
         let resp = await tmuxService.send(.showSessionOption(target: target, name: name))
         guard !resp.isError else { return nil }
         var value = resp.output.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -1,5 +1,6 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import Foundation
+import BentoTerminalCore
 
 /// A `TerminalTransport` backed by a local pseudo-terminal. Lets the shared
 /// `TerminalViewModel` drive a local macOS shell exactly the way it drives SSH
@@ -74,7 +75,7 @@ public final class LocalPtyTransport: TerminalTransport, @unchecked Sendable {
         setState(.failed("The connection to the terminal was lost."))
     }
 
-    public func connect(host: Host) async {
+    public func connect(host: BentoTerminalCore.Host) async {
         // Local: nothing to dial. Mark connected so the VM proceeds to start
         // the shell (mirrors SSHService reaching `.connected`).
         setState(.connected)

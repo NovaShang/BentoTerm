@@ -1,6 +1,7 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import UserNotifications
+import BentoTerminalCore
 
 /// Surfaces "a pane is awaiting input" on macOS while a terminal window is open
 /// (reusing the shared `StateDetectionService` via the VM's

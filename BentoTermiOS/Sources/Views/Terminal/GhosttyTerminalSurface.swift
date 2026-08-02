@@ -1,4 +1,5 @@
 import BentoFoundationKit
+import BentoTerminalCore
 #if canImport(UIKit)
 import UIKit
 import Metal
@@ -10,7 +11,7 @@ import GhosttyKit
 /// the runtime's `write_to_host` callback (the "external backend" path — no local
 /// PTY, which iOS forbids). Host code (TerminalContainerVC) treats this purely
 /// through the `TerminalSurface` protocol.
-public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput {
+public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput, GhosttySurfaceUserdata {
 
     // MARK: TerminalSurface callbacks
     public var onInput: ((Data) -> Void)?
@@ -54,9 +55,9 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// chrome anyway.
     public var onRendererHealthChanged: ((Bool) -> Void)?
 
-    private var surface: ghostty_surface_t?
+    nonisolated(unsafe) private var surface: ghostty_surface_t?
     private var theme: TerminalTheme
-    private var renderLink: CADisplayLink?
+    nonisolated(unsafe) private var renderLink: CADisplayLink?
     private var pendingBytes: [Data] = []
     /// Dirty flag: the display link only draws when something changed, instead
     /// of an unconditional up-to-120Hz redraw of every pane (GPU/battery burn).
@@ -157,7 +158,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// stall on occluded and miniaturized windows (`updateRenderActive` there);
     /// this is the iOS half of it.
     private var isBackgrounded = false
-    private var lifecycleObservers: [NSObjectProtocol] = []
+    nonisolated(unsafe) private var lifecycleObservers: [NSObjectProtocol] = []
 
     private func observeAppLifecycleIfNeeded() {
         guard lifecycleObservers.isEmpty else { return }
@@ -713,12 +714,12 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     }
 
     /// Called by GhosttyRuntime when the engine has bytes for the host (SSH).
-    func handleHostWrite(_ data: Data) {
+    public func handleHostWrite(_ data: Data) {
         onInput?(data)
     }
 
     /// Called by GhosttyRuntime on every SCROLLBAR action.
-    func handleScrollbar(total: UInt64, offset: UInt64, len: UInt64) {
+    public func handleScrollbar(total: UInt64, offset: UInt64, len: UInt64) {
         lastScrollTop = Int(offset)
     }
 
@@ -728,7 +729,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// no window chrome to recolor yet, but the value is kept for hosts.
     public private(set) var reportedBackgroundColor: UIColor?
 
-    func handleColorChange(kind: ghostty_action_color_kind_e, red: UInt8, green: UInt8, blue: UInt8) {
+    public func handleColorChange(kind: ghostty_action_color_kind_e, red: UInt8, green: UInt8, blue: UInt8) {
         guard kind == GHOSTTY_ACTION_COLOR_KIND_BACKGROUND else { return }
         reportedBackgroundColor = UIColor(
             red: CGFloat(red) / 255, green: CGFloat(green) / 255,
@@ -741,7 +742,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// OSC 7 working-directory report (shell integration on the remote side).
     /// Fallback cwd for path-preview when the pane isn't a tmux pane.
     public private(set) var reportedPwd: String?
-    func handlePwd(_ pwd: String?) {
+    public func handlePwd(_ pwd: String?) {
         if let pwd, !pwd.isEmpty { reportedPwd = pwd }
     }
 
@@ -778,11 +779,11 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// GhosttyRuntime on GHOSTTY_ACTION_RENDER and by every local mutation in
     /// this file (output, scroll, input, selection, focus). Main-thread only —
     /// all iOS surface entry points are main-thread, so no lock (unlike macOS).
-    func setNeedsDraw() { needsDraw = true }
+    public func setNeedsDraw() { needsDraw = true }
 
     // Per-surface engine actions — mostly no-ops on iOS (no pointer cursor).
-    func handleMouseShape(_ shape: ghostty_action_mouse_shape_e) {}
-    func handleMouseVisibility(_ visible: Bool) {}
+    public func handleMouseShape(_ shape: ghostty_action_mouse_shape_e) {}
+    public func handleMouseVisibility(_ visible: Bool) {}
 
     // Scrollback search is macOS-only for now — the engine side is shared (see
     // GhosttySel.search), only the find-bar UI is not built for touch yet. These
@@ -839,26 +840,26 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         return text
     }
 
-    func handleStartSearch(needle: String?) { onSearchStartRequested?(needle) }
-    func handleEndSearch() { onSearchEnded?() }
+    public func handleStartSearch(needle: String?) { onSearchStartRequested?(needle) }
+    public func handleEndSearch() { onSearchEnded?() }
 
-    func handleSearchTotal(_ total: Int?) {
+    public func handleSearchTotal(_ total: Int?) {
         searchTotal = total
         onSearchCounts?(searchTotal, searchSelected)
     }
 
-    func handleSearchSelected(_ selected: Int?) {
+    public func handleSearchSelected(_ selected: Int?) {
         searchSelected = selected
         onSearchCounts?(searchTotal, searchSelected)
     }
 
-    func handleRendererHealth(healthy: Bool) {
+    public func handleRendererHealth(healthy: Bool) {
         onRendererHealthChanged?(healthy)
     }
 
     // MARK: - Tap-to-open links
 
-    func handleMouseOverLink(_ url: String?) {
+    public func handleMouseOverLink(_ url: String?) {
         // This prebuilt libghostty never emits MOUSE_OVER_LINK (verified — like
         // RENDER, its whole link pipeline expects the desktop apprt's hover
         // plumbing, so hover state is never populated and click-activation

@@ -35,7 +35,7 @@ public extension TerminalViewModel {
     /// coalesced into the same `send-keys` burst as the inserted text — a TUI
     /// input box (e.g. Claude Code) treats text+CR arriving together as pasted
     /// content and won't submit, but a standalone CR is a real Enter.
-    private func sendReturnDistinct() {
+    func sendReturnDistinct() {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(140))
             if let data = "\r".data(using: .utf8) { sendData(data) }
@@ -43,7 +43,7 @@ public extension TerminalViewModel {
     }
 
     /// Recent terminal text used as LLM context for the active pane.
-    private func recentPaneContext() -> String {
+    func recentPaneContext() -> String {
         if let activePaneID {
             return stateDetection.recentText(for: activePaneID, lines: 30)
         }

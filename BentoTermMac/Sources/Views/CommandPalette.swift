@@ -1,6 +1,7 @@
 import Foundation
 import os
 import BentoFilePreviewKit
+import BentoTerminalCore
 
 /// The command palette (⌘P): one single-state box over the focused pane that
 /// blends *file preview* (browse / fuzzy-find / open any file in the working
@@ -172,76 +173,6 @@ private extension Character {
 // MARK: - Recents store
 
 /// Persisted, capped recents backing the palette's empty state: files you've
-/// previewed and (directory + command) launches you've spun up. UserDefaults
-/// JSON — small, per-user, survives relaunch.
-public final class PaletteRecents {
-    public static let shared = PaletteRecents()
-
-    public struct FileEntry: Codable, Equatable {
-        public let path: String
-        public let host: String
-    }
-    /// The launch entry's shape lives in `OpenTargets.swift` — it's the store's
-    /// row AND the launcher-wide value, and only one of those two is allowed to
-    /// own the definition. This name stays for the call sites that predate it.
-    public typealias LaunchEntry = LaunchRecord
-
-    private let filesKey = "palette_recent_files"
-    private let launchesKey = "palette_recent_launches"
-    private let cap = 20
-
-    public private(set) var files: [FileEntry]
-    public private(set) var launches: [LaunchEntry]
-
-    private init() {
-        let d = UserDefaults.standard
-        files = (try? JSONDecoder().decode([FileEntry].self,
-            from: d.data(forKey: filesKey) ?? Data())) ?? []
-        launches = (try? JSONDecoder().decode([LaunchEntry].self,
-            from: d.data(forKey: launchesKey) ?? Data())) ?? []
-    }
-
-    /// Most-recent-first, deduped on path.
-    public func recordFile(path: String, host: String) {
-        let entry = FileEntry(path: path, host: host)
-        files.removeAll { $0.path == path }
-        files.insert(entry, at: 0)
-        if files.count > cap { files.removeLast(files.count - cap) }
-        persist(files, key: filesKey)
-    }
-
-    /// Remember a launch IF it's worth remembering (see `RecentLaunchPolicy` —
-    /// a plain shell in `$HOME` is the default and carries no information).
-    /// This is what the creation paths call; `recordLaunch` below is the
-    /// unconditional store.
-    ///
-    /// Recording lives on the paths that CREATE something. It used to happen
-    /// only when the palette replayed a row it already had, which meant the
-    /// list could never gain a first entry and was empty for everyone, always.
-    public func recordLaunchIfUseful(dir: String?, command: String?, host: String? = nil) {
-        guard let record = RecentLaunchPolicy.record(dir: dir, command: command, host: host)
-        else { return }
-        recordLaunch(record)
-    }
-
-    /// Most-recent-first, deduped on (dir, command, host).
-    public func recordLaunch(dir: String, command: String) {
-        recordLaunch(LaunchEntry(dir: dir, command: command))
-    }
-
-    public func recordLaunch(_ entry: LaunchEntry) {
-        launches.removeAll { $0 == entry }
-        launches.insert(entry, at: 0)
-        if launches.count > cap { launches.removeLast(launches.count - cap) }
-        persist(launches, key: launchesKey)
-    }
-
-    private func persist<T: Encodable>(_ value: T, key: String) {
-        if let data = try? JSONEncoder().encode(value) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
-    }
-}
 
 // MARK: - File browsing provider
 

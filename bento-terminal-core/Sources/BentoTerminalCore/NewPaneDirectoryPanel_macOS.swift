@@ -78,7 +78,7 @@ final class NewPaneCommandAccessory: NSView {
 /// user can still navigate to or create another. `onCreate(path, command)`
 /// fires on confirm with the chosen directory and command; nothing on cancel.
 @MainActor
-func presentNewPaneDirectoryPanel(
+public func presentNewPaneDirectoryPanel(
     title: String,
     prompt: String,
     initialDirectory: String?,

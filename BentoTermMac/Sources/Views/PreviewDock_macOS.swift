@@ -2,6 +2,7 @@ import BentoFilePreviewKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import SwiftUI
+import BentoTerminalCore
 
 // MARK: - File watcher
 
@@ -91,7 +92,7 @@ final class PinnedPreview: ObservableObject, Identifiable {
     }
     @Published var phase: Phase
 
-    private var watcher: LocalFileWatcher?
+    nonisolated(unsafe) private var watcher: LocalFileWatcher?
     private var reloadTask: Task<Void, Never>?
 
     /// `path` is an already-resolved absolute path. `initial` seeds the first

@@ -3,6 +3,7 @@ import BentoVoiceKit
 import AppKit
 import Combine
 import SwiftUI
+import BentoTerminalCore
 
 /// macOS hold-to-talk voice controller. Wraps the shared `VoiceSession` (engine
 /// + permissions + audio) and adds the compass direction + published state the

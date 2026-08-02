@@ -28,6 +28,8 @@ packages:
     path: Modules/BentoFoundationKit
   BentoFilePreviewKit:
     path: Modules/BentoFilePreviewKit
+  GhosttyKit:
+    path: Modules/GhosttyKit
   BentoTerminalCore:
     path: bento-terminal-core
 
@@ -54,6 +56,7 @@ targets:
       - package: BentoVoiceKit
       - package: BentoFoundationKit
       - package: BentoFilePreviewKit
+      - package: GhosttyKit
       - package: BentoTerminalCore
     settings:
       base:
@@ -97,7 +100,11 @@ targets:
       - BentoTermMac/Sources
       - BentoTermMac/Resources/Assets.xcassets
     dependencies:
+      - package: BentoTmuxKit
+      - package: BentoVoiceKit
       - package: BentoFoundationKit
+      - package: BentoFilePreviewKit
+      - package: GhosttyKit
       - package: BentoTerminalCore
     settings:
       base:

@@ -5,14 +5,14 @@ import Foundation
 /// libghostty's own link pipeline (hover → MOUSE_OVER_LINK → click-activate)
 /// is inert in embedded mode, so the apps read the visual rows around the
 /// pointer themselves (via transient selections) and hit-test here.
-enum TerminalLinkDetector {
+public enum TerminalLinkDetector {
 
     /// Given consecutive VISUAL rows, the pointer's (row, col) within them and
     /// the grid width, return the URL under the pointer or nil. Rows whose
     /// glyphs fill every column are joined with their successor (soft-wrap
     /// heuristic) before matching, so a long OAuth URL wrapped across rows
     /// resolves whole.
-    static func urlHit(rows: [String], tapRow: Int, tapCol: Int, columns: Int) -> String? {
+    public static func urlHit(rows: [String], tapRow: Int, tapCol: Int, columns: Int) -> String? {
         guard tapRow >= 0, tapRow < rows.count, columns > 0 else { return nil }
         // Bounds of the wrap-chain containing the tapped row.
         var start = tapRow
@@ -48,7 +48,7 @@ enum TerminalLinkDetector {
     /// Terminal display width of a string: CJK/full-width scalars occupy two
     /// columns, everything else one. Good enough for URL span math (URLs are
     /// ASCII; only the prefix before them needs the wide-char correction).
-    static func displayWidth(_ s: String) -> Int {
+    public static func displayWidth(_ s: String) -> Int {
         s.unicodeScalars.reduce(0) { acc, u in
             let v = u.value
             let wide = (0x1100...0x115F).contains(v) || (0x2E80...0xA4CF).contains(v)

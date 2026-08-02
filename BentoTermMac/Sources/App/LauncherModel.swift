@@ -1,6 +1,7 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Foundation
+import BentoTerminalCore
 
 /// The launcher's content: what a window with no session yet offers to open.
 ///

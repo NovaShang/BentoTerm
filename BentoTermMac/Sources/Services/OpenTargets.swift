@@ -17,69 +17,6 @@ import Foundation
 
 /// A remembered launch: a directory plus the program that ran in it ("" = a
 /// plain shell). This is the persisted shape — see `PaletteRecents`.
-///
-/// `host` is nil for everything today and means "this Mac". It exists NOW,
-/// unused, purely so that remembering a launch on a remote machine later is a
-/// new value rather than a store migration: the synthesized `Codable` encodes a
-/// nil optional by omitting the key and decodes a missing key as nil, so JSON
-/// written before this field existed still decodes, and JSON written today is
-/// still readable by a build that predates it.
-public struct LaunchRecord: Codable, Equatable, Sendable {
-    public let dir: String
-    /// "" = plain shell.
-    public let command: String
-    /// nil = local. Reserved for remote entries; nothing writes it yet.
-    public let host: String?
-
-    public init(dir: String, command: String, host: String? = nil) {
-        self.dir = dir
-        self.command = command
-        self.host = host
-    }
-}
-
-// MARK: - The noise rule
-
-/// Which launches are worth remembering.
-///
-/// Every creation path now reports in (that's the point — the list was
-/// permanently empty while only the palette's own rows recorded). But most
-/// creations are the boring default: a plain login shell in `$HOME`, which is
-/// what "new window" already does with no help from a recents list. Twenty of
-/// those would push out the one row the user actually wanted.
-///
-/// So: **remember a launch when it says something the default doesn't** —
-/// either a real program was requested, or the directory isn't home. A plain
-/// shell in home is the only combination that's pure noise, and it's also by
-/// far the most common, which is exactly why it's the one we drop.
-///
-/// A launch with no known directory is dropped too: the row's whole job is to
-/// reopen *somewhere*, and it can't name a session without a folder to name it
-/// after.
-public enum RecentLaunchPolicy {
-    /// Trim, expand `~`, and drop a trailing slash so `/a/b` and `/a/b/` are
-    /// one entry rather than two.
-    public static func normalizedDir(_ raw: String?) -> String? {
-        guard var dir = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !dir.isEmpty
-        else { return nil }
-        dir = (dir as NSString).expandingTildeInPath
-        while dir.count > 1 && dir.hasSuffix("/") { dir.removeLast() }
-        return dir.isEmpty ? nil : dir
-    }
-
-    public static func normalizedCommand(_ raw: String?) -> String {
-        raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    /// nil = don't remember this one.
-    public static func record(dir: String?, command: String?, host: String? = nil) -> LaunchRecord? {
-        guard let dir = normalizedDir(dir) else { return nil }
-        let command = normalizedCommand(command)
-        let home = NSHomeDirectory()
-        guard !command.isEmpty || dir != home else { return nil }
-        return LaunchRecord(dir: dir, command: command, host: host)
-    }
-}
 
 // MARK: - tmux session naming
 
@@ -311,6 +248,7 @@ public func tildeAbbreviated(_ path: String) -> String {
 
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
+import BentoTerminalCore
 
 /// Composes the three sources into `[OpenTarget]` and performs them.
 ///

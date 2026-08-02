@@ -2,6 +2,7 @@ import BentoFilePreviewKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import SwiftUI
+import BentoTerminalCore
 
 // MARK: - Hover highlight
 

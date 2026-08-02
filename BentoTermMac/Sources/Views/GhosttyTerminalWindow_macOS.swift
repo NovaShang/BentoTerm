@@ -5,6 +5,9 @@ import BentoFoundationKit
 import AppKit
 import Combine
 import SwiftUI
+import BentoTerminalCore
+/// Resolve the core product-layer ID (server+name), not BentoTmuxKit's wire `$N` ID.
+public typealias TmuxSessionID = BentoTerminalCore.TmuxSessionID
 
 /// Opens native libghostty terminals backed by a local pty + `tmux -CC`. macOS
 /// uses the *same* runtime stack as iOS; only the transport differs.

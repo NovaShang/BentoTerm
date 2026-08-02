@@ -27,10 +27,10 @@ public extension Notification.Name {
 /// global singletons; every surface is created against this one app. Mirrors
 /// the lifecycle Ghostty's own apprt uses (init → config → app_new → tick loop).
 @MainActor
-final class GhosttyRuntime {
-    static let shared = GhosttyRuntime()
+public final class GhosttyRuntime {
+    public static let shared = GhosttyRuntime()
 
-    private(set) var app: ghostty_app_t?
+    public private(set) var app: ghostty_app_t?
     private let baseConfig: ghostty_config_t?
     private var tickTimer: Timer?
 
@@ -40,13 +40,20 @@ final class GhosttyRuntime {
     /// request on. (Paste runs the request synchronously, so this is unambiguous.)
     /// A platform-neutral `ghostty_surface_t` keeps this shared runtime free of
     /// any AppKit/UIKit surface type. nil → `read_clipboard_cb` declines.
-    var pasteSurface: ghostty_surface_t?
+    public var pasteSurface: ghostty_surface_t?
+
+    /// Wired by the macOS app: invalidate the surface's cached input-source
+    /// layout. The runtime keeps the AppKit keyboard-layout observer (below)
+    /// but the surface class now lives in the app target — this closure is the
+    /// seam (see `GhosttySurfaceUserdata` for the same pattern in action
+    /// routing).
+    public static var invalidateInputSourceCache: @MainActor () -> Void = {}
 
     /// When set, the next clipboard-read (paste) request is answered with THIS
     /// text instead of the system pasteboard, then cleared. Lets scroll-review-
     /// compose inject a committed draft through ghostty's paste pipeline (so it
     /// gets bracketed-paste wrapping) without clobbering the user's clipboard.
-    var pendingPasteText: String?
+    public var pendingPasteText: String?
 
     private init() {
         ComposeDebug.reset()
@@ -115,8 +122,10 @@ final class GhosttyRuntime {
             Task { @MainActor in
                 // The surface caches whether the active source is a plain layout
                 // (it decides whether a keystroke may skip the IME); that answer
-                // just changed.
-                GhosttyTerminalSurface.invalidateInputSourceCache()
+                // just changed. The surface class lives in the app target now,
+                // so the app wires this closure (GhosttySurfaceUserdata exists
+                // for exactly this decoupling).
+                GhosttyRuntime.invalidateInputSourceCache()
                 guard let app = GhosttyRuntime.shared.app else { return }
                 ghostty_app_keyboard_changed(app)
             }
@@ -237,7 +246,7 @@ final class GhosttyRuntime {
     /// config — including ghostty's built-in default when the active theme writes
     /// no explicit `background` (the dark "System" theme). Chrome beside the
     /// terminal reads this so it fuses with what ghostty actually renders.
-    func effectiveBackgroundRGB() -> (r: UInt8, g: UInt8, b: UInt8)? {
+    public func effectiveBackgroundRGB() -> (r: UInt8, g: UInt8, b: UInt8)? {
         guard let baseConfig else { return nil }
         var color = ghostty_config_color_s()
         let key = "background"
@@ -290,7 +299,7 @@ final class GhosttyRuntime {
     /// Open a URL in the system browser/handler, gated to safe schemes.
     /// Internal so the surfaces' link-activation paths (iOS tap probe, macOS
     /// ⌘-click) share the one allowlist with the OPEN_URL action.
-    static func openExternalURL(_ string: String) {
+    public static func openExternalURL(_ string: String) {
         guard let url = URL(string: string),
               let scheme = url.scheme?.lowercased(),
               ["http", "https", "mailto", "ftp", "ftps"].contains(scheme) else { return }
@@ -391,9 +400,8 @@ final class GhosttyRuntime {
             if target.tag == GHOSTTY_TARGET_SURFACE,
                let surface = target.target.surface,
                let userdata = ghostty_surface_userdata(surface) {
-                Unmanaged<GhosttyTerminalSurface>.fromOpaque(userdata)
-                    .takeUnretainedValue()
-                    .setNeedsDraw()
+                (Unmanaged<AnyObject>.fromOpaque(userdata).takeUnretainedValue()
+                    as! any GhosttySurfaceUserdata).setNeedsDraw()
             }
             return true
         case GHOSTTY_ACTION_SCROLLBAR, GHOSTTY_ACTION_MOUSE_SHAPE,
@@ -425,7 +433,7 @@ final class GhosttyRuntime {
               let surface = target.target.surface,
               let userdata = ghostty_surface_userdata(surface) else { return }
         MainActor.assumeIsolated {
-            let view = Unmanaged<GhosttyTerminalSurface>.fromOpaque(userdata).takeUnretainedValue()
+            let view = Unmanaged<AnyObject>.fromOpaque(userdata).takeUnretainedValue() as! any GhosttySurfaceUserdata
             switch action.tag {
             case GHOSTTY_ACTION_SCROLLBAR:
                 let sb = action.action.scrollbar
@@ -513,7 +521,7 @@ final class GhosttyRuntime {
         // before the block runs. (Previously the pointer was resolved INSIDE
         // the async block; if the surface was torn down in between,
         // takeUnretainedValue ran on a freed object → objc_retain crash.)
-        let surface = Unmanaged<GhosttyTerminalSurface>.fromOpaque(userdata).takeUnretainedValue()
+        let surface = Unmanaged<AnyObject>.fromOpaque(userdata).takeUnretainedValue() as! any GhosttySurfaceUserdata
         DispatchQueue.main.async {
             surface.handleHostWrite(data)
         }

@@ -1,4 +1,4 @@
-import BentoTmuxKit
+import BentoTerminalCore
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 

@@ -1,12 +1,13 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import Foundation
 import Darwin
+import BentoTerminalCore
 
 /// A local pseudo-terminal running a login shell, for the macOS terminal.
 /// Spawns via `forkpty`, streams master-fd output to `onData`, accepts input via
 /// `write`, and tracks window size via `resize`. This is the macOS counterpart
 /// to iOS's SSH transport — the surface and tmux logic above it are identical.
-public final class LocalPty {
+public final class LocalPty: @unchecked Sendable {
     public var onData: ((Data) -> Void)?
     public var onExit: (() -> Void)?
 
@@ -88,7 +89,9 @@ public final class LocalPty {
                 // while idle. The consumer re-serializes on its own parse queue.
                 self.onData?(data)
             } else {
-                DispatchQueue.main.async { self.handleExit() }
+                DispatchQueue.main.async {
+            MainActor.assumeIsolated { self.handleExit() }
+        }
             }
         }
         src.resume()

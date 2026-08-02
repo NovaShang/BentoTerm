@@ -5,6 +5,7 @@ import BentoFoundationKit
 import AppKit
 import Combine
 import SwiftUI
+import BentoTerminalCore
 
 /// iTerm2-style TILED multi-pane host for macOS. Every tmux pane is shown at
 /// once, laid out by its tmux cell geometry (x/y/width/height), each in its own
@@ -33,7 +34,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// Block-observer tokens for the theme/font notifications. `removeObserver(self)`
     /// does NOT remove block observers, so the tokens must be stored and removed
     /// explicitly (mirrors the surface's `renderObservers`).
-    private var themeObservers: [NSObjectProtocol] = []
+    nonisolated(unsafe) private var themeObservers: [NSObjectProtocol] = []
     /// Cell size in pixels (constant for the font); learned from the first surface.
     private var cellPx: CGSize?
     private var resizeDebounce: DispatchWorkItem?

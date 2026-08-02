@@ -9,11 +9,11 @@ import Foundation
 /// This is temporary instrumentation for bring-up. Gate everything behind
 /// `enabled`; flip it off (or delete the call sites) once the interaction is
 /// verified.
-enum ComposeDebug {
+public enum ComposeDebug {
     /// Master switch. Set true to capture phase transitions to the log file when
     /// diagnosing the scroll-review-compose interaction; off in production (every
     /// call site is `@autoclosure`-gated, so disabled = zero string-building I/O).
-    static var enabled = false
+    public static var enabled = false
 
     private static let queue = DispatchQueue(label: "com.bento.composedebug")
 
@@ -27,7 +27,7 @@ enum ComposeDebug {
         return dir.appendingPathComponent("compose-debug.log")
     }()
 
-    static func log(_ message: @autoclosure () -> String) {
+    public static func log(_ message: @autoclosure () -> String) {
         guard enabled else { return }
         let line = "\(timestamp()) \(message())\n"
         queue.async {
@@ -43,7 +43,7 @@ enum ComposeDebug {
     }
 
     /// Truncate the log (call at app launch so each run starts clean).
-    static func reset() {
+    public static func reset() {
         guard enabled else { return }
         queue.async {
             guard let url = fileURL else { return }

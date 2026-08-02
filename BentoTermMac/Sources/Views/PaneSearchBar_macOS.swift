@@ -1,5 +1,6 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
+import BentoTerminalCore
 
 /// Find bar for one pane's scrollback (⌘F). Floats over the TOP-RIGHT of the
 /// surface and deliberately never reflows it: the surface's pixel size IS the

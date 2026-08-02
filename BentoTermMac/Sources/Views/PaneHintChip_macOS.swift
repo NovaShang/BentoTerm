@@ -1,5 +1,6 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
+import BentoTerminalCore
 
 /// A small transient message that floats near the bottom of a pane and fades
 /// itself out. It exists for one job: explain a failure AT THE MOMENT IT
@@ -17,7 +18,7 @@ final class PaneHintChip: NSView {
 
     private let background = NSVisualEffectView()
     private let label = NSTextField(labelWithString: "")
-    private var dismissWork: DispatchWorkItem?
+    nonisolated(unsafe) private var dismissWork: DispatchWorkItem?
 
     override var isFlipped: Bool { true }
     /// Never steal the mouse — the gesture that triggered this chip is usually

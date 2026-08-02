@@ -4,6 +4,15 @@ import BentoFoundationKit
 import AppKit
 import Carbon   // TIS* — identifies whether the input source is a plain layout
 import GhosttyKit
+import BentoTerminalCore
+
+/// Wire the runtime's input-source observer (kept in core) to this surface's
+/// layout cache. The surface class lives in the app target now, so the seam
+/// is a closure — see `GhosttyRuntime.invalidateInputSourceCache`.
+@MainActor
+private let _wireInputSourceCache: Void = {
+    GhosttyRuntime.invalidateInputSourceCache = { GhosttyTerminalSurface.invalidateInputSourceCache() }
+}()
 
 /// libghostty-backed terminal surface for macOS. Same external-backend contract
 /// as the iOS surface (`TerminalSurface`): host feeds remote/pty bytes via
@@ -11,7 +20,7 @@ import GhosttyKit
 /// `write_to_host` callback. The view is a CAMetalLayer that libghostty renders
 /// into. Mac code (BentoTermMac terminal window) uses it through the protocol,
 /// identically to iOS.
-public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputClient {
+public final class GhosttyTerminalSurface: NSView, TerminalSurface, GhosttySurfaceUserdata {
 
     public var onInput: ((Data) -> Void)?
     public var onSizeChanged: ((TerminalSurfaceSize) -> Void)?
@@ -37,9 +46,9 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     public var onVoicePrewarm: (() -> Void)?
     public private(set) var currentSize: TerminalSurfaceSize?
 
-    private var surface: ghostty_surface_t?
+    nonisolated(unsafe) private var surface: ghostty_surface_t?
     private var theme: TerminalTheme
-    private var renderLink: CVDisplayLink?
+    nonisolated(unsafe) private var renderLink: CVDisplayLink?
 
     /// `ghostty_surface_draw` synchronously waits for the GPU
     /// (`MTLCommandBuffer.waitUntilCompleted`). When a frame stalls (Space
@@ -58,7 +67,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// chained through BOTH queues (`enqueueSurfaceFree`) so it can never run
     /// while a parse or a draw is still touching the surface.
     private let ioQueue = DispatchQueue(label: "com.novashang.bento.io", qos: .userInteractive)
-    private let surfaceLock = NSLock()
+    nonisolated(unsafe) private let surfaceLock = NSLock()
     /// TEMP: pane-id label + one-shot flags for the white-screen-on-switch trace. REMOVE when fixed.
     var debugLabel = "?"
     private var diagLoggedFeed = false
@@ -477,7 +486,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// Mark the surface dirty so the next display-link tick draws it. Lock-guarded
     /// and callable from any thread — ghostty's RENDER action can arrive off the
     /// main thread, and output (`feed`) runs on `ioQueue`.
-    func setNeedsDraw() {
+    public func setNeedsDraw() {
         surfaceLock.lock(); needsDraw = true; surfaceLock.unlock()
     }
 
@@ -595,7 +604,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     }
 
     /// Called by GhosttyRuntime when the engine has bytes for the host.
-    func handleHostWrite(_ data: Data) {
+    public func handleHostWrite(_ data: Data) {
         onInput?(data)
     }
 
@@ -697,7 +706,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// Cached because TIS lookups aren't free and this is consulted per key.
     /// Invalidated on the same notification that tells ghostty to rebuild its
     /// keyboard table (see GhosttyRuntime).
-    nonisolated(unsafe) private static var cachedPlainLayout: Bool?
+    private static var cachedPlainLayout: Bool?
 
     static func invalidateInputSourceCache() { cachedPlainLayout = nil }
 
@@ -1497,7 +1506,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
 
     /// Apply the cursor shape ghostty requests as the pointer moves over text /
     /// links / split handles.
-    func handleMouseShape(_ shape: ghostty_action_mouse_shape_e) {
+    public func handleMouseShape(_ shape: ghostty_action_mouse_shape_e) {
         let c = Self.cursor(for: shape)
         guard c != mouseCursor else { return }
         mouseCursor = c
@@ -1523,7 +1532,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
 
     /// Hide the pointer while typing; show it on mouse move. Balanced so the
     /// cursor can't get stuck hidden.
-    func handleMouseVisibility(_ visible: Bool) {
+    public func handleMouseVisibility(_ visible: Bool) {
         if visible {
             if mouseHidden { NSCursor.unhide(); mouseHidden = false }
         } else if !mouseHidden {
@@ -1536,7 +1545,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// mouseUp — standard button semantics.
     private var pendingLinkClick: String?
 
-    func handleMouseOverLink(_ url: String?) {
+    public func handleMouseOverLink(_ url: String?) {
         // This prebuilt libghostty never emits MOUSE_OVER_LINK (its link
         // pipeline expects the desktop apprt's hover plumbing) — kept wired
         // for a future build. Link hit-testing is ours: linkURL(at:) below.
@@ -1580,7 +1589,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// OSC 7 working-directory report (shell integration). Lets path-preview
     /// resolve relative paths in non-tmux local panes.
     public private(set) var reportedPwd: String?
-    func handlePwd(_ pwd: String?) {
+    public func handlePwd(_ pwd: String?) {
         if let pwd, !pwd.isEmpty { reportedPwd = pwd }
     }
 
@@ -1732,7 +1741,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// config and any runtime OSC changes.
     public private(set) var reportedBackgroundColor: NSColor?
 
-    func handleColorChange(kind: ghostty_action_color_kind_e, red: UInt8, green: UInt8, blue: UInt8) {
+    public func handleColorChange(kind: ghostty_action_color_kind_e, red: UInt8, green: UInt8, blue: UInt8) {
         guard kind == GHOSTTY_ACTION_COLOR_KIND_BACKGROUND else { return }
         reportedBackgroundColor = NSColor(
             srgbRed: CGFloat(red) / 255, green: CGFloat(green) / 255,
@@ -1751,7 +1760,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     /// following at-bottom update, read as a ~1s "上屏" stutter on ~1/3 of
     /// commits. So debounce the live→review *entry*: only a scroll-up that
     /// persists past a short settle window is a real, user-initiated scroll.
-    func handleScrollbar(total: UInt64, offset: UInt64, len: UInt64) {
+    public func handleScrollbar(total: UInt64, offset: UInt64, len: UInt64) {
         lastScrollTop = Int(offset)
         let atBottom = offset + len >= total
         if atBottom {
@@ -1864,21 +1873,21 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
 
     // Engine → app. All four arrive on the main thread inside `ghostty_app_tick`.
 
-    func handleStartSearch(needle: String?) {
+    public func handleStartSearch(needle: String?) {
         beginSearch(prefill: needle)
     }
 
-    func handleEndSearch() {
+    public func handleEndSearch() {
         guard searchBar != nil else { return }
         endSearchUI()
     }
 
-    func handleSearchTotal(_ total: Int?) {
+    public func handleSearchTotal(_ total: Int?) {
         searchTotal = total
         searchBar?.setCounts(total: searchTotal, selected: searchSelected)
     }
 
-    func handleSearchSelected(_ selected: Int?) {
+    public func handleSearchSelected(_ selected: Int?) {
         searchSelected = selected
         searchBar?.setCounts(total: searchTotal, selected: searchSelected)
     }
@@ -1892,7 +1901,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
 
     /// The Metal renderer reported it stopped working. Without this the pane just
     /// goes black and stays black with no explanation.
-    func handleRendererHealth(healthy: Bool) {
+    public func handleRendererHealth(healthy: Bool) {
         if healthy {
             healthBanner?.removeFromSuperview()
             healthBanner = nil
@@ -2035,3 +2044,8 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, NSTextInputC
     }
 }
 #endif
+
+// NSTextInputClient is an unisolated AppKit protocol; the class is
+// main-actor-isolated (NSView). @preconcurrency silences the crossing check —
+// the input-context callbacks only ever arrive on the main thread.
+extension GhosttyTerminalSurface: @preconcurrency NSTextInputClient {}
