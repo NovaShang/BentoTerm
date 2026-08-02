@@ -1,5 +1,6 @@
 import Foundation
 import BentoTerminalCore
+import BentoFoundationKit
 import BentoFilePreviewKit
 import Citadel
 import Crypto

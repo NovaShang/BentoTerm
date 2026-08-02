@@ -43,16 +43,11 @@ final class VoiceTests: XCTestCase {
 
     @MainActor
     func testVoiceObjectsConstruct() {
+        // The platform controllers (MacVoiceController / VoiceInputController)
+        // live in the app targets — not in this package — so only the shared
+        // engine is constructible here. The shared controller state machine is
+        // tested in bento-terminal-core (VoiceControllerTests).
         _ = VoiceSession()
-        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
-        let controller = MacVoiceController()
-        XCTAssertFalse(controller.isRecording)
-        XCTAssertEqual(controller.activeDirection, .none)
-        let overlay = MacVoiceOverlay(frame: .init(x: 0, y: 0, width: 300, height: 320))
-        overlay.transcript = "hello"
-        overlay.direction = .up
-        overlay.layout()   // exercises the compass layout math
-        #endif
     }
 
     // MARK: - Speech gate (silence must never reach the ASR model)

@@ -1,7 +1,8 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import Foundation
 import Testing
-@testable import BentoTerminalCore
+@testable import BentoTerm
+import BentoTerminalCore
 
 /// The empty state's structure, without a window.
 ///

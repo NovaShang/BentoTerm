@@ -1,5 +1,5 @@
 import XCTest
-@testable import BentoTerminalCore
+@testable import BentoAgentKit
 
 /// Coverage for the non-Claude rule sets (AgentRulePresets.swift). Fixtures are
 /// synthesized from the UI strings documented in herdr's detection manifests —

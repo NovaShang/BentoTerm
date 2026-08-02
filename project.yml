@@ -22,6 +22,8 @@ packages:
     from: "0.7.0"
   BentoTmuxKit:
     path: Modules/BentoTmuxKit
+  BentoAgentKit:
+    path: Modules/BentoAgentKit
   BentoVoiceKit:
     path: Modules/BentoVoiceKit
   BentoFoundationKit:
@@ -53,6 +55,7 @@ targets:
       - package: SwiftTerm
       - package: Citadel
       - package: BentoTmuxKit
+      - package: BentoAgentKit
       - package: BentoVoiceKit
       - package: BentoFoundationKit
       - package: BentoFilePreviewKit
@@ -96,11 +99,18 @@ targets:
   BentoTermMac:
     type: application
     platform: macOS
+    # Same reasoning as BentoTermiOS's scheme: `xcodebuild test -scheme
+    # BentoTermMac` must compile and run BentoTermMacTests, and an auto-created
+    # scheme could silently omit the test action.
+    scheme:
+      testTargets:
+        - BentoTermMacTests
     sources:
       - BentoTermMac/Sources
       - BentoTermMac/Resources/Assets.xcassets
     dependencies:
       - package: BentoTmuxKit
+      - package: BentoAgentKit
       - package: BentoVoiceKit
       - package: BentoFoundationKit
       - package: BentoFilePreviewKit
@@ -155,3 +165,32 @@ targets:
           else
             echo "warning: no bundled tmux for $slot; app will need a system tmux" >&2
           fi
+
+  BentoTermMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - BentoTermMacTests/Sources
+    dependencies:
+      - target: BentoTermMac
+      # The migrated tests import core (LaunchRecord, TerminalConnectionState,
+      # Host) and the app module; the app's own package products are declared
+      # here explicitly so the imports resolve independently of the host app's
+      # transitive graph.
+      - package: BentoTmuxKit
+      - package: BentoAgentKit
+      - package: BentoVoiceKit
+      - package: BentoFoundationKit
+      - package: BentoFilePreviewKit
+      - package: GhosttyKit
+      - package: BentoTerminalCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        # xcodegen derives TEST_HOST from the *target* name (BentoTermMac), but
+        # the product is named BentoTerm and macOS nests the binary under
+        # Contents/MacOS — spell it out or the host app is missing.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BentoTerm.app/Contents/MacOS/BentoTerm"
+        PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.BentoTermMacTests
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+

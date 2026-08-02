@@ -1,15 +1,37 @@
 import Foundation
 import JavaScriptCore
 import Testing
-@testable import BentoTerminalCore
+import BentoFilePreviewKit
 
 /// The web preview is only as good as its bundled assets — these tests load
 /// the vendored highlight.js / markdown-it plus our preview.js into a bare
 /// JSContext (no WebView) and exercise the render pipeline offline.
 @Suite struct FilePreviewWebAssetsTests {
+    /// The library ships the PathPreview assets in its own resource bundle
+    /// (`BentoFilePreviewKit_BentoFilePreviewKit.bundle`); SwiftPM does not
+    /// copy them into the test bundle, so locate that bundle next to the test
+    /// runner, falling back to the source tree for other runners.
+    private var previewAssetsURL: URL? {
+        let sibling = Bundle.main.bundleURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("BentoFilePreviewKit_BentoFilePreviewKit.bundle")
+        if let bundle = Bundle(path: sibling.path) {
+            return (bundle.resourceURL ?? bundle.bundleURL)
+                .appendingPathComponent("PathPreview")
+        }
+        // Source-tree fallback (e.g. an Xcode test runner keeps no adjacent
+        // bundle). The package is checked out at a fixed relative location.
+        let pkg = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // Tests/BentoFilePreviewKitTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // package root
+        let src = pkg.appendingPathComponent(
+            "Sources/BentoFilePreviewKit/Resources/PathPreview")
+        return FileManager.default.fileExists(atPath: src.path) ? src : nil
+    }
+
     private func resourceURL(_ name: String) -> URL? {
-        Bundle.module.url(forResource: name, withExtension: nil,
-                          subdirectory: "PathPreview")
+        previewAssetsURL?.appendingPathComponent(name)
     }
 
     @Test func bundledAssetsPresent() {

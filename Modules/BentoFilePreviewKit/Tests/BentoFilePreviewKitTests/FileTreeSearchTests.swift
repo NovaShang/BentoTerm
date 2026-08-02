@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import BentoTerminalCore
+import BentoFilePreviewKit
 
 // MARK: - Matching / ranking
 

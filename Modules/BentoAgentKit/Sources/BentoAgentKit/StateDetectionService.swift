@@ -206,7 +206,7 @@ public final class StateDetectionService {
     }
 
     /// Outcome of classifying a pane through the agent rule engine.
-    enum AgentClassification {
+    public enum AgentClassification {
         case notAgent              // not a recognized agent → use legacy detectState
         case needsSnapshot         // recognized agent; fetch capture-pane then re-call
         case state(PaneState)      // resolved state
@@ -217,8 +217,8 @@ public final class StateDetectionService {
     /// `.working` with no tmux round-trip; otherwise you get `.needsSnapshot`,
     /// so fetch `capture-pane` and call again with the text. Maps the engine's
     /// agent status onto `PaneState` (blocked → `.awaitingInput`).
-    func classifyAgent(command: String?, title: String, snapshot: String?,
-                       pane: TmuxPaneID, current: PaneState) -> AgentClassification {
+    public func classifyAgent(command: String?, title: String, snapshot: String?,
+                              pane: TmuxPaneID, current: PaneState) -> AgentClassification {
         guard let set = agentDetector.ruleSet(command: command, title: title) else {
             return .notAgent
         }

@@ -1,4 +1,5 @@
 import SwiftUI
+import BentoAgentKit
 import BentoTerminalCore
 import BentoFoundationKit
 

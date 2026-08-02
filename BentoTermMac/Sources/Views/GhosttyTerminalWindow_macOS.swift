@@ -5,6 +5,7 @@ import BentoFoundationKit
 import AppKit
 import Combine
 import SwiftUI
+import BentoAgentKit
 import BentoTerminalCore
 /// Resolve the core product-layer ID (server+name), not BentoTmuxKit's wire `$N` ID.
 public typealias TmuxSessionID = BentoTerminalCore.TmuxSessionID

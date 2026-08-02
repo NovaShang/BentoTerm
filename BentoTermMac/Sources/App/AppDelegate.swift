@@ -1,4 +1,5 @@
 import AppKit
+import BentoAgentKit
 import BentoTerminalCore
 import Foundation
 import SwiftUI
@@ -145,11 +146,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 let parts = spec.split(separator: "|", omittingEmptySubsequences: false)
                     .map(String.init)
                 if parts.count >= 2, !parts[0].isEmpty, !parts[1].isEmpty {
-                    BentoTerminalWindow.newWindow(agent: BentoTerminalCore.AgentSpec(
+                    BentoTerminalWindow.newWindow(agent: BentoAgentKit.AgentSpec(
                         sessionName: parts[0],
                         workingDir: parts[1],
                         agentCommand: parts.count > 2 ? parts[2] : "",
-                        layout: BentoTerminalCore.TmuxLayout.solo))
+                        layout: BentoAgentKit.TmuxLayout.solo))
                 }
                 return
             }

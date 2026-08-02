@@ -1,6 +1,7 @@
 import Testing
 @testable import BentoTerm
 import BentoTerminalCore
+import BentoAgentKit
 import BentoTmuxKit
 
 @Suite("State Detection Tests")

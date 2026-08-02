@@ -6,7 +6,14 @@ import BentoTerminalCore
 /// Manages the voice input gesture + recording lifecycle.
 /// Added to a pane's terminal view as a long-press gesture recognizer.
 ///
-/// Flow: hold >200ms → start recording → move finger → direction detection →
+/// Thin iOS shell over the shared `BentoTerminalCore.VoiceController` state
+/// machine (recording, compass-direction routing, preview, error handling and
+/// telemetry). This shell only maps the UIKit gesture onto the shared
+/// begin/update/end lifecycle, injects iOS haptics, and adds the iOS-only
+/// manual-compose state — the SAME bar as the right-swipe preview, entered by
+/// double-tap keyboard. `isManualCompose` just tweaks the copy (输入 placeholder).
+///
+/// Flow: hold >180ms → start recording → move finger → direction detection →
 ///       release → inject text based on direction
 ///
 /// Two speech engines are supported and chosen per-recording from the
@@ -17,33 +24,14 @@ import BentoTerminalCore
 ///   (requires either `openai_api_key` direct BYOK, or `openai_proxy_url`
 ///   pointing at a token-mint server).
 @MainActor
-final class VoiceInputController: ObservableObject {
-    @Published var isRecording = false
-    @Published var transcript = ""
-    @Published var activeDirection: VoiceDirection = .none
-    @Published var showOverlay = false
+final class VoiceInputController: VoiceController {
+    /// Anchor of the compass overlay in screen points — the host clamps it
+    /// against `VoiceCompassView.Metrics` so a press near an edge stays on screen.
     @Published var fingerScreenPosition: CGPoint = .zero
 
-    /// Drag delta from the press origin (y-down point space), fed to the shared
-    /// compass so the finger ball can track the drag.
-    @Published var fingerOffset: CGSize = .zero
-
-    /// Right-swipe "transcribe → preview → edit → send" flow. `previewText` is the
-    /// editable transcription shown in the inline compose bar; `previewLoading` is
-    /// true while the higher-accuracy batch model is still running.
-    ///
-    /// The SAME bar is the app's one managed input surface: voice fills it via
-    /// `beginPreview`, the keyboard fills it via `beginManualCompose` (double-tap).
-    /// `isManualCompose` just tweaks the copy (no re-transcription, 输入 placeholder).
-    @Published var showPreview = false
-    @Published var previewText = ""
-    @Published var previewLoading = false
+    /// True when the managed bar was opened by double-tap keyboard typing rather
+    /// than a voice right-swipe.
     @Published var isManualCompose = false
-
-    /// Lifetime count of successful voice sends, published so the wrapper view
-    /// can pace the advanced-gesture tip (3rd send) and the one-time Qwen
-    /// suggestion (1st send). TipCenter owns the persistent value.
-    @Published private(set) var voiceSendTotal = TipCenter.shared.recordedVoiceSendCount
 
     /// Measured height of the inline compose bar (content only, excluding its
     /// keyboard offset), published by `ComposeBar` so the pane container can pan
@@ -57,168 +45,35 @@ final class VoiceInputController: ObservableObject {
     /// make its surface first responder.
     var onRequestRawKeyboard: (() -> Void)?
 
-    /// Shared engine driver (engine selection + permissions + audio capture)
-    /// lives in BentoTerminalCore so iOS + macOS run the same recording code.
-    private let session = VoiceSession()
-
-    private var holdOrigin: CGPoint = .zero
-
-    /// Called when voice input produces a result
-    var onResult: ((VoiceInputResult) -> Void)?
-
-    /// Supplies the recording pane's on-screen text for Qwen context biasing; set
-    /// by `TerminalContainerVC` (which owns the surface). Forwarded to the session.
-    var readScreenText: (() -> String?)?
-
-    init() {
-        session.contextProvider = { [weak self] in self?.readScreenText?() }
-    }
-
-    /// Pre-allocate the mic engine the moment a voice gesture becomes likely
-    /// (finger down, before the hold threshold), so the recording that may
-    /// follow starts instantly instead of paying the AVAudioEngine cold-start
-    /// tax — the parity twin of `MacVoiceController.prewarm()` (button-down).
-    func prewarm() {
-        session.prewarm()
-    }
-
-    /// `VoiceInputResult` now lives in BentoTerminalCore; alias keeps existing
-    /// `VoiceInputController.VoiceInputResult` references working.
-    typealias VoiceInputResult = BentoVoiceKit.VoiceInputResult
-
-    // MARK: - Tap-to-Toggle (mic button)
-
-    /// Tap-to-toggle recording, anchored at a screen point (used for overlay
-    /// placement). First tap starts recording; second tap stops + submits the
-    /// transcript with no directional modifier (plain text inject).
-    func toggleRecording(anchorScreenPoint: CGPoint) {
-        if isRecording {
-            stopRecording(direction: .none)
-        } else {
-            fingerScreenPosition = anchorScreenPoint
-            holdOrigin = anchorScreenPoint
-            fingerOffset = .zero
-            startRecording()
-        }
+    override init() {
+        super.init()
+        feedback = HapticFeedbackAdapter()
     }
 
     // MARK: - Gesture Handling
 
+    /// UIKit gesture → shared lifecycle. The compass overlay is anchored at the
+    /// press origin and must NOT track the finger — the four arrows sit at fixed
+    /// offsets, so they'd move away otherwise; direction is conveyed by the
+    /// highlighted arrow, not overlay position.
     func handleLongPress(state: UIGestureRecognizer.State, location: CGPoint) {
         switch state {
         case .began:
-            // Anchor the compass overlay at the press origin and keep it there.
-            // The compass's center "finger dot" + 4 directional arrows are laid
-            // out at fixed offsets, so the whole thing must NOT track the
-            // finger — otherwise the arrows move with the user and can never
-            // be reached. Direction feedback is conveyed by highlighting the
-            // active arrow, not by moving the overlay.
-            holdOrigin = location
             fingerScreenPosition = location
-            fingerOffset = .zero
-            startRecording()
+            begin(originScreen: location)
 
         case .changed:
-            updateDirection(currentLocation: location)
+            update(toScreen: location)
 
         case .ended, .cancelled:
-            let finalDirection = activeDirection
-            stopRecording(direction: finalDirection)
+            end()
 
         default:
             break
         }
     }
 
-    // MARK: - Recording
-
-    private func startRecording() {
-        // Show overlay immediately for responsiveness.
-        isRecording = true
-        showOverlay = true
-        transcript = ""
-        activeDirection = .none
-        HapticService.shared.prepare()
-        HapticService.shared.recordingStarted()
-        // The shared VoiceSession handles permissions + engine selection + audio.
-        session.start(
-            onPartial: { [weak self] text in self?.transcript = text },
-            onError: { [weak self] message in Task { await self?.showTransientError(message) } })
-    }
-
-    private func showTransientError(_ message: String) async {
-        dlog(message)
-        // Release the mic engine + ASR on error so a failed session can't leave a
-        // running engine that the next recording stacks a second tap onto.
-        session.cancel()
-        transcript = message
-        isRecording = false
-        try? await Task.sleep(for: .milliseconds(1200))
-        showOverlay = false
-    }
-
-    // MARK: - Stop
-
-    private func stopRecording(direction: VoiceDirection) {
-        if direction == .down {
-            session.cancel()
-            isRecording = false
-            HapticService.shared.cancelled()
-            showOverlay = false
-            return
-        }
-
-        if direction == .right {
-            // New flow: re-transcribe the full clip with a better (non-realtime)
-            // model, then let the user preview/edit before sending — instead of
-            // inserting directly. (Left swipe still does NL→shell-command.) The
-            // preview batches the captured PCM itself, so just stop capture here.
-            TelemetryService.shared.record(.voiceSwipeRightPreview)
-            let streamed = session.currentTranscript
-            session.cancel()
-            isRecording = false
-            showOverlay = false
-            beginPreview(streamed: streamed)
-            return
-        }
-
-        // up / none / left → resolve the reliable final. A settled utterance sends
-        // instantly; only a mid-speech release waits. Show "识别中…" only if that
-        // wait actually drags on (>200ms), so fast sends never flash it.
-        Task { [weak self] in
-            guard let self else { return }
-            let lang = openAILanguageHint(for: UserDefaults.standard.string(forKey: "speech_locale") ?? "auto")
-            let indicator = DispatchWorkItem { [weak self] in self?.transcript = "识别中…" }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: indicator)
-            let text = await self.session.finish(language: lang)
-            indicator.cancel()
-            self.isRecording = false
-            self.showOverlay = false
-            guard !text.isEmpty else { return }
-            HapticService.shared.sent()
-            TelemetryService.shared.record(.voiceSend)
-            TelemetryService.shared.record(.voiceFirstSend)
-            if direction == .left { TelemetryService.shared.record(.voiceSwipeLeftLLM) }
-            self.onResult?(VoiceInputResult(text: text, direction: direction))
-            self.voiceSendTotal = TipCenter.shared.recordVoiceSend()
-        }
-    }
-
-    // MARK: - Preview (right-swipe)
-
-    /// Open the editable preview seeded with the fast streamed transcript, then —
-    /// if we captured the full audio (OpenAI engine) — replace it with a higher-
-    /// accuracy batch transcription. On the Apple engine (no PCM) the user just
-    /// edits the streamed text.
-    private func beginPreview(streamed: String) {
-        isManualCompose = false
-        previewText = streamed
-        previewLoading = session.refineRecordedPCM(screenText: readScreenText?()) { better in
-            if let better, !better.isEmpty { self.previewText = better }
-            self.previewLoading = false
-        }
-        showPreview = true
-    }
+    // MARK: - Manual compose (double-tap keyboard entry)
 
     /// Open the managed box empty for manual keyboard typing (double-tap entry).
     /// Same surface as voice; the bar auto-focuses so the keyboard comes up at
@@ -240,48 +95,32 @@ final class VoiceInputController: ObservableObject {
         onRequestRawKeyboard?()
     }
 
-    /// Send the (possibly edited) preview text to the active pane (insert + send).
-    func sendPreview() {
-        let text = previewText.trimmingCharacters(in: .whitespacesAndNewlines)
-        showPreview = false
-        previewLoading = false
+    // Voice's right-swipe preview and the keyboard's manual compose share one
+    // bar surface, so every way out of it clears the manual-compose flag.
+    override func beginPreview(streamed: String) {
         isManualCompose = false
-        guard !text.isEmpty else {
-            dlog("[compose] sendPreview EMPTY — previewText='\(previewText)'")
-            return
-        }
-        dlog("[compose] sendPreview '\(text)' (\(text.count) chars)")
-        HapticService.shared.sent()
-        TelemetryService.shared.record(.voiceSend)
-        TelemetryService.shared.record(.voiceFirstSend)
-        onResult?(VoiceInputResult(text: text, direction: .up))
-        voiceSendTotal = TipCenter.shared.recordVoiceSend()
+        super.beginPreview(streamed: streamed)
     }
 
-    /// Dismiss the preview without sending.
-    func cancelPreview() {
-        showPreview = false
-        previewLoading = false
+    override func sendPreview() {
         isManualCompose = false
-        previewText = ""
+        super.sendPreview()
     }
 
-    // MARK: - Direction Detection
-
-    private func updateDirection(currentLocation: CGPoint) {
-        // Dead-zone + dominant-axis classification is shared with macOS in core.
-        let delta = CGSize(width: currentLocation.x - holdOrigin.x,
-                           height: currentLocation.y - holdOrigin.y)
-        fingerOffset = delta
-        let newDirection = voiceDirection(forTranslation: delta)
-
-        if newDirection != activeDirection {
-            activeDirection = newDirection
-            if newDirection != .none {
-                HapticService.shared.directionChanged()
-            }
-        }
+    override func cancelPreview() {
+        isManualCompose = false
+        super.cancelPreview()
     }
+}
+
+/// iOS haptics at the shared state machine's feedback moments.
+@MainActor
+private struct HapticFeedbackAdapter: VoiceFeedbackProviding {
+    func prepare() { HapticService.shared.prepare() }
+    func recordingStarted() { HapticService.shared.recordingStarted() }
+    func directionChanged() { HapticService.shared.directionChanged() }
+    func sent() { HapticService.shared.sent() }
+    func cancelled() { HapticService.shared.cancelled() }
 }
 
 // `TerminalViewModel.handleVoiceResult(_:)` now lives in BentoTerminalCore

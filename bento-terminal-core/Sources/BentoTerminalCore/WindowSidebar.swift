@@ -1,5 +1,6 @@
 import SwiftUI
 import BentoTmuxKit
+import BentoAgentKit
 
 /// List mode's window switcher for the big screens — ONE implementation
 /// shared by macOS (hosted in an `NSHostingView`) and iPad. Native sidebar

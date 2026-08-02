@@ -1,4 +1,5 @@
 import SwiftUI
+import BentoAgentKit
 
 /// The one picture that answers every future "why": the host runs the tmux
 /// server, every device is just another client, and the wire between them is

@@ -1,5 +1,7 @@
 import SwiftUI
+import BentoAgentKit
 import BentoTerminalCore
+import BentoFoundationKit
 
 /// iOS counterpart to BentoTermMac's AgentWizardWindow. Users pick a
 /// session name, working directory, agent command, and pane layout; the

@@ -248,6 +248,7 @@ public func tildeAbbreviated(_ path: String) -> String {
 
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
+import BentoAgentKit
 import BentoTerminalCore
 
 /// Composes the three sources into `[OpenTarget]` and performs them.

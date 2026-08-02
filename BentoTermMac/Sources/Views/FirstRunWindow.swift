@@ -1,7 +1,9 @@
 import SwiftUI
 import AppKit
 import AVFoundation
+import BentoAgentKit
 import BentoTerminalCore
+import BentoFoundationKit
 
 /// FirstRunWindow is the macOS onboarding wizard (design doc §4): a five-step
 /// environment-preparation flow shown on first launch INSTEAD of dropping the
@@ -26,9 +28,9 @@ struct FirstRunWindow: View {
     // Checklist state. Presets come from the CORE AgentPreset (it carries the
     // install catalog); the app's local AgentPreset remains the wizard's
     // launch picker.
-    @State private var agentPreset: BentoTerminalCore.AgentPreset?
+    @State private var agentPreset: BentoAgentKit.AgentPreset?
     @State private var checkingAgent = true
-    @State private var chosenAgent: BentoTerminalCore.AgentPreset = .claudeCode
+    @State private var chosenAgent: BentoAgentKit.AgentPreset = .claudeCode
     @State private var nodeFound = false
     @State private var copiedInstall = false
 
@@ -152,7 +154,7 @@ struct FirstRunWindow: View {
     private var agentInstaller: some View {
         VStack(alignment: .leading, spacing: 8) {
             Picker("Agent", selection: $chosenAgent) {
-                ForEach(BentoTerminalCore.AgentPreset.allCases.filter(\.isInstallableAgent)) { preset in
+                ForEach(BentoAgentKit.AgentPreset.allCases.filter(\.isInstallableAgent)) { preset in
                     Text(preset == .claudeCode ? "\(preset.rawValue)  (recommended)" : preset.rawValue)
                         .tag(preset)
                 }
@@ -202,7 +204,7 @@ struct FirstRunWindow: View {
     /// Run the official installer in a visible plain terminal tab; on success
     /// the tab tells the user to come back and Re-check, then hands them a
     /// login shell (many agents want their sign-in run right after install).
-    private func runInstall(_ preset: BentoTerminalCore.AgentPreset) {
+    private func runInstall(_ preset: BentoAgentKit.AgentPreset) {
         guard let install = preset.install else { return }
         let script = """
         \(install.command); status=$?; echo; \
@@ -554,7 +556,7 @@ struct FirstRunWindow: View {
             launchError = "Couldn't create the folder: \(error.localizedDescription)"
             return
         }
-        let spec = BentoTerminalCore.AgentSpec(
+        let spec = BentoAgentKit.AgentSpec(
             sessionName: "my-first-project",
             workingDir: workingDir,
             agentCommand: agentPreset?.command ?? "",
@@ -584,8 +586,8 @@ struct FirstRunWindow: View {
 /// workspaces will get. Uses the CORE preset list (the one that carries the
 /// install catalog and matches the state-detection coverage).
 enum AgentDetector {
-    static func firstInstalled() async -> BentoTerminalCore.AgentPreset? {
-        for preset in BentoTerminalCore.AgentPreset.allCases {
+    static func firstInstalled() async -> BentoAgentKit.AgentPreset? {
+        for preset in BentoAgentKit.AgentPreset.allCases {
             guard let cmd = preset.command, !cmd.isEmpty else { continue }
             let word = cmd.split(separator: " ").first.map(String.init) ?? cmd
             if await which(word) { return preset }

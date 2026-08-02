@@ -5,6 +5,7 @@ import BentoFoundationKit
 import AppKit
 import Combine
 import SwiftUI
+import BentoAgentKit
 import BentoTerminalCore
 
 /// iTerm2-style TILED multi-pane host for macOS. Every tmux pane is shown at
@@ -115,14 +116,18 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             .store(in: &cancellables)
 
         // Voice: route the finished utterance to the active pane, and drive the
-        // overlay from the controller's published state.
+        // overlay from the controller's published state. Visibility follows
+        // `showOverlay` (not `isRecording`) so an error leaves the compass up
+        // with its message for the shared ~1.2s — same as iOS. `startVoice`
+        // positions + shows the overlay before `begin`, so the true branch here
+        // is a no-op for the normal path.
         voiceController.onResult = { [weak self] result in
             self?.viewModel.handleVoiceResult(result)
         }
-        voiceController.$isRecording
+        voiceController.$showOverlay
             .receive(on: RunLoop.main)
-            .sink { [weak self] recording in
-                if recording { self?.voiceOverlay?.isHidden = false }
+            .sink { [weak self] show in
+                if show { self?.voiceOverlay?.isHidden = false }
                 else { self?.hideVoiceOverlay() }
             }
             .store(in: &cancellables)

@@ -1,7 +1,8 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import Foundation
 import Testing
-@testable import BentoTerminalCore
+import BentoTerm
+import BentoTerminalCore
 
 /// What the pty's child exiting MEANS depends on what was running in it.
 ///

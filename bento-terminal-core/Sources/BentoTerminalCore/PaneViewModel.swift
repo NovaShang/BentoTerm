@@ -2,6 +2,7 @@ import Foundation
 import os
 import SwiftUI
 import BentoTmuxKit
+import BentoAgentKit
 import BentoFilePreviewKit
 
 /// ViewModel for a single tmux pane, managing its terminal output and input.

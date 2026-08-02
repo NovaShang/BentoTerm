@@ -1,5 +1,6 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
+import BentoAgentKit
 
 /// The command-selection strip embedded at the bottom of the directory-chooser
 /// panel (see `presentNewPaneDirectoryPanel`): a popup of the known agents plus

@@ -16,6 +16,7 @@ let package = Package(
     dependencies: [
         .package(path: "../Modules/GhosttyKit"),
         .package(path: "../Modules/BentoTmuxKit"),
+        .package(path: "../Modules/BentoAgentKit"),
         .package(path: "../Modules/BentoVoiceKit"),
         .package(path: "../Modules/BentoFoundationKit"),
         .package(path: "../Modules/BentoFilePreviewKit"),
@@ -26,6 +27,7 @@ let package = Package(
             dependencies: [
                 .product(name: "GhosttyKit", package: "GhosttyKit"),
                 .product(name: "BentoTmuxKit", package: "BentoTmuxKit"),
+                .product(name: "BentoAgentKit", package: "BentoAgentKit"),
                 "BentoVoiceKit",
                 "BentoFoundationKit",
                 "BentoFilePreviewKit",
@@ -46,7 +48,12 @@ let package = Package(
         ),
         .testTarget(
             name: "BentoTerminalCoreTests",
-            dependencies: ["BentoTerminalCore"]
+            dependencies: [
+                "BentoTerminalCore",
+                // PathDetector's core-side consumers (PathHitTester / tap-candidate
+                // tests) live in core, so the mixed tests import the preview kit.
+                "BentoFilePreviewKit",
+            ]
         ),
     ]
 )

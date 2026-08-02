@@ -1,6 +1,8 @@
 import SwiftUI
 import AppKit
+import BentoAgentKit
 import BentoTerminalCore
+import BentoFoundationKit
 
 /// AgentWizardWindow uses `Form().formStyle(.grouped)` so the visual hierarchy
 /// matches System Settings panes. Agent is chosen from a curated picker;
@@ -123,11 +125,11 @@ struct AgentWizardWindow: View {
             // Agent sessions always spin up in Bento's own in-app libghostty
             // window (tmux -CC over a local pty) — sessions never bounce out
             // to a third-party terminal anymore.
-            let coreSpec = BentoTerminalCore.AgentSpec(
+            let coreSpec = BentoAgentKit.AgentSpec(
                 sessionName: spec.sessionName,
                 workingDir: spec.workingDir,
                 agentCommand: spec.agentCommand,
-                layout: BentoTerminalCore.TmuxLayout(rawValue: spec.layout.rawValue) ?? .solo
+                layout: BentoAgentKit.TmuxLayout(rawValue: spec.layout.rawValue) ?? .solo
             )
             await MainActor.run { BentoTerminalWindow.newWindow(agent: coreSpec) }
             TelemetryService.shared.record(.workspaceCreated)

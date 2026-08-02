@@ -388,3 +388,23 @@ public func voiceDirection(forTranslation t: CGSize, threshold: CGFloat = 40) ->
     if abs(dx) > abs(dy) { return dx > 0 ? .right : .left }
     return dy < 0 ? .up : .down
 }
+
+// MARK: - Protocol seam for the shared controller
+
+/// The slice of `VoiceSession` the shared `VoiceController` drives — protocol so
+/// tests can inject a fake. Every member already exists on `VoiceSession` with
+/// these exact signatures, so the conformance is a no-op.
+@MainActor
+public protocol VoiceSessionProtocol: AnyObject {
+    var currentTranscript: String { get }
+    var contextProvider: (() -> String?)? { get set }
+    func prewarm()
+    func start(onPartial: @escaping @MainActor (String) -> Void,
+               onError: @escaping @MainActor (String) -> Void)
+    func finish(language: String) async -> String
+    func cancel()
+    func refineRecordedPCM(screenText: String?,
+                           completion: @escaping @MainActor (String?) -> Void) -> Bool
+}
+
+extension VoiceSession: VoiceSessionProtocol {}

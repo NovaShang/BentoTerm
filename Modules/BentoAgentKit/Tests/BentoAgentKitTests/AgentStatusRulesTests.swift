@@ -1,5 +1,5 @@
 import XCTest
-@testable import BentoTerminalCore
+@testable import BentoAgentKit
 
 /// Fixtures are trimmed from real `tmux capture-pane` output of a live Claude
 /// Code session (2026-06-21), so these lock the rules to actual UI, not guesses.
