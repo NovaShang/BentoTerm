@@ -1815,9 +1815,14 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     func endSearchUI() {
         guard let bar = searchBar else { return }
         bar.cancelPendingQuery()
-        if let surface { GhosttySel.endSearch(surface) }
         bar.removeFromSuperview()
         searchBar = nil
+        // Ask the engine to drop the search LAST: ghostty performs keybind
+        // actions synchronously and echoes END_SEARCH back through
+        // handleEndSearch → this method. With the bar already nil'd the echo
+        // hits `guard searchBar != nil` and returns — dispatch first, and the
+        // echo re-dispatches end_search forever (observed: ~770 stack levels).
+        if let surface { GhosttySel.endSearch(surface) }
         // Only reclaim first responder if the bar actually had it; a click that
         // moved focus to another pane must not be dragged back here.
         if window?.firstResponder == nil || bar.fieldHasFocus {
