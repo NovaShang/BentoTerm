@@ -1,4 +1,5 @@
 import Foundation
+import BentoFoundationKit
 import BentoTerminalCore
 
 /// Platform-neutral state machine for the scroll-review-compose feature

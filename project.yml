@@ -32,6 +32,8 @@ packages:
     path: Modules/BentoFilePreviewKit
   GhosttyKit:
     path: Modules/GhosttyKit
+  BentoGhosttyKit:
+    path: Modules/BentoGhosttyKit
   BentoTerminalCore:
     path: bento-terminal-core
 
@@ -59,6 +61,7 @@ targets:
       - package: BentoVoiceKit
       - package: BentoFoundationKit
       - package: BentoFilePreviewKit
+      - package: BentoGhosttyKit
       - package: GhosttyKit
       - package: BentoTerminalCore
     settings:
@@ -114,6 +117,7 @@ targets:
       - package: BentoVoiceKit
       - package: BentoFoundationKit
       - package: BentoFilePreviewKit
+      - package: BentoGhosttyKit
       - package: GhosttyKit
       - package: BentoTerminalCore
     settings:
@@ -182,6 +186,7 @@ targets:
       - package: BentoVoiceKit
       - package: BentoFoundationKit
       - package: BentoFilePreviewKit
+      - package: BentoGhosttyKit
       - package: GhosttyKit
       - package: BentoTerminalCore
     settings:

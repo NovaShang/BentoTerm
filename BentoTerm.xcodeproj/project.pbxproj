@@ -101,6 +101,9 @@
 		3E1C096CC62B4DF481722CA1 /* BentoAgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7A52E077B82C4262A7210BAD /* BentoAgentKit */; };
 		3E7B9D1F4A6C8E0B2D4F6A81 /* BentoAgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 9A1C3E5B7D92F4A6C8E0B2D4 /* BentoAgentKit */; };
 		7B2D4F6A81C3E5B7D92F4A6C /* BentoAgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = C8E0B2D4F6A81C3E5B7D92F4 /* BentoAgentKit */; };
+		5E6F708192A3B4C5D6E7F809 /* BentoGhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 2B3C4D5E6F708192A3B4C5D6 /* BentoGhosttyKit */; };
+		6F708192A3B4C5D6E7F8091A /* BentoGhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 3C4D5E6F708192A3B4C5D6E7 /* BentoGhosttyKit */; };
+		708192A3B4C5D6E7F8091A2B /* BentoGhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4D5E6F708192A3B4C5D6E7F8 /* BentoGhosttyKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -204,6 +207,7 @@
 		A560649F6E814B67AFB31945 /* OpenTargetsMacTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenTargetsMacTests.swift; sourceTree = "<group>"; };
 		DF22953AAA61449F8673C71F /* BentoTermMacTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BentoTermMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		57E39BEF59244AAFBF36575E /* BentoAgentKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BentoAgentKit; path = Modules/BentoAgentKit; sourceTree = SOURCE_ROOT; };
+		9E7B6A5C4D3E2F1A0B9C8D7E /* BentoGhosttyKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BentoGhosttyKit; path = Modules/BentoGhosttyKit; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -216,6 +220,7 @@
 				C5F958128DFDA8852E63F4DD /* BentoVoiceKit in Frameworks */,
 				62121B4103E924F730126D41 /* BentoFoundationKit in Frameworks */,
 				7D477DCD73809DBD639B8512 /* BentoFilePreviewKit in Frameworks */,
+				5E6F708192A3B4C5D6E7F809 /* BentoGhosttyKit in Frameworks */,
 				8F01FB3963E94CA8B2F2BB2B /* GhosttyKit in Frameworks */,
 				4BAE7833CA2201A84D2FCA97 /* BentoTerminalCore in Frameworks */,
 			);
@@ -232,6 +237,7 @@
 				465061AE560B23038B642DA5 /* BentoVoiceKit in Frameworks */,
 				6E18A222389C3A2FDC1870C4 /* BentoFoundationKit in Frameworks */,
 				E8233DFCEDB62F09D7247726 /* BentoFilePreviewKit in Frameworks */,
+				6F708192A3B4C5D6E7F8091A /* BentoGhosttyKit in Frameworks */,
 				2E414E2C5007C72AA77F9059 /* GhosttyKit in Frameworks */,
 				475D2876AF4699EE4EAA6D78 /* BentoTerminalCore in Frameworks */,
 			);
@@ -245,6 +251,7 @@
 				5CD91F2C4B1E41198BEF8C35 /* BentoVoiceKit in Frameworks */,
 				834F4A8344C5431B9B0418CB /* BentoFoundationKit in Frameworks */,
 				A28F716474C742928CF37DD0 /* BentoFilePreviewKit in Frameworks */,
+				708192A3B4C5D6E7F8091A2B /* BentoGhosttyKit in Frameworks */,
 				BAFDCB78DA2848DA8FCF0096 /* GhosttyKit in Frameworks */,
 				DC5B901C8A154471858E7D6E /* BentoTerminalCore in Frameworks */,
 				3E1C096CC62B4DF481722CA1 /* BentoAgentKit in Frameworks */,
@@ -556,6 +563,7 @@
 				652BB3841174D307C9EE84CF /* BentoVoiceKit */,
 				0642CB8BE3BE9CE5C4AFF6A7 /* BentoFoundationKit */,
 				319A52309BFA3E7016C52DC9 /* BentoFilePreviewKit */,
+				2B3C4D5E6F708192A3B4C5D6 /* BentoGhosttyKit */,
 				A64AE9E623020BB5D5846E5E /* GhosttyKit */,
 				7690946EF1AF77E016DC282F /* BentoTerminalCore */,
 			);
@@ -584,6 +592,7 @@
 				8751A521D533146E842020F6 /* BentoVoiceKit */,
 				39EB79202F55AFFF3B77D4DF /* BentoFoundationKit */,
 				DE362A7DB877D64835B7BC67 /* BentoFilePreviewKit */,
+				3C4D5E6F708192A3B4C5D6E7 /* BentoGhosttyKit */,
 				6841288DF357052B6F14EE92 /* GhosttyKit */,
 				8531DD1E6CF995FFE82E5F58 /* BentoTerminalCore */,
 			);
@@ -628,6 +637,7 @@
 				CC0BFB944D88403CA5F12CE4 /* BentoVoiceKit */,
 				F309CCE7B11140F0BF26DD45 /* BentoFoundationKit */,
 				9B3DBCF2140243369125F970 /* BentoFilePreviewKit */,
+				4D5E6F708192A3B4C5D6E7F8 /* BentoGhosttyKit */,
 				BD5506FC3D814F2B80AF983C /* GhosttyKit */,
 				F4C5ADC9881E46A78B0A875F /* BentoTerminalCore */,
 			);
@@ -678,6 +688,7 @@
 				BB731DBE030420B04991F28A /* XCLocalSwiftPackageReference "Modules/BentoTmuxKit" */,
 				1DC7DF357DA9D30DC7C259D4 /* XCLocalSwiftPackageReference "Modules/BentoVoiceKit" */,
 				4B0262E966670F5B4FBB03CC /* XCLocalSwiftPackageReference "Modules/GhosttyKit" */,
+				1A2B3C4D5E6F708192A3B4C5 /* XCLocalSwiftPackageReference "Modules/BentoGhosttyKit" */,
 				98F3BD4F05A2434087FE9220 /* XCLocalSwiftPackageReference "Modules/BentoAgentKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -1334,6 +1345,18 @@
 		C8E0B2D4F6A81C3E5B7D92F4 /* BentoAgentKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = BentoAgentKit;
+		};
+		2B3C4D5E6F708192A3B4C5D6 /* BentoGhosttyKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BentoGhosttyKit;
+		};
+		3C4D5E6F708192A3B4C5D6E7 /* BentoGhosttyKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BentoGhosttyKit;
+		};
+		4D5E6F708192A3B4C5D6E7F8 /* BentoGhosttyKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BentoGhosttyKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

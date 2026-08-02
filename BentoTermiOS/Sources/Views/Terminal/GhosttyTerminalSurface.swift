@@ -1,4 +1,6 @@
+import BentoFilePreviewKit
 import BentoFoundationKit
+import BentoGhosttyKit
 import BentoTerminalCore
 #if canImport(UIKit)
 import UIKit

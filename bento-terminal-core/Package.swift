@@ -1,9 +1,10 @@
 // swift-tools-version: 5.10
 import PackageDescription
 
-// GhosttyKit (libghostty xcframework + its linker settings) now lives in
-// Modules/GhosttyKit as its own package — shared by this engine and the
-// BentoTermMac target's UI layer, which imports GhosttyKit directly.
+// BentoGhosttyKit (the libghostty managed-host layer) lives in
+// Modules/BentoGhosttyKit as its own package — the engine here talks to
+// surfaces only through the ghostty-free TerminalSurface protocol, and the
+// Mac/iOS app targets import GhosttyKit (the raw xcframework) directly.
 let package = Package(
     name: "BentoTerminalCore",
     platforms: [
@@ -14,7 +15,7 @@ let package = Package(
         .library(name: "BentoTerminalCore", targets: ["BentoTerminalCore"]),
     ],
     dependencies: [
-        .package(path: "../Modules/GhosttyKit"),
+        .package(path: "../Modules/BentoGhosttyKit"),
         .package(path: "../Modules/BentoTmuxKit"),
         .package(path: "../Modules/BentoAgentKit"),
         .package(path: "../Modules/BentoVoiceKit"),
@@ -25,25 +26,12 @@ let package = Package(
         .target(
             name: "BentoTerminalCore",
             dependencies: [
-                .product(name: "GhosttyKit", package: "GhosttyKit"),
+                .product(name: "BentoGhosttyKit", package: "BentoGhosttyKit"),
                 .product(name: "BentoTmuxKit", package: "BentoTmuxKit"),
                 .product(name: "BentoAgentKit", package: "BentoAgentKit"),
                 "BentoVoiceKit",
                 "BentoFoundationKit",
                 "BentoFilePreviewKit",
-            ],
-            // The static libghostty needs these at link time. They live on the
-            // consumers (here and the Mac target) because the GhosttyKit
-            // package exposes just the binary target.
-            linkerSettings: [
-                .linkedLibrary("c++"),
-                .linkedFramework("CoreGraphics"),
-                .linkedFramework("CoreText"),
-                .linkedFramework("Metal"),
-                .linkedFramework("AppKit", .when(platforms: [.macOS])),
-                .linkedFramework("Carbon", .when(platforms: [.macOS])),
-                .linkedFramework("UIKit", .when(platforms: [.iOS])),
-                .linkedFramework("QuartzCore", .when(platforms: [.iOS])),
             ]
         ),
         .testTarget(

@@ -1,6 +1,5 @@
 import Foundation
 import CoreGraphics
-import BentoFilePreviewKit
 
 /// Per-surface façade over `PathHitTester`: converts a tap/hover point into a
 /// path candidate plus highlight rects in the surface's own point space.

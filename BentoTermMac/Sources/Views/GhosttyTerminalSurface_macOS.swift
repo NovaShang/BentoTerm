@@ -1,5 +1,6 @@
 import BentoFilePreviewKit
 import BentoFoundationKit
+import BentoGhosttyKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Carbon   // TIS* — identifies whether the input source is a plain layout

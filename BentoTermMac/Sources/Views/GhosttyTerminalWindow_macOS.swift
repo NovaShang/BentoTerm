@@ -1,6 +1,7 @@
 import BentoTmuxKit
 import BentoFilePreviewKit
 import BentoFoundationKit
+import BentoGhosttyKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Combine
