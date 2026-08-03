@@ -56,9 +56,9 @@ public struct VoiceCompassView: View {
     private let accent = Color(red: 0.30, green: 0.90, blue: 0.62)
     private let radius: CGFloat = 80
 
-    /// Ceiling for the transcript area (~5 lines at 14pt + 3pt spacing). The bubble
+    /// Ceiling for the transcript area (5 lines at 14pt + 3pt spacing). The bubble
     /// grows with what you say up to here, then windows to the newest lines.
-    private static let maxTextHeight: CGFloat = 92
+    private static let maxTextHeight: CGFloat = 100
     /// Slot the bubble is bottom-pinned in: enough for `maxTextHeight` plus the
     /// status row, hint row and padding, so growth never gets clipped.
     private static let bubbleSlot: CGFloat = maxTextHeight + 76
@@ -117,33 +117,44 @@ public struct VoiceCompassView: View {
 
     private var bubble: some View {
         VStack(spacing: 5) {
-            HStack(spacing: 6) {
-                Image(systemName: "circle.fill")
-                    .resizable()
-                    .frame(width: 6, height: 6)
-                    .foregroundStyle(.red)
-                    .symbolEffect(.pulse, options: .repeating)
-                Text("Listening").font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(ink.opacity(0.85))
+            // Status + text share one row budget: before any words arrive the
+            // bubble is a SINGLE line (pulse dot + "Listening…" placeholder);
+            // once dictation streams, the text takes over and the bubble grows
+            // one line at a time up to the ceiling. It starts small instead of
+            // opening as a full-height card, and the placeholder row is the same
+            // height as one text line, so the first word doesn't jump the box.
+            if transcript.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "circle.fill")
+                        .resizable()
+                        .frame(width: 6, height: 6)
+                        .foregroundStyle(.red)
+                        .symbolEffect(.pulse, options: .repeating)
+                    Text("Listening…")
+                        .font(.system(size: 14))
+                        .foregroundStyle(ink)
+                }
+                .frame(width: 248)
+            } else {
+                // Grows with the transcript up to a ceiling, then windows to the
+                // newest lines (see the two modifiers below).
+                Text(transcript)
+                    .font(.system(size: 14))
+                    .foregroundStyle(ink)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                    .frame(width: 248, alignment: .center)
+                    // Lay the text out at its FULL natural height first. Without this
+                    // it gets squeezed into the window below and truncates its TAIL —
+                    // you'd keep the first lines and lose the newest words, which is
+                    // backwards for live dictation.
+                    .fixedSize(horizontal: false, vertical: true)
+                    // Then window it: the area grows with the text up to `maxTextHeight`
+                    // (5 lines), and once it overflows, bottom alignment + clipping keep
+                    // the NEWEST lines visible while older ones scroll off the top.
+                    .frame(maxHeight: Self.maxTextHeight, alignment: .bottom)
+                    .clipped()
             }
-            // Grows with the transcript up to a ceiling, then windows to the
-            // newest lines (see the two modifiers below).
-            Text(transcript.isEmpty ? "Listening…" : transcript)
-                .font(.system(size: 14))
-                .foregroundStyle(ink)
-                .multilineTextAlignment(.center)
-                .lineSpacing(3)
-                .frame(width: 248, alignment: .center)
-                // Lay the text out at its FULL natural height first. Without this
-                // it gets squeezed into the window below and truncates its TAIL —
-                // you'd keep the first lines and lose the newest words, which is
-                // backwards for live dictation.
-                .fixedSize(horizontal: false, vertical: true)
-                // Then window it: the area grows with the text up to `maxTextHeight`
-                // (~5 lines), and once it overflows, bottom alignment + clipping keep
-                // the NEWEST lines visible while older ones scroll off the top.
-                .frame(maxHeight: Self.maxTextHeight, alignment: .bottom)
-                .clipped()
             // Dim, small action hint pinned inside the bubble. Always shown —
             // there is always a live target, the center included. Fixed height so
             // the bubble never resizes.

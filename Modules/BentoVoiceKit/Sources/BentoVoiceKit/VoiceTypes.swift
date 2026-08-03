@@ -103,11 +103,24 @@ public func assembleQwenCorpus(screenText: String?, maxChars: Int = 2000) -> Str
 }
 
 /// Map a `speech_locale` setting to OpenAI's ISO-639-1 hint ("" = auto).
+/// Mirrors the language list in the shared settings speech section.
 public func openAILanguageHint(for locale: String) -> String {
     switch locale {
     case "zh-Hans", "zh-Hant", "zh": return "zh"
     case "en-US", "en-GB", "en": return "en"
     case "ja-JP", "ja": return "ja"
+    case "ko-KR", "ko": return "ko"
+    case "fr-FR", "fr": return "fr"
+    case "de-DE", "de": return "de"
+    case "es-ES", "es": return "es"
+    case "it-IT", "it": return "it"
+    case "pt-BR", "pt": return "pt"
+    case "ru-RU", "ru": return "ru"
+    case "ar-SA", "ar": return "ar"
+    case "hi-IN", "hi": return "hi"
+    case "id-ID", "id": return "id"
+    case "th-TH", "th": return "th"
+    case "vi-VN", "vi": return "vi"
     default: return ""
     }
 }
