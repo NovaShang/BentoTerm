@@ -3,7 +3,8 @@ import BentoVoiceKit
 import AppKit
 import Combine
 import SwiftUI
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 /// macOS hold-to-talk voice controller — a thin shell over the shared
 /// `BentoTerminalCore.VoiceController` state machine (recording, compass-

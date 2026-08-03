@@ -1,5 +1,7 @@
 import SwiftUI
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
+import BentoUISharedKit
 
 /// "How BentoTerm works" — the concept map (design doc §2), permanently
 /// re-readable. Every coach mark the user may have dismissed lives here in

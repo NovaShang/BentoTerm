@@ -1,4 +1,6 @@
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
+import BentoUISharedKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 

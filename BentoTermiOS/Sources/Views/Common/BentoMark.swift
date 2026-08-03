@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Shared form header
 
@@ -46,50 +47,70 @@ struct BentoFormFooter: View {
     }
 }
 
-/// The Bento logo mark — 4 unequal compartments with rounded outer corners
-/// and near-square inner corners. Geometry mirrors `docs/bento-icon.svg`.
+/// The Bento logo mark — the current app-icon design, ported from
+/// `docs/bento-icon.svg`: grey-gradient shell holding four dark-gradient
+/// compartments with the emerald prompt chevron in the top-left cell.
 /// Use anywhere we'd put a logo: toolbar wordmark, empty state, about screen.
 struct BentoMark: View {
     var size: CGFloat = 22
-    /// If non-nil, all four cells render in this tint (chrome usage).
-    /// If nil, the four cells render in the full icon palette.
+    /// If non-nil, the mark renders in this single tint (chrome usage):
+    /// shell full-strength, panels at 55% so the grid stays legible, no
+    /// chevron or icon texture. If nil, the full icon palette renders.
     var mono: Color? = nil
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Color.clear
+            // Shell plate — visible as the grid gaps between panels
+            RoundedRectangle(cornerRadius: size * 0.1406, style: .continuous)
+                .fill(mono.map { AnyShapeStyle($0) } ?? AnyShapeStyle(shellStyle))
                 .frame(width: size, height: size)
 
-            // Top-left — prompt cell (emerald)
-            cell(outer: .topLeading, tint: mono ?? .bentoEmerald)
-                .frame(width: size * 0.3125, height: size * 0.32)
-                .offset(x: size * 0.078, y: size * 0.078)
+            cell(x: 0.0781, y: 0.0781, w: 0.3516, h: 0.3711, outer: .topLeading, fill: panelLit)
+            cell(x: 0.4922, y: 0.0781, w: 0.4297, h: 0.3711, outer: .topTrailing, fill: panelDark)
+            cell(x: 0.0781, y: 0.5117, w: 0.6641, h: 0.4102, outer: .bottomLeading, fill: panelDark)
+            cell(x: 0.8047, y: 0.5117, w: 0.1172, h: 0.4102, outer: .bottomTrailing, fill: panelDark)
 
-            // Top-right — salmon
-            cell(outer: .topTrailing, tint: mono ?? .bentoSalmon)
-                .frame(width: size * 0.484, height: size * 0.32)
-                .offset(x: size * 0.4375, y: size * 0.078)
+            if mono == nil {
+                // Prompt chevron (>) inside the top-left cell
+                chevron
 
-            // Bottom-left — rice (warm white)
-            cell(outer: .bottomLeading, tint: mono ?? .bentoRice)
-                .frame(width: size * 0.640, height: size * 0.476)
-                .offset(x: size * 0.078, y: size * 0.445)
-
-            // Bottom-right — veg green
-            cell(outer: .bottomTrailing, tint: mono ?? .bentoVeg)
-                .frame(width: size * 0.156, height: size * 0.476)
-                .offset(x: size * 0.766, y: size * 0.445)
+                // Text lines inside the bottom-left cell (icon texture)
+                textLine(x: 0.1328, y: 0.5859, w: 0.4297)
+                textLine(x: 0.1328, y: 0.6738, w: 0.2930)
+                textLine(x: 0.1328, y: 0.7617, w: 0.5176)
+            }
         }
         .frame(width: size, height: size)
     }
 
-    private var bigR: CGFloat { size * 0.18 }
-    private var smallR: CGFloat { max(1, size * 0.025) }
+    // MARK: - Icon palette (from docs/bento-icon.svg)
+
+    private var shellStyle: LinearGradient {
+        LinearGradient(colors: [Color(hex: 0x6C768A), Color(hex: 0x444C5E)],
+                       startPoint: .top, endPoint: .bottom)
+    }
+
+    /// Top-left panel — the "lit" prompt cell, one step lighter than the rest
+    private var panelLit: AnyShapeStyle { panelStyle(0x272E3A, 0x151A22) }
+    private var panelDark: AnyShapeStyle { panelStyle(0x181D24, 0x0C0F14) }
+
+    private func panelStyle(_ top: UInt32, _ bottom: UInt32) -> AnyShapeStyle {
+        if let mono {
+            return AnyShapeStyle(mono.opacity(0.55))
+        }
+        return AnyShapeStyle(LinearGradient(colors: [Color(hex: top), Color(hex: bottom)],
+                                            startPoint: .top, endPoint: .bottom))
+    }
+
+    // MARK: - Geometry
+
+    private var bigR: CGFloat { size * 0.1406 }
+    private var smallR: CGFloat { size * 0.0156 }
 
     private enum Corner { case topLeading, topTrailing, bottomLeading, bottomTrailing }
 
-    @ViewBuilder
-    private func cell(outer: Corner, tint: Color) -> some View {
+    private func cell(x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat,
+                      outer: Corner, fill: AnyShapeStyle) -> some View {
         let radii: RectangleCornerRadii = {
             switch outer {
             case .topLeading:
@@ -102,54 +123,39 @@ struct BentoMark: View {
                 return .init(topLeading: smallR, bottomLeading: smallR, bottomTrailing: bigR, topTrailing: smallR)
             }
         }()
-        UnevenRoundedRectangle(cornerRadii: radii, style: .continuous)
-            .fill(tint)
+        return UnevenRoundedRectangle(cornerRadii: radii, style: .continuous)
+            .fill(fill)
+            .frame(width: size * w, height: size * h)
+            .offset(x: size * x, y: size * y)
+            .overlay {
+                if mono == nil {
+                    // Top sheen, matching the icon's highlight pass
+                    LinearGradient(colors: [.white.opacity(0.11), .white.opacity(0)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+            }
+    }
+
+    private var chevron: some View {
+        Path { p in
+            p.move(to: CGPoint(x: size * 0.210, y: size * 0.181))
+            p.addLine(to: CGPoint(x: size * 0.298, y: size * 0.264))
+            p.addLine(to: CGPoint(x: size * 0.210, y: size * 0.347))
+        }
+        .stroke(Color.bentoEmerald,
+                style: StrokeStyle(lineWidth: max(1.5, size * 0.041), lineCap: .round, lineJoin: .round))
+    }
+
+    private func textLine(x: CGFloat, y: CGFloat, w: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: size * 0.0127, style: .continuous)
+            .fill(Color(red: 138/255, green: 147/255, blue: 166/255).opacity(0.22))
+            .frame(width: size * w, height: size * 0.0254)
+            .offset(x: size * x, y: size * y)
     }
 }
 
-/// Hero variant for empty states — adds the `>` arrow and cursor block
-/// inside the top-left prompt cell, matching the full icon.
-struct BentoMarkHero: View {
-    var size: CGFloat = 88
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            // Frame plate behind cells, gives the icon's "shell" look
-            RoundedRectangle(cornerRadius: size * 0.20, style: .continuous)
-                .fill(Color.bentoInset)
-                .frame(width: size, height: size)
-
-            // Cells
-            BentoMark(size: size)
-
-            // Prompt glyph (> + cursor) inside the top-left cell
-            promptGlyph
-                .frame(width: size * 0.28, height: size * 0.20)
-                .offset(x: size * 0.10, y: size * 0.155)
-        }
-        .frame(width: size, height: size)
-    }
-
-    private var promptGlyph: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            let stroke = max(2, w * 0.13)
-
-            ZStack {
-                Path { p in
-                    p.move(to: CGPoint(x: stroke / 2, y: stroke / 2))
-                    p.addLine(to: CGPoint(x: w * 0.55, y: h / 2))
-                    p.addLine(to: CGPoint(x: stroke / 2, y: h - stroke / 2))
-                }
-                .stroke(Color.bentoInset, style: StrokeStyle(lineWidth: stroke, lineCap: .round, lineJoin: .round))
-
-                // Cursor block
-                RoundedRectangle(cornerRadius: stroke / 2, style: .continuous)
-                    .fill(Color.bentoInset)
-                    .frame(width: w * 0.32, height: stroke * 0.95)
-                    .position(x: w * 0.80, y: h * 0.85)
-            }
-        }
+private extension Color {
+    init(hex: UInt32) {
+        self.init(UIColor(hex: hex))
     }
 }

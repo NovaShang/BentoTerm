@@ -1,6 +1,4 @@
-import UIKit
 import SwiftUI
-import BentoFoundationKit
 
 enum AccessoryKey: CaseIterable {
     case escape, tab, ctrl, enter
@@ -9,18 +7,15 @@ enum AccessoryKey: CaseIterable {
     case paste
 }
 
-/// Docked quick-keys bar above the keyboard.
-///
-/// The shell is a `.keyboard` UIInputView — `inputAccessoryView` must be a
-/// UIView, and the style gives the keyboard's own material around the row. The
-/// CONTENT, however, is SwiftUI: the same Liquid Glass recipe as the compose
-/// bar, which renders in this exact spot on the same screen. The first UIKit
-/// attempt hosted the keys inside the glass capsule's `contentView`; in the
-/// keyboard-hosted hierarchy that contentView never gets sized, so every key
-/// stayed at its zero frame — all icons stacked on one point. SwiftUI lays the
-/// row out itself, so it is immune to that chain. The shell keeps the trait
-/// pinned to the app's appearance for the dynamic colors.
-final class KeyboardAccessoryView: UIInputView {
+/// Controller for the quick-keys bar that floats above the keyboard in raw
+/// keyboard mode. NOT a UIView anymore (2026-08-02 unification): the row
+/// (`AccessoryKeyRow`) is shown by the terminal host in the shared
+/// `FloatingKeyboardBar` overlay — the same positioning mechanism the compose
+/// bar uses, replacing the old `inputAccessoryView`. This object owns the Ctrl
+/// state and the callbacks; the host creates one per pane and the overlay binds
+/// to the active pane's row.
+@MainActor
+final class KeyboardAccessoryView {
     var onKeyTap: ((AccessoryKey) -> Void)?
     /// Tapped the "hide keyboard" button (double-tap no longer dismisses, since
     /// in keyboard mode it selects text).
@@ -33,50 +28,6 @@ final class KeyboardAccessoryView: UIInputView {
     /// the key's emerald tint both read it) — one source of truth, mutated by
     /// the shell so taps through `onKeyTap` never double-toggle.
     private let rowModel = AccessoryRowModel()
-    private var hostingController: UIHostingController<AccessoryKeyRow>?
-
-    init() {
-        // The bar's frame is SHORTER than the glass row. The row is top-aligned
-        // and hangs below the bar's bottom edge, into the keyboard's own top
-        // inset (system-owned, ~16pt) — closing the dead gap between the keys
-        // and the keyboard. The accessory can't sit any lower than the keyboard
-        // top, so the row overlaps the inset instead.
-        super.init(
-            frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 28),
-            inputViewStyle: .keyboard
-        )
-
-        let row = AccessoryKeyRow(
-            model: rowModel,
-            onKeyTap: { [weak self] key in self?.onKeyTap?(key) },
-            onDismissKeyboard: { [weak self] in self?.onDismissKeyboard?() },
-            onSwitchToCompose: { [weak self] in self?.onSwitchToCompose?() }
-        )
-        let host = UIHostingController(rootView: row)
-        host.view.backgroundColor = .clear
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(host.view)
-        NSLayoutConstraint.activate([
-            host.view.topAnchor.constraint(equalTo: topAnchor),
-            host.view.bottomAnchor.constraint(equalTo: bottomAnchor),
-            host.view.leadingAnchor.constraint(equalTo: leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
-        hostingController = host
-
-        // Pin the trait to the app's effective appearance so the dynamic Bento
-        // colors resolve on the right side — works even though the bar lives
-        // inside the keyboard hierarchy.
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(applyAppearance),
-            name: .terminalThemeChanged, object: nil)
-        applyAppearance()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError()
-    }
 
     var isCtrlActive: Bool { rowModel.isCtrlActive }
 
@@ -88,8 +39,14 @@ final class KeyboardAccessoryView: UIInputView {
         rowModel.isCtrlActive = false
     }
 
-    @objc private func applyAppearance() {
-        overrideUserInterfaceStyle = ThemeStore.shared.effectiveIsDark ? .dark : .light
+    /// The bar's SwiftUI content, bound to this controller.
+    func makeRow() -> AccessoryKeyRow {
+        AccessoryKeyRow(
+            model: rowModel,
+            onKeyTap: { [weak self] key in self?.onKeyTap?(key) },
+            onDismissKeyboard: { [weak self] in self?.onDismissKeyboard?() },
+            onSwitchToCompose: { [weak self] in self?.onSwitchToCompose?() }
+        )
     }
 }
 
@@ -100,8 +57,10 @@ final class AccessoryRowModel: ObservableObject {
 }
 
 /// One floating glass circle, ComposeBar family — used for the two leading
-/// utility buttons. The icon is the glass content: `.glassEffect` applied
-/// after `.frame`, never as an overlay sibling.
+/// utility buttons. GlassChrome goes OUTSIDE the Button: with the glass inside
+/// the label, the interactive glass eats taps outside the icon (glow feedback
+/// but no action); wrapping the Button makes the whole glass circle tappable.
+/// The icon is the button's content, i.e. still the glass's content.
 private struct GlassKeyButton: View {
     var systemName: String
     var action: () -> Void
@@ -112,17 +71,25 @@ private struct GlassKeyButton: View {
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(Color.bentoInk)
                 .frame(width: 40, height: 40)
-                .modifier(GlassChrome(shape: .circle))
         }
-        .buttonStyle(.plain)
+        // NO explicit buttonStyle — byte-for-byte the composer's circle
+        // structure (that one's trigger area is verified correct).
+        .modifier(GlassChrome(shape: .circle))
     }
 }
 
-/// The bar's content. Left to right: two INDEPENDENT glass circles (dismiss
-/// keyboard, switch to the compose box), then ONE glass capsule holding every
-/// key as a plain native-style button — no per-key styling of our own. The
-/// circles deliberately sit outside the capsule (not fused), per the design.
+/// The quick-keys bar's content. Left to right: two INDEPENDENT glass circles
+/// (dismiss keyboard, switch to the compose box), then ONE glass capsule
+/// holding every key as a plain native-style button — no per-key styling of
+/// our own. Paste is a standalone trailing button (not buried in the
+/// scrollable capsule). Floats via `FloatingKeyboardBar`; the height is fixed
+/// and known to the occlusion pipeline (`barHeight`).
 struct AccessoryKeyRow: View {
+    /// Fixed height of the bar. The host's `bottomOcclusion` adds this to the
+    /// bare keyboard's inset while the bar is up, so it must match the rendered
+    /// row (40pt circles + capsule, no vertical padding).
+    static let barHeight: CGFloat = 40
+
     @ObservedObject var model: AccessoryRowModel
     var onKeyTap: (AccessoryKey) -> Void
     var onDismissKeyboard: () -> Void
@@ -143,17 +110,14 @@ struct AccessoryKeyRow: View {
     ]
 
     var body: some View {
-        // Top-aligned inside the (shorter) bar frame: the 40pt row hangs
-        // 12pt below the bar's bottom edge, into the keyboard's top inset.
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                GlassKeyButton(systemName: "keyboard.chevron.compact.down") {
-                    onDismissKeyboard()
-                }
+        HStack(spacing: 8) {
+            GlassKeyButton(systemName: "keyboard.chevron.compact.down") {
+                onDismissKeyboard()
+            }
 
-                GlassKeyButton(systemName: "square.and.pencil") {
-                    onSwitchToCompose()
-                }
+            GlassKeyButton(systemName: "square.and.pencil") {
+                onSwitchToCompose()
+            }
 
             // One capsule container; the keys are plain Buttons inside.
             ScrollView(.horizontal, showsIndicators: false) {
@@ -168,24 +132,23 @@ struct AccessoryKeyRow: View {
                                     key == .ctrl && model.isCtrlActive
                                         ? Color.bentoEmerald : Color.primary)
                         }
-                        .buttonStyle(.plain)
+                        // NO explicit buttonStyle — same as the composer's
+                        // verified buttons.
                     }
                 }
                 .padding(.horizontal, 14)
             }
-            .frame(height: 40)
+            .frame(height: Self.barHeight)
             .clipShape(Capsule())
             .modifier(GlassChrome(shape: .capsule))
 
-                // Paste is its own standalone button at the far right (not
-                // buried in the scrollable capsule).
-                GlassKeyButton(systemName: "doc.on.clipboard") {
-                    onKeyTap(.paste)
-                }
+            // Paste is its own standalone button at the far right (not
+            // buried in the scrollable capsule).
+            GlassKeyButton(systemName: "doc.on.clipboard") {
+                onKeyTap(.paste)
             }
-            .padding(.horizontal, 12)
-
-            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 12)
+        .frame(height: Self.barHeight)
     }
 }

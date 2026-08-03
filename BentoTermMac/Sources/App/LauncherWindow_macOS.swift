@@ -1,7 +1,9 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import SwiftUI
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
+import BentoUISharedKit
 
 // MARK: - Brand
 

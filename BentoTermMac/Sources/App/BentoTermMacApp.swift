@@ -1,5 +1,7 @@
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 import SwiftUI
+import BentoUISharedKit
 
 @main
 struct BentoTermMacApp: App {

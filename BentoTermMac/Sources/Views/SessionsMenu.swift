@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 /// The session list behind the terminal toolbar's Sessions button, hosted there
 /// as a real NSMenu via `NSHostingMenu`: clicking a session's first level (its

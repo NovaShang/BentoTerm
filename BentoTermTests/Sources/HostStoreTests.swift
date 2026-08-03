@@ -1,7 +1,8 @@
 import Foundation
 import Testing
 @testable import BentoTerm
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 @Suite("HostStore Tests")
 struct HostStoreTests {
@@ -29,7 +30,7 @@ struct HostStoreTests {
             authMethod: .privateKey(keyLabel: "id_rsa")
         )
         let data = try JSONEncoder().encode(host)
-        let decoded = try JSONDecoder().decode(Host.self, from: data)
+        let decoded = try JSONDecoder().decode(BentoFoundationKit.Host.self, from: data)
         #expect(decoded.authMethod == .privateKey(keyLabel: "id_rsa"))
     }
 }

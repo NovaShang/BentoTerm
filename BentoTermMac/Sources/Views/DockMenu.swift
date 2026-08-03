@@ -1,5 +1,7 @@
 import AppKit
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
+import BentoUISharedKit
 
 /// The menu behind a right-click on the Dock icon.
 ///

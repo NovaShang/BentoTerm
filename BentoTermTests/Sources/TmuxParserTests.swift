@@ -1,6 +1,6 @@
 import Testing
 @testable import BentoTerm
-import BentoTerminalCore
+import BentoSessionKit
 import BentoAgentKit
 import BentoTmuxKit
 

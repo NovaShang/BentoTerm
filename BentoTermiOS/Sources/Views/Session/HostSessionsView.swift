@@ -1,5 +1,7 @@
 import SwiftUI
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
+import BentoUISharedKit
 
 // MARK: - Host sheet
 
@@ -243,22 +245,25 @@ struct HostSessionsView: View {
         .bentoSectionStyle()
     }
 
-    /// The three creation methods, host-scoped — same set and same names as
-    /// the Mac launcher's verbs.
+    /// The three creation methods, host-scoped — the same verbs the Mac
+    /// renders, drawn from the shared `LaunchAction` vocabulary so the two
+    /// platforms cannot drift on titles or icons.
     @ViewBuilder
     private var newSection: some View {
         Section {
             Button {
                 showAgentWizard = true
             } label: {
-                Label("New Agent Session…", systemImage: "wand.and.stars")
+                Label(LaunchAction.agentSession.title,
+                      systemImage: LaunchAction.agentSession.systemImage)
             }
 
             Button {
                 withAnimation { showNameField = true }
                 nameFieldFocused = true
             } label: {
-                Label("New Empty Session", systemImage: "plus.rectangle.on.rectangle")
+                Label(LaunchAction.emptySession.title,
+                      systemImage: LaunchAction.emptySession.systemImage)
             }
 
             if showNameField {
@@ -282,7 +287,8 @@ struct HostSessionsView: View {
             Button {
                 startNewSession(.noTmux)
             } label: {
-                Label("New Terminal without tmux", systemImage: "terminal")
+                Label(LaunchAction.plainTerminal.title,
+                      systemImage: LaunchAction.plainTerminal.systemImage)
             }
         } header: {
             BentoFormHeader("New")

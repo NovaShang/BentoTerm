@@ -2,7 +2,8 @@
 import AppKit
 import UserNotifications
 import BentoAgentKit
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 /// Surfaces "a pane is awaiting input" on macOS while a terminal window is open
 /// (reusing the shared `StateDetectionService` via the VM's

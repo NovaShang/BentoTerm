@@ -1,6 +1,7 @@
 import SwiftUI
 import BentoTmuxKit
 import BentoAgentKit
+import BentoSessionKit
 
 /// List mode's window switcher for the big screens — ONE implementation
 /// shared by macOS (hosted in an `NSHostingView`) and iPad. Native sidebar
@@ -142,6 +143,11 @@ public struct WindowSidebar: View {
     private func row(_ window: TmuxWindow) -> some View {
         let status = viewModel.windowStatus(window.id)
         return HStack(spacing: 6) {
+            // Leading shortcut hint: ⌘N selects this window (the `index:name`
+            // the toolbar labels and tmux's own `prefix <n>`). Varies in width
+            // — indices are sparse — but the fixed state slot below keeps
+            // names aligned regardless.
+            shortcutHint(window)
             // Leading state glyph in a fixed-width slot so names stay aligned.
             // Shown on every row including the selected one — state reads the
             // same whether or not the row is current.
@@ -178,12 +184,24 @@ public struct WindowSidebar: View {
     /// row including the selected one, so state color is consistent throughout.
     @ViewBuilder
     private func name(_ id: TmuxWindowID, status: WindowDisplayStatus) -> some View {
-        let label = Text(viewModel.windowDisplayName(id))
+        let label = Text(rowName(id))
         if let hex = statusHex(status) {
             label.foregroundStyle(Color(rgbHex: hex))
         } else {
             label
         }
+    }
+
+    /// macOS rows already lead with the ⌘N hint, so the tmux `index:` prefix
+    /// would be doubled — show the body name there. iPad has no hint, so it
+    /// keeps the index-prefixed display name (the index is the only address
+    /// that row carries).
+    private func rowName(_ id: TmuxWindowID) -> String {
+        #if canImport(AppKit)
+        viewModel.windowBodyName(id)
+        #else
+        viewModel.windowDisplayName(id)
+        #endif
     }
 
     /// The canonical palette hex for a status, or nil for idle (default color).
@@ -195,6 +213,26 @@ public struct WindowSidebar: View {
         case .doneUnseen: return PaneState.doneUnseenHex
         case .idle:       return nil
         }
+    }
+
+    /// The ⌘N shortcut hint for a row — macOS only, since ⌘0..⌘9 maps to the
+    /// tmux index here and that binding doesn't exist on iPad. Quiet secondary
+    /// color so it never competes with the state glyph's semantic colors.
+    @ViewBuilder
+    private func shortcutHint(_ window: TmuxWindow) -> some View {
+        #if canImport(AppKit)
+        if let index = window.index {
+            HStack(spacing: 2) {
+                Image(systemName: "command")
+                Text("\(index)")
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.secondary)
+            .help("⌘\(index) switches to this window")
+        }
+        #else
+        EmptyView()
+        #endif
     }
 
     /// Leading state glyph — same language as the Tiled pane title: working =

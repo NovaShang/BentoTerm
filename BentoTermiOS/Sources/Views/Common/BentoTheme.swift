@@ -1,7 +1,8 @@
 import UIKit
 import SwiftUI
 import BentoAgentKit
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 // MARK: - Design Tokens
 
@@ -157,7 +158,7 @@ enum STTheme {
     private nonisolated(unsafe) static var lastKnownFontSize: CGFloat = 0
 
     /// Terminal font size — reads from Settings slider, falls back to the last
-    /// value this process saw, then to device defaults.
+    /// value this process saw, then to the iOS default (10).
     static var terminalFontSize: CGFloat {
         let stored = UserDefaults.standard.double(forKey: "terminal_font_size")
         if stored > 0 {
@@ -165,26 +166,25 @@ enum STTheme {
             return CGFloat(stored)
         }
         if lastKnownFontSize > 0 { return lastKnownFontSize }
-        return UIDevice.current.userInterfaceIdiom == .pad ? 14 : 12
+        return 10
     }
 
-    /// User-selected terminal font, falling back to SF Mono.
+    /// User-selected terminal font, falling back to Maple Mono NF CN (bundled,
+    /// registered via UIAppFonts). Unknown/legacy tokens fall through to the
+    /// system monospace font.
     static var terminalFont: UIFont {
         let size = terminalFontSize
         let family = UserDefaults.standard.string(forKey: "terminal_font_family") ?? "maple-nf-cn"
         switch family {
+        case "maple-nf-cn":
+            return UIFont(name: "MapleMono-NF-CN-Regular", size: size)
+                ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
         case "menlo":
             return UIFont(name: "Menlo-Regular", size: size)
                 ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
         case "courier":
             return UIFont(name: "CourierNewPSMT", size: size)
                 ?? UIFont(name: "Courier", size: size)
-                ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        case "jetbrains":
-            return UIFont(name: "JetBrainsMono-Regular", size: size)
-                ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        case "maple-nf-cn":
-            return UIFont(name: "MapleMono-NF-CN-Regular", size: size)
                 ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
         case "system-medium":
             return UIFont.monospacedSystemFont(ofSize: size, weight: .medium)

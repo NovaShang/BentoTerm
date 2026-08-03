@@ -2,7 +2,8 @@ import BentoFilePreviewKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import SwiftUI
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 // MARK: - File watcher
 
@@ -244,7 +245,13 @@ struct PreviewDock: View {
             PreviewDockContent(tab: tab, onDetach: { detach(tab) })
                 .id(tab.id)   // stable per tab → WebView reuse preserves scroll
         } else {
-            DockTreeView(model: model)
+            // The shared lazy tree (same view as the iOS Files sheet) —
+            // `treeGeneration` maps onto reloadKey so pane switches re-root it.
+            FileTreeBrowserView(
+                reloadKey: model.treeGeneration,
+                contextProvider: { model.treeContextProvider?() },
+                onOpenFile: { path, ctx in model.open(path: path, line: nil, context: ctx) },
+                isCompact: true)
         }
     }
 }
@@ -323,165 +330,4 @@ private struct PreviewDockTab: View {
     }
 }
 
-// MARK: - Directory tree (the permanent first tab)
-
-// FileTreeNode (the tree built from the flat bounded index) is shared with the
-// iOS browser — see FileTreeBrowserView. This file used to carry a private copy
-// of it, identical line for line.
-
-/// The dock's permanent first tab: the focused pane's working directory as a
-/// browsable tree. The context is resolved fresh on every load (provider), so
-/// switching panes/sessions re-roots the tree; clicking a file opens it as a
-/// preview tab. Same bounded listing as everything else — this is "browse the
-/// project you're working in", not a general file manager.
-private struct DockTreeView: View {
-    @ObservedObject var model: PreviewDockModel
-
-    @State private var rootPath = ""
-    @State private var entries: [FileTreeEntry] = []
-    @State private var nodes: [FileTreeNode] = []
-    @State private var loading = false
-    @State private var problem: String?
-    @State private var loadedContext: PathPreviewContext?
-    @State private var reloadTick = 0
-    @State private var truncated = false
-    /// Dotfiles are hidden by default (the eye toggles them) — rebuild is
-    /// local, no refetch.
-    @State private var showHidden = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            treeBody
-            if truncated {
-                Divider()
-                Text("Bounded listing — first \(TreeListRequest().maxEntries) entries, depth ≤ \(TreeListRequest().maxDepth)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-            }
-        }
-        .task(id: "\(model.treeGeneration)-\(reloadTick)") { await load() }
-    }
-
-    private var header: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "folder")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Text(rootPath.isEmpty ? "…" : abbreviated(rootPath))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.head)
-            Spacer(minLength: 4)
-            if loading { ProgressView().controlSize(.small) }
-            Button {
-                showHidden.toggle()
-                rebuild()
-            } label: {
-                Image(systemName: showHidden ? "eye" : "eye.slash")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(showHidden ? Color.accentColor : .secondary)
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(showHidden ? "Hide dotfiles" : "Show dotfiles")
-            Button { reloadTick += 1 } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Reload the tree")
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-    }
-
-    @ViewBuilder private var treeBody: some View {
-        if let problem, nodes.isEmpty {
-            VStack(spacing: 8) {
-                Image(systemName: "folder.badge.questionmark")
-                    .font(.system(size: 26)).foregroundStyle(.quaternary)
-                Text(problem).font(.system(size: 12)).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).padding(.horizontal, 16)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            List(nodes, children: \.children) { node in
-                row(node)
-            }
-            .listStyle(.inset)
-        }
-    }
-
-    private func row(_ node: FileTreeNode) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: node.isDir ? "folder" : "doc.text")
-                .font(.system(size: 11))
-                .foregroundStyle(node.isDir ? Color.accentColor.opacity(0.8) : .secondary)
-            Text(node.name)
-                .font(.system(size: 12))
-                .lineLimit(1)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !node.isDir, let ctx = loadedContext, !rootPath.isEmpty else { return }
-            model.open(path: rootPath + "/" + node.id, line: nil, context: ctx)
-        }
-    }
-
-    private func load() async {
-        guard let ctx = model.treeContextProvider?() else {
-            problem = "No active pane"; entries = []; nodes = []; truncated = false; return
-        }
-        loading = true
-        defer { loading = false }
-        // Remote (SSH) pane: our source reads the local disk, so listing here
-        // would show THIS Mac's files, not the remote host's — refuse honestly.
-        if let block = ctx.remoteBlock, let reason = await block() {
-            problem = reason; entries = []; nodes = []; truncated = false; return
-        }
-        guard let cwd = await ctx.cwd(), cwd.hasPrefix("/") else {
-            problem = "Working directory unknown"; entries = []; nodes = []; truncated = false; return
-        }
-        rootPath = cwd
-        loadedContext = ctx
-        do {
-            let request = TreeListRequest()
-            entries = try await ctx.source.listTree(root: cwd, request: request)
-            // The walk stops at the entry budget — at the cap, assume there
-            // was more (no silent truncation).
-            truncated = entries.count >= request.maxEntries
-            rebuild()
-        } catch {
-            problem = error.localizedDescription
-            entries = []
-            nodes = []
-            truncated = false
-        }
-    }
-
-    /// Entries → visible nodes (dotfile filter applied). Pure local.
-    private func rebuild() {
-        let visible = showHidden ? entries : entries.filter { e in
-            !e.relPath.split(separator: "/").contains { $0.hasPrefix(".") }
-        }
-        nodes = FileTreeNode.build(visible)
-        problem = nodes.isEmpty ? "Nothing to list here" : nil
-    }
-
-    private func abbreviated(_ path: String) -> String {
-        let home = NSHomeDirectory()
-        if path == home { return "~" }
-        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
-        return path
-    }
-}
 #endif

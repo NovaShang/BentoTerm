@@ -1,68 +1,23 @@
 import SwiftUI
 import AppKit
 import BentoAgentKit
-import BentoTerminalCore
 import BentoFoundationKit
+import BentoUISharedKit
 
-/// AgentWizardWindow uses `Form().formStyle(.grouped)` so the visual hierarchy
-/// matches System Settings panes. Agent is chosen from a curated picker;
-/// layout is chosen from a visual grid of SF-symbol previews.
+/// AgentWizardWindow hosts the shared `AgentWizardForm` (see BentoUISharedKit)
+/// in a titled NSWindow with the macOS action bar. The form itself — fields,
+/// validity rules, layout grid, telemetry — is shared with iOS; only the chrome
+/// is platform-specific. `Form().formStyle(.grouped)` keeps the visual
+/// hierarchy in line with System Settings panes.
 struct AgentWizardWindow: View {
-    @State private var sessionName: String = "agent-\(Int(Date().timeIntervalSince1970) % 10_000)"
-    @State private var workingDir: String = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("code").path
-    @State private var agentPreset: AgentPreset = .claudeCode
-    @State private var customCommand: String = ""
-    @State private var layout: TmuxLayout = .sideBySide
-    @State private var error: String?
+    @StateObject private var model = AgentWizardModel()
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
-            Form {
-                Section {
-                    TextField("Session name", text: $sessionName)
-                }
-                Section("Working directory") {
-                    HStack {
-                        TextField("Path", text: $workingDir)
-                            .textFieldStyle(.roundedBorder)
-                            .labelsHidden()
-                        Button("Choose…") { pickDirectory() }
-                    }
-                }
-                Section("Agent") {
-                    HStack(spacing: 8) {
-                        Picker("Agent", selection: $agentPreset) {
-                            ForEach(AgentPreset.allCases) { preset in
-                                Text(preset.rawValue).tag(preset)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .fixedSize()
-
-                        if agentPreset == .custom {
-                            TextField("e.g. cursor-agent", text: $customCommand)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                        }
-                    }
-                }
-                Section {
-                    LayoutPickerGrid(selection: $layout)
-                } header: {
-                    Text("Layout")
-                } footer: {
-                    Text("\(layout.paneCount) pane\(layout.paneCount == 1 ? "" : "s") · \(layout.displayName)")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if let error {
-                    Section {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.red)
-                    }
-                }
-            }
+            AgentWizardForm(model: model, onChooseDirectory: { binding in
+                pickDirectory(binding)
+            })
             .formStyle(.grouped)
 
             Divider()
@@ -74,116 +29,41 @@ struct AgentWizardWindow: View {
                 Button("Launch") { Task { await launch() } }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
-                    .disabled(!canLaunch)
+                    .disabled(!model.canLaunch)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
         }
         .frame(width: 560, height: 620)
-        .onAppear { TelemetryService.shared.record(.agentWizardLaunched) }
     }
 
-    private var canLaunch: Bool {
-        !sessionName.isEmpty
-            && !workingDir.isEmpty
-            && resolvedAgentCommand != nil
-    }
-
-    /// nil = invalid (custom selected but field empty). "" = explicit shell.
-    private var resolvedAgentCommand: String? {
-        switch agentPreset {
-        case .custom:
-            let trimmed = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        default:
-            return agentPreset.command
-        }
-    }
-
-    private var spec: AgentSpec {
-        AgentSpec(
-            sessionName: sessionName,
-            workingDir: workingDir,
-            agentCommand: resolvedAgentCommand ?? "",
-            layout: layout
-        )
-    }
-
-    private func pickDirectory() {
+    private func pickDirectory(_ binding: Binding<String>) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            workingDir = url.path
+            binding.wrappedValue = url.path
         }
     }
 
     private func launch() async {
         do {
-            error = nil
+            model.error = nil
             // Agent sessions always spin up in Bento's own in-app libghostty
             // window (tmux -CC over a local pty) — sessions never bounce out
             // to a third-party terminal anymore.
             let coreSpec = BentoAgentKit.AgentSpec(
-                sessionName: spec.sessionName,
-                workingDir: spec.workingDir,
-                agentCommand: spec.agentCommand,
-                layout: BentoAgentKit.TmuxLayout(rawValue: spec.layout.rawValue) ?? .solo
+                sessionName: model.spec.sessionName,
+                workingDir: model.spec.workingDir,
+                agentCommand: model.spec.agentCommand,
+                layout: BentoAgentKit.TmuxLayout(rawValue: model.spec.layout.rawValue) ?? .solo
             )
             await MainActor.run { BentoTerminalWindow.newWindow(agent: coreSpec) }
-            TelemetryService.shared.record(.workspaceCreated)
+            model.recordWorkspaceCreated()
             dismiss()
         } catch {
-            self.error = "\(error)"
+            model.error = "\(error)"
         }
-    }
-}
-
-/// LayoutPickerGrid renders the six preset layouts as a row of SF-Symbol
-/// tiles. Tap to select; the chosen one gets the system accent border.
-private struct LayoutPickerGrid: View {
-    @Binding var selection: TmuxLayout
-
-    private let columns = [GridItem(.adaptive(minimum: 72, maximum: 100), spacing: 8)]
-
-    var body: some View {
-        LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(TmuxLayout.allCases) { layout in
-                LayoutTile(layout: layout, isSelected: layout == selection)
-                    .onTapGesture { selection = layout }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-private struct LayoutTile: View {
-    let layout: TmuxLayout
-    let isSelected: Bool
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: layout.symbol)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 32, height: 24)
-                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-            Text(layout.displayName)
-                .font(.caption2)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isSelected ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: isSelected ? 2 : 1)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
-                )
-        )
-        .contentShape(Rectangle())
     }
 }

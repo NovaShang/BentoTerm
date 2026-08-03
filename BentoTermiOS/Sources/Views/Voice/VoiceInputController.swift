@@ -1,7 +1,8 @@
 import UIKit
 import SwiftUI
 import BentoVoiceKit
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 /// Manages the voice input gesture + recording lifecycle.
 /// Added to a pane's terminal view as a long-press gesture recognizer.
@@ -87,12 +88,17 @@ final class VoiceInputController: VoiceController {
 
     /// Leave the managed box and drop straight into the raw keyboard (the pane's
     /// VC wires `onRequestRawKeyboard` to make its surface first responder).
+    ///
+    /// ORDER MATTERS: hand the first responder off FIRST (the surface takes
+    /// over while the bar is still up — UIKit's responder handoff keeps the
+    /// keyboard up, the accessory bar appears under the bar), then dismiss the
+    /// bar. Reversed, the keyboard collapses and re-expands through the switch.
     func switchToRawKeyboard() {
+        onRequestRawKeyboard?()
         showPreview = false
         previewLoading = false
         previewText = ""
         isManualCompose = false
-        onRequestRawKeyboard?()
     }
 
     // Voice's right-swipe preview and the keyboard's manual compose share one
@@ -141,25 +147,32 @@ private struct HapticFeedbackAdapter: VoiceFeedbackProviding {
 ///
 /// Lives here (not its own file) so it's picked up by the app target's source
 /// list without a project.pbxproj edit.
-struct ComposeBar: View {
-    @ObservedObject var controller: VoiceInputController
-    @FocusState private var focused: Bool
-    /// Keyboard top edge in global (screen) coordinates; nil while hidden.
-    @State private var keyboardTopGlobal: CGFloat?
+/// Shared floating bottom bar for both keyboard bars (compose bar + quick-keys
+/// bar): sits on the keyboard's top edge — tracked once by the terminal host in
+/// global coordinates and passed in — or on the bottom safe inset when the
+/// keyboard is down, and reports its rendered height so the viewport can pan
+/// content clear of it. One positioning mechanism, one occlusion source.
+struct FloatingKeyboardBar<Content: View>: View {
+    var keyboardTopGlobal: CGFloat?
+    var onHeightChanged: (CGFloat) -> Void
+    var content: Content
 
-    private var isEmpty: Bool {
-        controller.previewText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    init(keyboardTopGlobal: CGFloat?, onHeightChanged: @escaping (CGFloat) -> Void,
+         @ViewBuilder content: () -> Content) {
+        self.keyboardTopGlobal = keyboardTopGlobal
+        self.onHeightChanged = onHeightChanged
+        self.content = content()
     }
 
     var body: some View {
         GeometryReader { geo in
-            bar
+            content
                 .background(
                     GeometryReader { barGeo in
                         Color.clear
-                            .onAppear { controller.composeBarHeight = barGeo.size.height }
+                            .onAppear { onHeightChanged(barGeo.size.height) }
                             .onChange(of: barGeo.size.height) { _, h in
-                                controller.composeBarHeight = h
+                                onHeightChanged(h)
                             }
                     }
                 )
@@ -167,12 +180,40 @@ struct ComposeBar: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
         .ignoresSafeArea(.keyboard)
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIResponder.keyboardWillChangeFrameNotification)) { handleKeyboard($0) }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIResponder.keyboardWillHideNotification)) { handleKeyboard($0) }
+        .onDisappear { onHeightChanged(0) }
+    }
+
+    /// Small breathing room between the bar's bottom and the keyboard's top
+    /// edge. Computed: static stored properties don't exist on generic types.
+    private static var gap: CGFloat { 4 }
+
+    /// Lift the bar to just above the keyboard's top edge, measured in this
+    /// view's own global frame so it's correct whatever safe-area context the
+    /// overlay lands in. Keyboard down → rest on the bottom safe inset instead.
+    private func bottomPadding(in geo: GeometryProxy) -> CGFloat {
+        let frame = geo.frame(in: .global)
+        guard let keyboardTopGlobal else { return geo.safeAreaInsets.bottom }
+        return max(0, frame.maxY - keyboardTopGlobal + Self.gap)
+    }
+}
+
+struct ComposeBar: View {
+    @ObservedObject var controller: VoiceInputController
+    @FocusState private var focused: Bool
+    /// Keyboard top edge in global (screen) coordinates; nil while hidden.
+    /// Tracked once by the terminal host, shared with the quick-keys bar.
+    var keyboardTopGlobal: CGFloat?
+
+    private var isEmpty: Bool {
+        controller.previewText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        FloatingKeyboardBar(keyboardTopGlobal: keyboardTopGlobal,
+                            onHeightChanged: { controller.composeBarHeight = $0 }) {
+            bar
+        }
         .onAppear { focused = true }
-        .onDisappear { controller.composeBarHeight = 0 }
     }
 
     /// Floating liquid-glass composer: no full-width slab, just glass elements
@@ -194,39 +235,39 @@ struct ComposeBar: View {
             inputRow
         }
         .padding(.horizontal, 12)
-        .padding(.bottom, 6)
     }
 
-    /// GlassEffectContainer lets adjacent glass shapes blend as one material
-    /// (iOS 26); earlier systems just render the flat-styled row.
-    @ViewBuilder
+    /// The compose row's elements are INDEPENDENT glass shapes (no
+    /// GlassEffectContainer fusion) — the same element language as the
+    /// quick-keys bar's independent circles + capsule (2026-08-02 unification:
+    /// both bars must look like the same family).
     private var inputRow: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 10) { inputRowContent }
-        } else {
-            inputRowContent
-        }
+        inputRowContent
     }
 
     private var inputRowContent: some View {
         HStack(alignment: .bottom, spacing: 8) {
             Button { controller.cancelPreview() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.bentoInkDim)
-                    .frame(width: 38, height: 38)
+                // Same chevron as the accessory bar's dismiss-keyboard circle —
+                // closing the bar hides the keyboard too. Same 40pt glass
+                // circle language as the quick-keys bar.
+                Image(systemName: "keyboard.chevron.compact.down")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(Color.bentoInk)
+                    .frame(width: 40, height: 40)
             }
             .modifier(GlassChrome(shape: .circle))
             .accessibilityIdentifier("compose.cancel")
 
             // One-tap escape to the raw keyboard for interactive/TUI typing
             // (vim, mid-command Tab, etc.) — the minority case the bar can't
-            // serve.
+            // serve. The `terminal` glyph (vs the bar's keyboard chevrons)
+            // says "type straight into the terminal", not "keyboard mode".
             Button { controller.switchToRawKeyboard() } label: {
-                Image(systemName: "keyboard")
+                Image(systemName: "terminal")
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Color.bentoInkDim)
-                    .frame(width: 38, height: 38)
+                    .foregroundStyle(Color.bentoInk)
+                    .frame(width: 40, height: 40)
             }
             .modifier(GlassChrome(shape: .circle))
             .accessibilityIdentifier("compose.raw")
@@ -239,14 +280,14 @@ struct ComposeBar: View {
                 .tint(Color.bentoEmerald)
                 .focused($focused)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 9)
+                .frame(height: 40)
                 .modifier(GlassChrome(shape: .field))
 
             Button { controller.sendPreview() } label: {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(isEmpty ? Color.bentoInkDim : .white)
-                    .frame(width: 38, height: 38)
+                    .frame(width: 40, height: 40)
             }
             .modifier(GlassChrome(shape: .circle, tint: isEmpty ? nil : Color.bentoEmerald))
             .disabled(isEmpty)
@@ -254,26 +295,6 @@ struct ComposeBar: View {
         }
     }
 
-    /// Lift the bar to the keyboard's top edge, measured in this view's own
-    /// global frame so it's correct whatever safe-area context the overlay
-    /// lands in. Keyboard down → rest on the bottom safe inset instead.
-    private func bottomPadding(in geo: GeometryProxy) -> CGFloat {
-        let frame = geo.frame(in: .global)
-        let overlap = keyboardTopGlobal.map { max(0, frame.maxY - $0) } ?? 0
-        return max(overlap, geo.safeAreaInsets.bottom)
-    }
-
-    private func handleKeyboard(_ note: Notification) {
-        guard let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
-        else { return }
-        let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey]
-            as? Double ?? 0.25
-        // Off-screen frame (hide / undock) → treat as no keyboard.
-        let top: CGFloat? = end.minY >= UIScreen.main.bounds.maxY ? nil : end.minY
-        withAnimation(.easeOut(duration: max(duration, 0.1))) {
-            keyboardTopGlobal = top
-        }
-    }
 }
 
 /// Liquid-glass chrome for the compose bar's elements on iOS 26+, falling back

@@ -1,5 +1,6 @@
 import SwiftUI
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 /// First-run home. The job is environment preparation, not feature marketing
 /// (design doc §5): teach the one load-bearing concept — the phone is a tmux
@@ -30,7 +31,7 @@ struct WelcomeFlowView: View {
         ScrollView {
             VStack(spacing: 24) {
                 VStack(spacing: 10) {
-                    BentoMarkHero(size: 72)
+                    BentoMark(size: 72)
                         .shadow(color: Color.black.opacity(0.4), radius: 18, y: 8)
                     Text("BentoTerm")
                         .font(.system(size: 26, weight: .bold))

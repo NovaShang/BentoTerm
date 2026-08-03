@@ -1,5 +1,6 @@
 import SwiftUI
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 /// Home — the pre-session state surface, iOS's answer to the Mac launcher
 /// ("the app's lock screen"): what's running, what I was doing, where I can

@@ -1,5 +1,6 @@
 import Foundation
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 import SwiftUI
 import BentoTmuxKit
 import UIKit

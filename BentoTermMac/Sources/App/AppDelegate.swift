@@ -1,9 +1,11 @@
 import AppKit
+import CoreText
 import BentoAgentKit
-import BentoTerminalCore
+import BentoSessionKit
 import Foundation
 import SwiftUI
 import BentoFoundationKit
+import BentoUISharedKit
 
 /// AppDelegate owns the background polling timer that refreshes the tmux
 /// session list.
@@ -29,7 +31,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// KVO token for `NSApp.effectiveAppearance` — drives follow-system light/dark.
     private var appearanceObservation: NSKeyValueObservation?
 
+    /// CoreText registration for app-bundled fonts (Maple Mono NF CN). Without
+    /// this, the engine's font lookup — which goes through CoreText by family
+    /// name — can't see fonts that live in the app bundle.
+    private func registerBundledFonts() {
+        guard let url = Bundle.main.url(forResource: "MapleMono-NF-CN-Regular", withExtension: "ttf") else { return }
+        var error: Unmanaged<CFError>?
+        CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
+        if let error { dlog("bundled font registration failed: \(error)") }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Register the bundled Maple Mono NF CN into CoreText before any
+        // surface exists, so libghostty can resolve it by family name.
+        registerBundledFonts()
+
         // SwiftUI has built NSApp.mainMenu by now; take ⌘W back (see below).
         reclaimClosePaneShortcut()
 

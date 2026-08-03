@@ -1,5 +1,6 @@
 import Foundation
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 import BentoFilePreviewKit
 import Citadel
 import NIOCore
@@ -17,6 +18,11 @@ actor CitadelSFTPFileSource: FilePreviewSource {
     private nonisolated(unsafe) let client: SSHClient
     private var sftp: SFTPClient?
     private var home: String?
+    /// In-flight openSFTP() — the search walker now lists directories in
+    /// parallel waves, so several calls can race the very first session: two
+    /// openSFTP() calls would open two channels. Dedup them.
+    private var sessionTask: Task<SFTPClient, Error>?
+    private var homeTask: Task<String?, Never>?
 
     init(client: SSHClient) {
         self.client = client
@@ -24,17 +30,29 @@ actor CitadelSFTPFileSource: FilePreviewSource {
 
     private func session() async throws -> SFTPClient {
         if let sftp, sftp.isActive { return sftp }
-        let fresh = try await client.openSFTP()
+        if let sessionTask { return try await sessionTask.value }
+        let task = Task { try await client.openSFTP() }
+        sessionTask = task
+        defer { sessionTask = nil }
+        let fresh = try await task.value
         sftp = fresh
         return fresh
+    }
+
+    private func homePath(sftp: SFTPClient) async -> String? {
+        if let homeTask { return await homeTask.value }
+        // The SFTP session starts in the login home — realpath(".") = home,
+        // which unlocks `~/…` resolution.
+        let task = Task { try? await sftp.getRealPath(atPath: ".") }
+        homeTask = task
+        defer { homeTask = nil }
+        return await task.value
     }
 
     func stat(path: String, cwd: String?) async throws -> (resolvedPath: String, stat: FilePreviewStat) {
         let sftp = try await session()
         if home == nil {
-            // The SFTP session starts in the login home — realpath(".") = home,
-            // which unlocks `~/…` resolution.
-            home = try? await sftp.getRealPath(atPath: ".")
+            home = await homePath(sftp: sftp)
         }
         var resolved = try FilePathResolver.resolve(path: path, cwd: cwd, home: home)
         if !resolved.hasPrefix("/") {
@@ -62,38 +80,24 @@ actor CitadelSFTPFileSource: FilePreviewSource {
         }
     }
 
-    /// Bounded BFS over SFTP readdir. One round trip per directory, so the
-    /// dir/time budgets in `request` are what keep slow links sane; a partial
-    /// index is still a useful index.
-    func listTree(root: String, request: TreeListRequest) async throws -> [FileTreeEntry] {
+    /// One directory's immediate children over SFTP — one round trip. The
+    /// old bounded whole-tree BFS moved to `TreeWalker` (shared kit code);
+    /// this source is now just the dumb per-directory pipe.
+    func listDirectory(path: String, request: DirectoryListRequest) async throws -> DirectoryListResult {
         let sftp = try await session()
-        var out: [FileTreeEntry] = []
-        var queue: [(rel: String, depth: Int)] = [("", 0)]
-        var dirsVisited = 0
-        let deadline = CFAbsoluteTimeGetCurrent() + request.timeBudget
-        while !queue.isEmpty {
-            guard dirsVisited < request.maxDirs,
-                  CFAbsoluteTimeGetCurrent() < deadline else { break }
-            let (rel, depth) = queue.removeFirst()
-            dirsVisited += 1
-            let dir = rel.isEmpty ? root : root + "/" + rel
-            guard let names = try? await sftp.listDirectory(atPath: dir) else { continue }
-            let children = names.flatMap(\.components)
-                .filter { $0.filename != "." && $0.filename != ".." }
-                .sorted { $0.filename < $1.filename }
-                .prefix(request.maxChildrenPerDir)
-            for comp in children {
-                let name = comp.filename
-                guard out.count < request.maxEntries else { return out }
-                let childRel = rel.isEmpty ? name : rel + "/" + name
-                // S_IFMT nibble; symlinked dirs stay files (no loop chasing).
-                let isDir = (comp.attributes.permissions ?? 0) & 0o170000 == 0o040000
-                out.append(FileTreeEntry(relPath: childRel, isDir: isDir))
-                if isDir, depth + 1 < request.maxDepth, !request.skips(name) {
-                    queue.append((childRel, depth + 1))
-                }
-            }
+        guard let all = try? await sftp.listDirectory(atPath: path) else {
+            throw FilePreviewError.notFound(path)
         }
-        return out
+        let children = all.flatMap(\.components)
+            .filter { $0.filename != "." && $0.filename != ".." }
+            .sorted { $0.filename < $1.filename }
+        // truncation computed BEFORE prefixing (exactly-maxChildren is not truncation)
+        let truncated = children.count > request.maxChildren
+        let out = children.prefix(request.maxChildren).map { comp in
+            // S_IFMT nibble; symlinked dirs stay files (no loop chasing).
+            let isDir = (comp.attributes.permissions ?? 0) & 0o170000 == 0o040000
+            return DirectoryEntry(name: comp.filename, isDir: isDir)
+        }
+        return DirectoryListResult(entries: out, truncated: truncated)
     }
 }

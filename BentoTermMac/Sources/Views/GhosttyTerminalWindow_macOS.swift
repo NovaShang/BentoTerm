@@ -7,9 +7,10 @@ import AppKit
 import Combine
 import SwiftUI
 import BentoAgentKit
-import BentoTerminalCore
-/// Resolve the core product-layer ID (server+name), not BentoTmuxKit's wire `$N` ID.
-public typealias TmuxSessionID = BentoTerminalCore.TmuxSessionID
+import BentoSessionKit
+import BentoUISharedKit
+/// Resolve the product-layer ID (server+name), not BentoTmuxKit's wire `$N` ID.
+public typealias TmuxSessionID = BentoFoundationKit.TmuxSessionID
 
 /// Opens native libghostty terminals backed by a local pty + `tmux -CC`. macOS
 /// uses the *same* runtime stack as iOS; only the transport differs.
@@ -867,6 +868,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         sidebar.maximumThickness = 340
         sidebar.allowsFullHeightLayout = true
         sidebar.isCollapsed = true
+        // The item's first-layout thickness comes from its view's frame — set
+        // it to the new 50%-wider default (1.5× the 180 minimum) BEFORE the
+        // split view ever lays out, or the window opens with the stale width.
+        sidebarHosting.view.frame = NSRect(x: 0, y: 0, width: 270, height: 640)
         sidebarItem = sidebar
 
         let contentVC = NSViewController()
@@ -904,7 +909,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onTogglePreview = { [weak self] in self?.togglePreviewDock() }
         previewDock.treeContextProvider = { [weak self] in self?.activeTab?.previewContext }
 
-        splitVC.splitView.autosaveName = "BentoSidebarSplit"
+        // Key bumped from "BentoSidebarSplit" so the wider default (270)
+        // applies even where the old key remembers a narrower width; drags
+        // from here on save into the new key.
+        splitVC.splitView.autosaveName = "BentoSidebarSplitWide"
         // Assigning a `contentViewController` RESIZES the window to that
         // controller's fitting size — measured, and for this split view that is
         // 500 × 500. On a fresh window nobody sees it (the real size is set on

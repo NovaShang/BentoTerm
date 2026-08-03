@@ -1,13 +1,14 @@
 import Testing
 @testable import BentoTerm
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 import Foundation
 
 @Suite("SessionManager Tests")
 @MainActor
 struct SessionManagerTests {
-    private func makeHost(_ name: String) -> Host {
-        Host(
+    private func makeHost(_ name: String) -> BentoFoundationKit.Host {
+        BentoFoundationKit.Host(
             id: UUID(),
             name: name,
             hostname: "\(name).example.com",

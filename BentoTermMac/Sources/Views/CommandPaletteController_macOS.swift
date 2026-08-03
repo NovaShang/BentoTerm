@@ -1,8 +1,10 @@
 import BentoFilePreviewKit
+import BentoUISharedKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import SwiftUI
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 // MARK: - Controller
 
@@ -156,6 +158,10 @@ final class PaletteViewModel: ObservableObject {
     /// panel can open before it lands.
     private var resolvedBase: String?
     private var baseTask: Task<String?, Never>?
+    /// The in-flight file-section walk — cancelled on the next keystroke so a
+    /// slow search never lags the box (the walker checks cancellation per
+    /// wave; a stale result is discarded by the seq guard anyway).
+    private var fileSearchTask: Task<PaletteFileResult, Never>?
 
     init(fileContext: PathPreviewContext?, hostLabel: String,
          staticSpecs: [PaletteSectionSpec], onClose: @escaping () -> Void) {
@@ -186,6 +192,7 @@ final class PaletteViewModel: ObservableObject {
         seq += 1
         let mySeq = seq
         let q = query
+        fileSearchTask?.cancel()
 
         Task { @MainActor in
             var built: [PaletteSection] = []
@@ -200,12 +207,29 @@ final class PaletteViewModel: ObservableObject {
             let root: String?
             if let drilled = rootStack.last { root = drilled } else { root = await base() }
             if let ctx = fileContext, let root {
-                let items = await PaletteFileBrowser.items(query: q, root: root, context: ctx)
+                // The walk runs in its own task so the next keystroke can
+                // cancel it; the seq guard below still discards stale results.
+                let fileTask = Task { @MainActor in
+                    await PaletteFileBrowser.items(query: q, root: root, context: ctx)
+                }
+                fileSearchTask = fileTask
+                let result = await fileTask.value
                 guard mySeq == seq else { return }
-                if canPop || !items.isEmpty {
-                    var rows = items
+                if canPop || !result.items.isEmpty {
+                    var rows = result.items
                     if canPop {
                         rows.insert(parentRow(from: root), at: 0)
+                    }
+                    if result.partial {
+                        // Honest cut-off footer: the fuzzy walk ran out of
+                        // budget before the tree was exhausted.
+                        rows.append(PaletteItem(
+                            id: "files:searched",
+                            title: "Searched \(result.dirsSearched) folders without finding everything — refine or drill in",
+                            subtitle: nil,
+                            systemImage: "magnifyingglass",
+                            matchText: "",
+                            action: .run {}))
                     }
                     let title = "Files · \(abbreviate(root))"
                     built.append(PaletteSection(id: "files", title: title, items: rows))

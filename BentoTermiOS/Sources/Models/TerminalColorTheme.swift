@@ -1,5 +1,5 @@
 import UIKit
-import BentoTerminalCore
+import BentoSessionKit
 import BentoFoundationKit
 
 // `TerminalColorTheme`, `ThemeStore`, `fromITermColors`, and the

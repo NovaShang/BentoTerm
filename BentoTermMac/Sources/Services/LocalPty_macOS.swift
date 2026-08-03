@@ -1,7 +1,8 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import Foundation
 import Darwin
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 /// A local pseudo-terminal running a login shell, for the macOS terminal.
 /// Spawns via `forkpty`, streams master-fd output to `onData`, accepts input via

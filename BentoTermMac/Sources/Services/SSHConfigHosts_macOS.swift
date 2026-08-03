@@ -1,7 +1,8 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import Foundation
 import Darwin
-import BentoTerminalCore
+import BentoSessionKit
+import BentoFoundationKit
 
 /// Lists the concrete host aliases in the user's `~/.ssh/config` — the names
 /// `ssh <alias>` accepts. Wildcard and negated patterns (`*`, `?`, `!`) are

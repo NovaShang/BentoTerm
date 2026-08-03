@@ -24,8 +24,18 @@ step() {
 }
 
 step "terminology" ./scripts/check-terminology.sh
-step "swift-tmux tests" swift test --package-path swift-tmux
-step "bento-terminal-core tests" swift test --package-path bento-terminal-core
+# All kits, in dependency order. (The old swift-tmux / bento-terminal-core
+# packages were folded into Modules/ on 2026-08-02.) BentoUISharedKit has no
+# test target — `swift test` would error "no tests found", so it builds only.
+for kit in BentoTmuxKit BentoFoundationKit BentoAgentKit \
+           BentoFilePreviewKit BentoSessionKit BentoVoiceKit \
+           BentoGhosttyKit BentoUISharedKit; do
+    if [ -d "Modules/$kit/Tests" ]; then
+        step "$kit tests" swift test --package-path "Modules/$kit"
+    else
+        step "$kit build" swift build --package-path "Modules/$kit"
+    fi
+done
 
 # First available iPhone simulator UDID, or empty if the toolchain has none.
 pick_simulator() {

@@ -2,7 +2,8 @@
 import Foundation
 import Testing
 import BentoTerm
-import BentoTerminalCore
+import BentoFoundationKit
+import BentoSessionKit
 
 /// What the pty's child exiting MEANS depends on what was running in it.
 ///
@@ -58,7 +59,7 @@ struct LocalPtyTransportExitTests {
             isLocalLink: false,
             startsInTmuxControlMode: true)
         t.onStateChanged = { states.record($0) }
-        await t.connect(host: Host(name: "test"))
+        await t.connect(host: BentoFoundationKit.Host(name: "test"))
         t.startShell(cols: 80, rows: 24)
 
         let failed = await wait { states.failure != nil }
@@ -73,7 +74,7 @@ struct LocalPtyTransportExitTests {
         let states = States()
         let t = LocalPtyTransport(command: ["/bin/sh", "-c", "exit 0"])
         t.onStateChanged = { states.record($0) }
-        await t.connect(host: Host(name: "test"))
+        await t.connect(host: BentoFoundationKit.Host(name: "test"))
         t.startShell(cols: 80, rows: 24)
 
         _ = await wait { states.all.contains(.disconnected) }
@@ -90,7 +91,7 @@ struct LocalPtyTransportExitTests {
             isLocalLink: false,
             startsInTmuxControlMode: true)
         t.onStateChanged = { states.record($0) }
-        await t.connect(host: Host(name: "test"))
+        await t.connect(host: BentoFoundationKit.Host(name: "test"))
         t.startShell(cols: 80, rows: 24)
         try? await Task.sleep(for: .milliseconds(200))
         t.disconnect()

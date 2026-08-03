@@ -7,7 +7,8 @@ import AppKit
 import Combine
 import SwiftUI
 import BentoAgentKit
-import BentoTerminalCore
+import BentoSessionKit
+import BentoUISharedKit
 
 /// iTerm2-style TILED multi-pane host for macOS. Every tmux pane is shown at
 /// once, laid out by its tmux cell geometry (x/y/width/height), each in its own

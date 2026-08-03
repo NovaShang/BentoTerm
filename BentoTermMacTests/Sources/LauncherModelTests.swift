@@ -2,7 +2,8 @@
 import Foundation
 import Testing
 @testable import BentoTerm
-import BentoTerminalCore
+import BentoSessionKit
+import BentoUISharedKit
 
 /// The empty state's structure, without a window.
 ///

@@ -1,5 +1,6 @@
 import Foundation
-import BentoTerminalCore
+import BentoFoundationKit
+import BentoSessionKit
 
 /// TmuxCLI shells out to a tmux binary. The Mac app never proxies the
 /// tmux protocol — sessions open in Bento's own in-app terminal, and these

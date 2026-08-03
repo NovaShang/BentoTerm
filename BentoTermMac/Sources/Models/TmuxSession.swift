@@ -1,5 +1,7 @@
 import Foundation
-import BentoTerminalCore
+import BentoTmuxKit
+import BentoFoundationKit
+import BentoSessionKit
 
 /// One row of `tmux list-sessions` — run against the LOCAL tmux server, which
 /// is why the name is typed. Everything reachable from this row (kill, rename,

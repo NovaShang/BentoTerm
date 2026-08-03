@@ -1,5 +1,5 @@
 import Foundation
-import BentoTerminalCore
+import BentoSessionKit
 import BentoFoundationKit
 import BentoFilePreviewKit
 import Citadel

@@ -1,7 +1,8 @@
 import Foundation
 import Testing
 import BentoTerm
-import BentoTerminalCore
+import BentoSessionKit
+import BentoUISharedKit
 
 // MARK: - Session naming
 

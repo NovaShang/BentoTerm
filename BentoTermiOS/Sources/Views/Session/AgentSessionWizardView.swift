@@ -1,162 +1,40 @@
 import SwiftUI
 import BentoAgentKit
-import BentoTerminalCore
 import BentoFoundationKit
+import BentoUISharedKit
 
-/// iOS counterpart to BentoTermMac's AgentWizardWindow. Users pick a
-/// session name, working directory, agent command, and pane layout; the
-/// caller wires the resulting AgentSpec into a `createAgent` start choice.
+/// iOS counterpart to BentoTermMac's AgentWizardWindow — hosts the shared
+/// `AgentWizardForm` (see BentoUISharedKit) in a NavigationStack sheet with
+/// toolbar buttons. The form itself — fields, validity rules, layout grid,
+/// telemetry — is shared with Mac; this file is only the presentation chrome.
+/// iOS has no directory picker, so `onChooseDirectory` is nil.
 struct AgentSessionWizardView: View {
     let onLaunch: (AgentSpec) -> Void
 
     @Environment(\.dismiss) private var dismiss
-
-    @State private var sessionName: String = "agent-\(Int(Date().timeIntervalSince1970) % 10_000)"
-    @State private var workingDir: String = "~"
-    @State private var agentPreset: AgentPreset = .claudeCode
-    @State private var customCommand: String = ""
-    @State private var layout: TmuxLayout = .sideBySide
+    @StateObject private var model = AgentWizardModel()
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("name", text: $sessionName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .font(.system(.body, design: .monospaced))
-                } header: {
-                    BentoFormHeader("Session name")
-                }
-                .bentoSectionStyle()
-
-                Section {
-                    TextField("~/code", text: $workingDir)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .font(.system(.body, design: .monospaced))
-                } header: {
-                    BentoFormHeader("Working directory")
-                }
-                .bentoSectionStyle()
-
-                Section {
-                    Picker("Agent", selection: $agentPreset) {
-                        ForEach(AgentPreset.allCases) { preset in
-                            Text(preset.rawValue).tag(preset)
-                        }
+            AgentWizardForm(model: model)
+                .navigationTitle("New Agent Session")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
                     }
-                    if agentPreset == .custom {
-                        TextField("e.g. cursor-agent", text: $customCommand)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .font(.system(.body, design: .monospaced))
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Launch") { launch() }
+                            .disabled(!model.canLaunch)
                     }
-                } header: {
-                    BentoFormHeader("Agent")
                 }
-                .bentoSectionStyle()
-
-                Section {
-                    LayoutPickerGrid(selection: $layout)
-                } header: {
-                    BentoFormHeader("Layout")
-                } footer: {
-                    BentoFormFooter("\(layout.paneCount) pane\(layout.paneCount == 1 ? "" : "s") · \(layout.displayName)")
-                }
-                .bentoSectionStyle()
-            }
-            .bentoForm()
-            .navigationTitle("New Agent Session")
-            .navigationBarTitleDisplayMode(.inline)
-            .onAppear { TelemetryService.shared.record(.agentWizardLaunched) }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Launch") { launch() }
-                        .disabled(!canLaunch)
-                }
-            }
-        }
-    }
-
-    private var canLaunch: Bool {
-        !sessionName.trimmingCharacters(in: .whitespaces).isEmpty
-            && !workingDir.trimmingCharacters(in: .whitespaces).isEmpty
-            && resolvedAgentCommand != nil
-    }
-
-    /// nil = invalid (custom selected but field empty). "" = explicit shell.
-    private var resolvedAgentCommand: String? {
-        switch agentPreset {
-        case .custom:
-            let trimmed = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        default:
-            return agentPreset.command
         }
     }
 
     private func launch() {
-        let spec = AgentSpec(
-            sessionName: sessionName.trimmingCharacters(in: .whitespaces),
-            workingDir: workingDir.trimmingCharacters(in: .whitespaces),
-            agentCommand: resolvedAgentCommand ?? "",
-            layout: layout
-        )
-        TelemetryService.shared.record(.workspaceCreated)
+        let spec = model.spec
+        model.recordWorkspaceCreated()
         dismiss()
         onLaunch(spec)
-    }
-}
-
-private struct LayoutPickerGrid: View {
-    @Binding var selection: TmuxLayout
-
-    private let columns = [GridItem(.adaptive(minimum: 84, maximum: 120), spacing: 8)]
-
-    var body: some View {
-        LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(TmuxLayout.allCases) { layout in
-                LayoutTile(layout: layout, isSelected: layout == selection)
-                    .onTapGesture { selection = layout }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-private struct LayoutTile: View {
-    let layout: TmuxLayout
-    let isSelected: Bool
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: layout.symbol)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 32, height: 24)
-                .foregroundStyle(isSelected ? Color.bentoEmerald : Color.bentoInkDim)
-            Text(layout.displayName)
-                .font(.caption2)
-                .foregroundStyle(Color.bentoInk)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.bentoEmerald.opacity(0.12) : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(
-                    isSelected ? Color.bentoEmerald : Color.bentoBorder,
-                    lineWidth: isSelected ? 1.5 : 1
-                )
-        )
-        .contentShape(Rectangle())
     }
 }
