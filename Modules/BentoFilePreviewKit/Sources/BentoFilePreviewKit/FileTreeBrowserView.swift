@@ -46,12 +46,21 @@ public struct FileTreeBrowserView: View {
         .task(id: reloadKey) { await load() }
     }
 
+    /// The root path, abbreviated — or "…" while the root is still loading.
+    @ViewBuilder private var rootLabel: some View {
+        if let root = store.root, !root.isEmpty {
+            Text(Self.abbreviated(root))
+        } else {
+            Text("…")
+        }
+    }
+
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "folder")
                 .font(.system(size: isCompact ? 10 : 11))
                 .foregroundStyle(.secondary)
-            Text(store.root?.isEmpty == false ? Self.abbreviated(store.root!) : "…")
+            rootLabel
                 .font(.system(size: isCompact ? 10 : 11, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -189,7 +198,16 @@ private struct LazyTreeRow: View {
             DisclosureGroup(isExpanded: expandedBinding(childRel)) {
                 content(childRel)
             } label: {
-                label
+                // The WHOLE row toggles, not just the chevron. A Button (not a
+                // tap gesture) so the click is consumed once — a gesture could
+                // double-toggle where the group also toggles on label taps.
+                Button {
+                    store.toggle(childRel)
+                } label: {
+                    label
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         } else {
             label

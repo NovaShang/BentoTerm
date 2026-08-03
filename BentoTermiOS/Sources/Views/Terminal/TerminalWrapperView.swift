@@ -589,16 +589,7 @@ struct TerminalWrapperView: View {
         if voiceController.showOverlay {
             GeometryReader { geo in
                 let anchor = compassAnchor(in: geo)
-                VoiceCompassView(
-                    transcript: voiceController.transcript,
-                    direction: voiceController.activeDirection,
-                    // The marble is projected onto the active axis inside the
-                    // compass, so it no longer needs to sit under the real
-                    // finger — pass the RAW drag so ball and target share the
-                    // exact same translation. (The old anchor-correction
-                    // existed for 1:1 finger tracking, which projection drops.)
-                    fingerOffset: voiceController.fingerOffset
-                )
+                VoiceCompassView(controller: voiceController)
                 .position(anchor)
             }
             .ignoresSafeArea()

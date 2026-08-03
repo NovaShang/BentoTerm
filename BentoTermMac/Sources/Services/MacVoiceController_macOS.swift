@@ -75,14 +75,20 @@ struct MacVoicePreviewView: View {
 /// Compass + transcript overlay, rendered in SwiftUI (materials, shadows, smooth
 /// highlight) and hosted in AppKit. The host sizes/positions and shows/hides it;
 /// it never intercepts the mouse (the recording drag belongs to the surface).
+///
+/// The root view observes the controller directly, so the SwiftUI view tree is
+/// created ONCE — state changes flow through `@ObservedObject` and the
+/// animations (bubble growing line by line, discs morphing) actually run.
+/// (Rebuilding the root view on every transcript update threw the animation
+/// state away: the bubble jumped straight to full size instead of growing.)
 @MainActor
 public final class MacVoiceOverlay: NSView {
     public static let preferredSize = NSSize(width: 360, height: 580)
 
     private let hosting: NSHostingView<VoiceCompassView>
 
-    public override init(frame frameRect: NSRect) {
-        hosting = NSHostingView(rootView: VoiceCompassView(transcript: "", direction: .none))
+    public init(controller: MacVoiceController, frame frameRect: NSRect) {
+        hosting = NSHostingView(rootView: VoiceCompassView(controller: controller))
         super.init(frame: frameRect)
         wantsLayer = true
         hosting.frame = bounds
@@ -94,16 +100,6 @@ public final class MacVoiceOverlay: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     public override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    public var transcript: String = "" { didSet { rebuild() } }
-    public var direction: VoiceDirection = .none { didSet { rebuild() } }
-    public var fingerOffset: CGSize = .zero { didSet { rebuild() } }
-
-    private func rebuild() {
-        hosting.rootView = VoiceCompassView(transcript: transcript,
-                                            direction: direction,
-                                            fingerOffset: fingerOffset)
-    }
 }
 
 #endif

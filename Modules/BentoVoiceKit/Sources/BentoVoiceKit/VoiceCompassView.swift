@@ -43,14 +43,14 @@ public struct VoiceCompassView: View {
         public static let reachDown: CGFloat = 120
     }
 
-    public let transcript: String
-    public let direction: VoiceDirection
-    public let fingerOffset: CGSize
+    /// Observed directly: the shared controller's published state IS the overlay's
+    /// state. (It used to be mirrored into the hosts and re-fed here — macOS
+    /// rebuilt its hosting root view on every change, which threw away the
+    /// SwiftUI animation state, so the bubble jumped instead of growing.)
+    @ObservedObject public var controller: VoiceController
 
-    public init(transcript: String, direction: VoiceDirection, fingerOffset: CGSize = .zero) {
-        self.transcript = transcript
-        self.direction = direction
-        self.fingerOffset = fingerOffset
+    public init(controller: VoiceController) {
+        self.controller = controller
     }
 
     private let accent = Color(red: 0.30, green: 0.90, blue: 0.62)
@@ -66,6 +66,21 @@ public struct VoiceCompassView: View {
     /// Identity space the GlassEffectContainer uses to morph each target's glass
     /// between its idle and active size (see `glassEffectID`).
     @Namespace private var glassNS
+
+    /// Line pitch of the 14pt + 3pt-spacing transcript (approx; the measured
+    /// full height caps the reveal, so the approximation only paces it).
+    private static let linePitch: CGFloat = 20
+
+    /// Transcript area currently revealed, in points. Dictation does NOT arrive
+    /// line by line — the first partial is often a whole sentence, so tracking
+    /// the text directly would jump the bubble straight to full size. Instead
+    /// the area unfurls ONE LINE AT A TIME toward the transcript's full height
+    /// (capped at `maxTextHeight`): start small, grow row by row.
+    @State private var revealedHeight: CGFloat = 0
+    /// The transcript's full natural height, measured without the window.
+    @State private var fullTextHeight: CGFloat = 0
+    /// The per-line reveal task; restarted on every transcript/height change.
+    @State private var revealTask: Task<Void, Never>?
 
     /// Everything here used to be hardcoded white, which is invisible in light
     /// mode. Observing the store means the overlay repaints when the appearance
@@ -117,28 +132,27 @@ public struct VoiceCompassView: View {
 
     private var bubble: some View {
         VStack(spacing: 5) {
-            // Status + text share one row budget: before any words arrive the
-            // bubble is a SINGLE line (pulse dot + "Listening…" placeholder);
-            // once dictation streams, the text takes over and the bubble grows
-            // one line at a time up to the ceiling. It starts small instead of
-            // opening as a full-height card, and the placeholder row is the same
-            // height as one text line, so the first word doesn't jump the box.
-            if transcript.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "circle.fill")
-                        .resizable()
-                        .frame(width: 6, height: 6)
-                        .foregroundStyle(.red)
-                        .symbolEffect(.pulse, options: .repeating)
-                    Text("Listening…")
-                        .font(.system(size: 14))
-                        .foregroundStyle(ink)
-                }
-                .frame(width: 248)
-            } else {
-                // Grows with the transcript up to a ceiling, then windows to the
-                // newest lines (see the two modifiers below).
-                Text(transcript)
+            // Recording indicator — ALWAYS visible. (It used to be merged into
+            // the transcript placeholder, so the moment dictation arrived it
+            // vanished; and macOS's root-view rebuild made the bubble jump
+            // straight to full size.) It is a fixed row: the transcript grows
+            // beneath it, one line at a time, and the indicator stays put.
+            HStack(spacing: 6) {
+                Image(systemName: "circle.fill")
+                    .resizable()
+                    .frame(width: 6, height: 6)
+                    .foregroundStyle(.red)
+                    .symbolEffect(.pulse, options: .repeating)
+                Text("Listening").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ink.opacity(0.85))
+            }
+            // The transcript window: measures the FULL natural height (this
+            // sits before the window, so it is not clipped), then reveals it
+            // one line at a time — bottom-pinned, so the newest words stay
+            // visible while older ones scroll off the top as it unfurls. No
+            // row at all while empty: the bubble opens as status + hint only.
+            if !controller.transcript.isEmpty {
+                Text(controller.transcript)
                     .font(.system(size: 14))
                     .foregroundStyle(ink)
                     .multilineTextAlignment(.center)
@@ -149,11 +163,19 @@ public struct VoiceCompassView: View {
                     // you'd keep the first lines and lose the newest words, which is
                     // backwards for live dictation.
                     .fixedSize(horizontal: false, vertical: true)
-                    // Then window it: the area grows with the text up to `maxTextHeight`
-                    // (5 lines), and once it overflows, bottom alignment + clipping keep
-                    // the NEWEST lines visible while older ones scroll off the top.
-                    .frame(maxHeight: Self.maxTextHeight, alignment: .bottom)
+                    .background(
+                        GeometryReader { g in
+                            Color.clear
+                                .onAppear { fullTextHeight = g.size.height }
+                                .onChange(of: g.size.height) { _, h in fullTextHeight = h }
+                        }
+                    )
+                    // Then window it: grow with what has been REVEALED so far,
+                    // one line at a time up to `maxTextHeight` (5 lines).
+                    .frame(height: min(revealedHeight, Self.maxTextHeight),
+                           alignment: .bottom)
                     .clipped()
+                    .animation(.easeOut(duration: 0.12), value: revealedHeight)
             }
             // Dim, small action hint pinned inside the bubble. Always shown —
             // there is always a live target, the center included. Fixed height so
@@ -162,14 +184,43 @@ public struct VoiceCompassView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(inkMute)
                 .frame(height: 14)
-                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: direction)
+                .animation(.spring(response: 0.3, dampingFraction: 0.8),
+                           value: controller.activeDirection)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .frame(width: 280)
         .glassSurface(.rect(cornerRadius: 18))
         .shadow(color: .black.opacity(isDark ? 0.45 : 0.18), radius: 18, y: 6)
-        // Ease the growth so adding a line slides rather than jumps.
-        .animation(.easeOut(duration: 0.18), value: transcript)
+        .onChange(of: controller.transcript) { _, _ in startReveal() }
+        .onChange(of: fullTextHeight) { _, _ in startReveal() }
+        .onDisappear { revealTask?.cancel() }
+    }
+
+    /// Unfurl the transcript area one line at a time toward the transcript's
+    /// full height (capped at 5 lines). Dictation's first partial is often a
+    /// whole sentence — without this pacing the bubble would jump straight to
+    /// full size; with it, even a big first chunk grows row by row, and steady
+    /// streaming just keeps the reveal ahead of the text.
+    private func startReveal() {
+        let target = min(fullTextHeight, Self.maxTextHeight)
+        guard !controller.transcript.isEmpty else {
+            revealedHeight = 0
+            return
+        }
+        // Shrink is instant (e.g. the streamed text replaced by "识别中…");
+        // only growth is paced.
+        if target <= revealedHeight {
+            revealedHeight = target
+            return
+        }
+        revealTask?.cancel()
+        revealTask = Task { @MainActor in
+            while revealedHeight < target {
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+                revealedHeight = min(revealedHeight + Self.linePitch, target)
+            }
+        }
     }
 
     // MARK: - Compass
@@ -199,10 +250,10 @@ public struct VoiceCompassView: View {
                 // every target's frame/color interpolate on a single curve. Per-view
                 // .animation calls here are what made the icon and its glass drift
                 // apart mid-transition.
-                .animation(.spring(response: 0.3, dampingFraction: 0.72), value: direction)
+                .animation(.spring(response: 0.3, dampingFraction: 0.72), value: controller.activeDirection)
         } else {
             content
-                .animation(.spring(response: 0.3, dampingFraction: 0.72), value: direction)
+                .animation(.spring(response: 0.3, dampingFraction: 0.72), value: controller.activeDirection)
         }
     }
 
@@ -215,7 +266,7 @@ public struct VoiceCompassView: View {
     /// anchor — idle it tints the icon, hot it lights the disc — and the mic
     /// keeps breathing to signal live recording.
     private var centerOrb: some View {
-        let hot = direction == .none
+        let hot = controller.activeDirection == .none
         return Image(systemName: "mic.fill")
             .font(.system(size: 22, weight: .semibold))
             .foregroundStyle(hot ? .white : accent)
@@ -239,7 +290,7 @@ public struct VoiceCompassView: View {
     /// glass and icon interpolate on ONE curve. The offset came from two curves
     /// running at once — my spring on the frame vs. the container's morph.
     private func directionButton(_ d: VoiceDirection, dx: CGFloat, dy: CGFloat) -> some View {
-        let hot = d == direction
+        let hot = d == controller.activeDirection
         let c = color(for: d)
         return Image(systemName: symbol(for: d))
             .font(.system(size: 20, weight: .semibold))
@@ -264,7 +315,7 @@ public struct VoiceCompassView: View {
     /// mic.
     @ViewBuilder
     private var fingerBall: some View {
-        let s = axisComponent(fingerOffset)
+        let s = axisComponent(controller.fingerOffset)
         let mag = abs(s)
         // Travel cap: the four targets sit at radius 80 with a ~33pt half-width,
         // so 120 puts the marble's center just past their outer edge — it pokes
@@ -282,14 +333,14 @@ public struct VoiceCompassView: View {
     }
 
     /// The axis directions, so the ball only ever travels on one line.
-    private var horizontal: Bool { direction == .left || direction == .right }
-    private var vertical: Bool { direction == .up || direction == .down }
+    private var horizontal: Bool { controller.activeDirection == .left || controller.activeDirection == .right }
+    private var vertical: Bool { controller.activeDirection == .up || controller.activeDirection == .down }
 
     /// Signed distance of the drag along the active axis (y-down points), 0
     /// while centered/unclassified. This projection is what locks the marble
     /// onto the cross — the off-axis component is discarded.
     private func axisComponent(_ t: CGSize) -> CGFloat {
-        switch direction {
+        switch controller.activeDirection {
         case .up, .down:    return t.height
         case .left, .right: return t.width
         case .none:         return 0
@@ -297,7 +348,7 @@ public struct VoiceCompassView: View {
     }
 
     private var hintText: String {
-        switch direction {
+        switch controller.activeDirection {
         case .up:    return "Release to send"
         case .right: return "Release to correct"
         case .down:  return "Release to cancel"

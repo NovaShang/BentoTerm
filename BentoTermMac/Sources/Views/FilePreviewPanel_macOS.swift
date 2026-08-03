@@ -172,51 +172,13 @@ struct FilePreviewContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
             content
+                // Room under the transparent titlebar — only in the floating
+                // panel (onDetach nil); the dock has no titlebar.
+                .padding(.top, onDetach == nil ? 26 : 0)
             Divider()
             footer
         }
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: iconName)
-                .font(.system(size: 22))
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(data.fileName).font(.system(size: 13, weight: .semibold))
-                    if let line = data.line {
-                        Text("line \(line)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Text(data.resolvedPath)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(subtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 26)          // room under the transparent titlebar
-        .padding(.bottom, 10)
-    }
-
-    private var subtitle: String {
-        var parts = [FilePreviewLoader.sizeLabel(data.stat.size)]
-        if let m = data.stat.modified {
-            parts.append(m.formatted(date: .abbreviated, time: .shortened))
-        }
-        parts.append(data.hostLabel)
-        return parts.joined(separator: " · ")
     }
 
     private var iconName: String {

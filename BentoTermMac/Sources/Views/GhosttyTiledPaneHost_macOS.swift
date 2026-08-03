@@ -133,18 +133,9 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                 else { self?.hideVoiceOverlay() }
             }
             .store(in: &cancellables)
-        voiceController.$transcript
-            .receive(on: RunLoop.main)
-            .sink { [weak self] t in self?.voiceOverlay?.transcript = t }
-            .store(in: &cancellables)
-        voiceController.$activeDirection
-            .receive(on: RunLoop.main)
-            .sink { [weak self] d in self?.voiceOverlay?.direction = d }
-            .store(in: &cancellables)
-        voiceController.$fingerOffset
-            .receive(on: RunLoop.main)
-            .sink { [weak self] o in self?.voiceOverlay?.fingerOffset = o }
-            .store(in: &cancellables)
+        // transcript / direction / fingerOffset are NOT mirrored: the overlay's
+        // root view observes the controller directly, so the SwiftUI animations
+        // survive (mirroring meant rebuilding the root view, which killed them).
         voiceController.$showPreview
             .receive(on: RunLoop.main)
             .sink { [weak self] show in
@@ -498,12 +489,12 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         if let existing = voiceOverlay {
             overlay = existing
         } else {
-            overlay = MacVoiceOverlay(frame: NSRect(origin: .zero, size: MacVoiceOverlay.preferredSize))
+            overlay = MacVoiceOverlay(controller: voiceController,
+                                      frame: NSRect(origin: .zero,
+                                                    size: MacVoiceOverlay.preferredSize))
             addSubview(overlay)   // on top of the panes + divider overlay
             voiceOverlay = overlay
         }
-        overlay.transcript = ""
-        overlay.direction = .none
 
         // Center the overlay at the press point (screen → host coords), clamped.
         let size = MacVoiceOverlay.preferredSize

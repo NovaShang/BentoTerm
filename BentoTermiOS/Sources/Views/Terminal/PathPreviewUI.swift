@@ -168,65 +168,10 @@ struct FilePreviewSheet: View {
 
     private func loaded(_ data: FilePreviewData) -> some View {
         VStack(spacing: 0) {
-            header(data)
-            Divider()
             content(data)
+                .padding(.top, 18)   // room under the sheet grabber
             Divider()
             footer(data)
-        }
-    }
-
-    private func header(_ data: FilePreviewData) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: iconName(data))
-                .font(.system(size: 22))
-                .foregroundStyle(Color(BentoBrand.emerald))
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(data.fileName)
-                        .font(.system(size: 15, weight: .semibold))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if let line = data.line {
-                        Text("line \(line)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color(BentoBrand.border).opacity(0.5)))
-                    }
-                }
-                Text(data.resolvedPath)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(subtitle(data))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 18)
-        .padding(.bottom, 10)
-    }
-
-    private func subtitle(_ data: FilePreviewData) -> String {
-        var parts = [FilePreviewLoader.sizeLabel(data.stat.size)]
-        if let m = data.stat.modified {
-            parts.append(m.formatted(date: .abbreviated, time: .shortened))
-        }
-        parts.append(data.hostLabel)
-        return parts.joined(separator: " · ")
-    }
-
-    private func iconName(_ data: FilePreviewData) -> String {
-        switch data.content {
-        case .directory: return "folder"
-        case .image: return "photo"
-        case .binary: return "doc"
-        case .text: return "doc.text"
         }
     }
 
