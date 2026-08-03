@@ -1,5 +1,4 @@
 import Foundation
-import BentoFoundationKit
 
 /// Authoritative cell grid reported by the rendering engine. This is what must
 /// drive the tmux client / PTY size — never homemade cell math, or TUI wrapping

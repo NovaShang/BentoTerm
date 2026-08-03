@@ -1,6 +1,6 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
-import BentoTerminalCore
+import BentoFoundationKit
 
 /// Find bar for one pane's scrollback (⌘F). Floats over the TOP-RIGHT of the
 /// surface and deliberately never reflows it: the surface's pixel size IS the
@@ -19,11 +19,10 @@ import BentoTerminalCore
 @MainActor
 final class PaneSearchBar: NSView, NSTextFieldDelegate {
 
-    /// Fires (debounced) as the user types. Empty string = clear the search.
-    var onQueryChanged: ((String) -> Void)?
-    var onNext: (() -> Void)?
-    var onPrevious: (() -> Void)?
-    var onClose: (() -> Void)?
+    /// Shared find-bar state — debounce, counts, callbacks. The surface wires
+    /// `onQueryChanged`/`onNext`/`onPrevious`/`onClose`; the count label tracks
+    /// `onCountsChanged` (see SearchBarModel).
+    let model = SearchBarModel()
 
     private let background = NSVisualEffectView()
     private let field = NSTextField()
@@ -31,12 +30,6 @@ final class PaneSearchBar: NSView, NSTextFieldDelegate {
     private let prevButton = NSButton()
     private let nextButton = NSButton()
     private let closeButton = NSButton()
-
-    private var debounce: DispatchWorkItem?
-
-    /// Typing must not fire a search per keystroke — each one walks the whole
-    /// scrollback in the engine. Short enough to still feel live.
-    private static let debounceMs = 120
 
     static let barHeight: CGFloat = 30
     /// Preferred width. A pane narrower than this gets the full width instead
@@ -83,6 +76,12 @@ final class PaneSearchBar: NSView, NSTextFieldDelegate {
         count.textColor = .secondaryLabelColor
         count.alignment = .right
         addSubview(count)
+
+        model.onCountsChanged = { [weak self] text in
+            guard let self else { return }
+            self.count.stringValue = text ?? ""
+            self.layoutCount()
+        }
 
         configure(prevButton, symbol: "chevron.up", description: "Previous match",
                   action: #selector(previousTapped))
@@ -139,26 +138,6 @@ final class PaneSearchBar: NSView, NSTextFieldDelegate {
 
     // MARK: - State
 
-    /// `total` / `selected` as libghostty reports them (nil = the engine sent -1,
-    /// meaning "none"). `selected` is the engine's index into the match list, so
-    /// it is displayed +1.
-    func setCounts(total: Int?, selected: Int?) {
-        guard !field.stringValue.isEmpty else {
-            count.stringValue = ""
-            layoutCount()
-            return
-        }
-        let totalCount = total ?? 0
-        if totalCount == 0 {
-            count.stringValue = "0/0"
-        } else if let selected, selected >= 0 {
-            count.stringValue = "\(selected + 1)/\(totalCount)"
-        } else {
-            count.stringValue = "–/\(totalCount)"
-        }
-        layoutCount()
-    }
-
     private func layoutCount() {
         count.sizeToFit()
         needsLayout = true
@@ -180,39 +159,23 @@ final class PaneSearchBar: NSView, NSTextFieldDelegate {
         return false
     }
 
-    func cancelPendingQuery() {
-        debounce?.cancel()
-        debounce = nil
-    }
-
     // MARK: - Actions
 
-    @objc private func previousTapped() { onPrevious?() }
-    @objc private func nextTapped() { onNext?() }
-    @objc private func closeTapped() { onClose?() }
+    @objc private func previousTapped() { model.onPrevious?() }
+    @objc private func nextTapped() { model.onNext?() }
+    @objc private func closeTapped() { model.onClose?() }
 
     // MARK: - NSTextFieldDelegate
 
     func controlTextDidChange(_ obj: Notification) {
-        debounce?.cancel()
-        let text = field.stringValue
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.debounce = nil
-            self.onQueryChanged?(text)
-            // An empty field has no counts to show.
-            if text.isEmpty { self.setCounts(total: nil, selected: nil) }
-        }
-        debounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.debounceMs),
-                                      execute: work)
+        model.queryChanged(field.stringValue)
     }
 
     func control(_ control: NSControl, textView: NSTextView,
                  doCommandBy commandSelector: Selector) -> Bool {
         switch commandSelector {
         case #selector(NSResponder.cancelOperation(_:)):
-            onClose?()
+            model.onClose?()
             return true
         case #selector(NSResponder.insertNewline(_:)):
             // Both Return and ⇧Return arrive as insertNewline:, so the modifier
@@ -220,8 +183,8 @@ final class PaneSearchBar: NSView, NSTextFieldDelegate {
             let shift = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
             // Flush any pending keystroke first, or the first Return navigates
             // the previous needle's results.
-            flushPendingQuery()
-            if shift { onPrevious?() } else { onNext?() }
+            model.flushPendingQuery(field.stringValue)
+            if shift { model.onPrevious?() } else { model.onNext?() }
             return true
         case #selector(NSResponder.insertTab(_:)),
              #selector(NSResponder.insertBacktab(_:)):
@@ -230,13 +193,6 @@ final class PaneSearchBar: NSView, NSTextFieldDelegate {
         default:
             return false
         }
-    }
-
-    private func flushPendingQuery() {
-        guard let work = debounce else { return }
-        work.cancel()
-        debounce = nil
-        onQueryChanged?(field.stringValue)
     }
 }
 #endif

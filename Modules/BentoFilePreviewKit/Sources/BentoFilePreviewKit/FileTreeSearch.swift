@@ -13,12 +13,13 @@ public let pathPreviewLog = Logger(subsystem: "com.novashang.bento", category: "
 /// TUI agents rarely print complete paths: bare filenames ("BentoApp.swift"),
 /// repo-root-relative paths while the pane sits in a subdirectory, `…`-
 /// truncated prefixes, hard-wrap join guesses. `SmartPathResolver` resolves
-/// them in escalating passes: direct stat → bounded index of the tree under
-/// the pane's cwd → cwd's ancestors. All matching/ranking intelligence stays
-/// client-side; a `FilePreviewSource` only provides the dumb `listTree` pipe
-/// (transport-independence rule).
+/// them in escalating passes: direct stat → budgeted lazy search of the tree
+/// under the pane's cwd (`TreeWalker` over per-directory listings — no
+/// pre-listed index anymore) → cwd's ancestors. All matching/ranking
+/// intelligence stays client-side; a `FilePreviewSource` only provides the
+/// dumb `listDirectory` pipe (transport-independence rule).
 
-/// One entry of a bounded tree listing, relative to the listing root.
+/// One entry of a tree walk or search result, relative to the walk root.
 public struct FileTreeEntry: Sendable, Equatable {
     public let relPath: String
     public let isDir: Bool
@@ -26,47 +27,6 @@ public struct FileTreeEntry: Sendable, Equatable {
     public init(relPath: String, isDir: Bool) {
         self.relPath = relPath
         self.isDir = isDir
-    }
-}
-
-/// Client-chosen bounds for a tree listing. Each source enforces these
-/// mechanically as it walks; the policy lives here, so a slow SFTP link and a
-/// local FileManager walk are held to the same budget.
-public struct TreeListRequest: Sendable {
-    public var maxDepth = 4
-    public var maxEntries = 2000
-    /// Directory-visit cap for sources that walk with one round trip per
-    /// directory (SFTP) — keeps slow links bounded.
-    public var maxDirs = 256
-    /// Children listed per directory (sorted, so deterministic). One giant
-    /// flat directory must not eat the whole entry budget.
-    public var maxChildrenPerDir = 200
-    public var timeBudget: TimeInterval = 1.5
-    public var skipNames = TreeListRequest.defaultSkipNames
-
-    /// Directories never descended into. Entries starting with `*` match by
-    /// suffix ("*.noindex"); everything else matches the exact name. Heavy,
-    /// machine-generated trees would otherwise drown the entry budget — a
-    /// live repo with an Xcode build/ dir burned all 2000 entries before the
-    /// walk ever reached the source tree.
-    public static let defaultSkipNames: Set<String> = [
-        ".git", "node_modules", ".build", ".swiftpm", "DerivedData", "Pods",
-        "__pycache__", ".venv", "venv", ".cache", ".next", ".gradle", "target",
-        "Build", "XCBuildData", "SourcePackages", "EagerLinkingTBDs",
-        "SwiftExplicitPrecompiledModules", "ModuleCache", "dist", ".Trash",
-        "*.noindex", "*.app", "*.xcarchive", "*.framework", "*.xcframework",
-        "*.dSYM",
-    ]
-
-    public init() {}
-
-    /// Whether a directory named `name` should not be descended into.
-    public func skips(_ name: String) -> Bool {
-        if skipNames.contains(name) { return true }
-        for pattern in skipNames where pattern.hasPrefix("*") {
-            if name.hasSuffix(pattern.dropFirst()) { return true }
-        }
-        return false
     }
 }
 
@@ -144,52 +104,6 @@ public enum PathSearchEngine {
     }
 }
 
-// MARK: - Index cache
-
-/// One bounded tree listing per (source, root), cached briefly so a burst of
-/// taps (or the chip → sheet double resolution) scans the tree once. A source
-/// that can't list — the `FilePreviewSource.listTree` default throws — is
-/// negative-cached so every tap doesn't re-probe it.
-public actor FileTreeIndexCache {
-    public static let shared = FileTreeIndexCache()
-
-    private struct Key: Hashable {
-        let source: ObjectIdentifier
-        let root: String
-    }
-
-    private var cache: [Key: (entries: [FileTreeEntry], builtAt: CFAbsoluteTime)] = [:]
-    private var failed: [Key: CFAbsoluteTime] = [:]
-    private var inFlight: [Key: Task<[FileTreeEntry], Error>] = [:]
-    private static let ttl: CFAbsoluteTime = 20
-    private static let failedTTL: CFAbsoluteTime = 60
-
-    public func entries(source: FilePreviewSource, root: String,
-                        request: TreeListRequest = TreeListRequest()) async throws -> [FileTreeEntry] {
-        let key = Key(source: ObjectIdentifier(source), root: root)
-        let now = CFAbsoluteTimeGetCurrent()
-        if let hit = cache[key], now - hit.builtAt < Self.ttl { return hit.entries }
-        if let failedAt = failed[key], now - failedAt < Self.failedTTL {
-            throw FilePreviewError.unavailable("Tree listing unavailable.")
-        }
-        if let task = inFlight[key] { return try await task.value }
-        let source = source
-        let task = Task { try await source.listTree(root: root, request: request) }
-        inFlight[key] = task
-        defer { inFlight[key] = nil }
-        do {
-            let entries = try await task.value
-            if cache.count >= 8 { cache.removeAll() }   // taps are bursty; tiny cache
-            cache[key] = (entries, CFAbsoluteTimeGetCurrent())
-            failed[key] = nil
-            return entries
-        } catch {
-            failed[key] = CFAbsoluteTimeGetCurrent()
-            throw error
-        }
-    }
-}
-
 // MARK: - Resolver
 
 public enum SmartPathResolver {
@@ -203,6 +117,16 @@ public enum SmartPathResolver {
     /// How far above cwd the ancestor pass probes (repo-root-relative output
     /// from a pane sitting in a subdirectory).
     static let maxAncestorLevels = 4
+
+    /// Tap-search budget: one tap, one quiet miss. Tight enough that a missed
+    /// search stays under a heartbeat on a slow link; loose enough to find
+    /// deep files. SFTP gets parallelism — one round trip per directory, so
+    /// 8 outstanding readdirs collapse the RTT term.
+    static func tapSearchRequest(isLocal: Bool) -> SearchRequest {
+        isLocal
+            ? SearchRequest(maxDirs: 256, timeBudget: 1.0)
+            : SearchRequest(maxDirs: 128, timeBudget: 1.5, parallelism: 8)
+    }
 
     /// Single-path resolution with search fallback — what the preview loader
     /// uses. Absolute and `~` paths resolve directly only.
@@ -238,23 +162,34 @@ public enum SmartPathResolver {
 
         let searchable = paths.enumerated().filter { isSearchable($0.element) }
         if let cwd, cwd.hasPrefix("/"), !searchable.isEmpty {
-            // Pass 2: bounded index of the tree under cwd. The index entries
-            // were just listed, so the first confirming stat almost always
-            // lands — it doubles as fetching the stat the preview needs.
+            // Pass 2: budgeted lazy search under cwd. The old pre-listed index
+            // (depth ≤ 4 / 2000 entries) is gone — `TreeWalker` walks
+            // directories on demand through DirectoryListCache, which IS the
+            // incremental index: the first walk's directories make the second
+            // candidate's walk nearly free. A walk cut off by its budget is
+            // treated as a silent miss (the tap stays quiet; logged).
+            var cutOff: (dirs: Int, root: String)?
             do {
-                let entries = try await FileTreeIndexCache.shared.entries(
-                    source: context.source, root: cwd)
-                pathPreviewLog.log("index root=\(cwd, privacy: .public) entries=\(entries.count)")
-                for (i, p) in searchable {
-                    for m in PathSearchEngine.match(query: normalized(p), entries: entries).prefix(2) {
-                        if let r = try? await context.source.stat(path: cwd + "/" + m, cwd: cwd) {
-                            pathPreviewLog.log("resolved via index [\(i)] → \(r.resolvedPath, privacy: .public)")
+                let budget = Self.tapSearchRequest(isLocal: context.isLocal)
+                for (i, p) in searchable.prefix(2) {
+                    var req = budget
+                    req.maxDirs = max(8, budget.maxDirs / 2)
+                    let outcome = try await TreeWalker.search(
+                        source: context.source, root: cwd, query: normalized(p), request: req)
+                    pathPreviewLog.log("search query=\(normalized(p), privacy: .public) dirs=\(outcome.dirsVisited) partial=\(outcome.partial) matches=\(outcome.entries.count)")
+                    for m in outcome.entries.prefix(2) {
+                        if let r = try? await context.source.stat(path: cwd + "/" + m.relPath, cwd: cwd) {
+                            pathPreviewLog.log("resolved via search [\(i)] → \(r.resolvedPath, privacy: .public)")
                             return Resolution(index: i, resolvedPath: r.resolvedPath, stat: r.stat)
                         }
                     }
+                    if outcome.partial { cutOff = (outcome.dirsVisited, cwd) }
                 }
             } catch {
-                pathPreviewLog.log("index unavailable: \(String(describing: error), privacy: .public)")
+                pathPreviewLog.log("lazy search unavailable: \(String(describing: error), privacy: .public)")
+            }
+            if let cutOff {
+                pathPreviewLog.log("search cut off after \(cutOff.dirs, privacy: .public) directories under \(cutOff.root, privacy: .public) — the tapped fragment may exist deeper")
             }
             // Pass 3: ancestors of cwd, top candidates only.
             for (i, p) in searchable.prefix(2) {

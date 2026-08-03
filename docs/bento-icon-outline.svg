@@ -1,0 +1,29 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    线稿单色版 — 几何与 docs/bento-icon.svg 一致
+    连续圆角边框(外接四个 pane 范围) + 内部单线分隔, 全部单线
+    中性灰线 #8E8E93, prompt 箭头保持 emerald #4ADE80, 背景透明
+    线宽 56 (内缩 28, 外缘圆角仍为 144)
+  -->
+
+  <!-- 连续圆角边框 — 恰好包住四个 pane -->
+  <rect x="28" y="28" width="968" height="968" rx="116"
+        fill="none" stroke="#8E8E93" stroke-width="56"/>
+
+  <!-- 竖直分隔线 · 上排 TL/TR (缝中心 x=472, 上接边框、下接水平线) -->
+  <line x1="472" y1="80" x2="472" y2="492"
+        stroke="#8E8E93" stroke-width="56"/>
+
+  <!-- 水平分隔线 · 上排/下排 (缝中心 y=492, 贯通左右接边框) -->
+  <line x1="80" y1="492" x2="944" y2="492"
+        stroke="#8E8E93" stroke-width="56"/>
+
+  <!-- 竖直分隔线 · 下排 BL/BR (缝中心 x=792, 上接水平线、下接边框) -->
+  <line x1="792" y1="492" x2="792" y2="944"
+        stroke="#8E8E93" stroke-width="56"/>
+
+  <!-- 左上 pane 的 prompt 箭头 (保持 brand emerald) -->
+  <path d="M 215 185 L 305 270 L 215 355"
+        stroke="#4ADE80" stroke-width="56" fill="none"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

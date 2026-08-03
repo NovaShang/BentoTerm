@@ -15,16 +15,16 @@ public protocol FilePreviewSource: AnyObject, Sendable {
     func stat(path: String, cwd: String?) async throws -> (resolvedPath: String, stat: FilePreviewStat)
     /// Read up to `maxBytes` from the start of the file.
     func read(resolvedPath: String, maxBytes: Int) async throws -> Data
-    /// Bounded recursive listing under `root` (absolute), entries relative to
-    /// it — the dumb pipe behind `SmartPathResolver`'s tree search. Sources
-    /// that can't list keep the default, which throws: the resolver degrades
-    /// to direct resolution.
-    func listTree(root: String, request: TreeListRequest) async throws -> [FileTreeEntry]
+    /// One directory's immediate children — the lazy-listing pipe behind
+    /// browse expansion and `TreeWalker`'s search walks. A source that can't
+    /// list keeps the default, which throws: browse shows an error row and
+    /// search degrades to direct resolution.
+    func listDirectory(path: String, request: DirectoryListRequest) async throws -> DirectoryListResult
 }
 
 public extension FilePreviewSource {
-    func listTree(root: String, request: TreeListRequest) async throws -> [FileTreeEntry] {
-        throw FilePreviewError.unavailable("Tree listing not supported on this connection.")
+    func listDirectory(path: String, request: DirectoryListRequest) async throws -> DirectoryListResult {
+        throw FilePreviewError.unavailable("Directory listing not supported on this connection.")
     }
 }
 
@@ -53,6 +53,52 @@ public enum FilePreviewError: LocalizedError {
         case .notAFile(let p): return "Not a regular file: \(p)"
         case .unavailable(let why): return why
         }
+    }
+}
+
+// MARK: - Directory listing (lazy browse + search pipe)
+
+/// One immediate child of a directory, name relative to that directory.
+public struct DirectoryEntry: Sendable, Equatable {
+    public let name: String
+    public let isDir: Bool
+
+    public init(name: String, isDir: Bool) {
+        self.name = name
+        self.isDir = isDir
+    }
+}
+
+/// Client-chosen bounds for a SINGLE directory listing. The old global
+/// budgets (depth / total entries) are gone — the unit of listing is one
+/// readdir, so depth is unlimited and the only cap left is per-directory.
+public struct DirectoryListRequest: Sendable {
+    /// Children returned (source-sorted, deterministic). More than this ⇒
+    /// `DirectoryListResult.truncated == true` — a caller may re-fetch with a
+    /// bigger cap (the cache keys on this, so the re-fetch actually happens).
+    public var maxChildren: Int = 200
+    /// Generous; one readdir on a slow link is a single round trip. A hanging
+    /// source should have its own channel timeouts.
+    public var timeBudget: TimeInterval = 5.0
+
+    public init() {}
+
+    public init(maxChildren: Int = 200, timeBudget: TimeInterval = 5.0) {
+        self.maxChildren = maxChildren
+        self.timeBudget = timeBudget
+    }
+}
+
+public struct DirectoryListResult: Sendable {
+    public let entries: [DirectoryEntry]
+    /// True when more children existed than `request.maxChildren` — computed
+    /// before prefixing, so a directory with exactly `maxChildren` children
+    /// does NOT report truncation.
+    public let truncated: Bool
+
+    public init(entries: [DirectoryEntry], truncated: Bool) {
+        self.entries = entries
+        self.truncated = truncated
     }
 }
 
@@ -277,36 +323,27 @@ public final class LocalFileSource: FilePreviewSource, @unchecked Sendable {
         return try handle.read(upToCount: maxBytes) ?? Data()
     }
 
-    public func listTree(root: String, request: TreeListRequest) async throws -> [FileTreeEntry] {
+    public func listDirectory(path: String, request: DirectoryListRequest) async throws -> DirectoryListResult {
         let fm = FileManager.default
-        var out: [FileTreeEntry] = []
-        var queue: [(rel: String, depth: Int)] = [("", 0)]
-        var dirsVisited = 0
-        let deadline = CFAbsoluteTimeGetCurrent() + request.timeBudget
-        while !queue.isEmpty {
-            guard dirsVisited < request.maxDirs,
-                  CFAbsoluteTimeGetCurrent() < deadline else { break }
-            let (rel, depth) = queue.removeFirst()
-            dirsVisited += 1
-            let dir = rel.isEmpty ? root : root + "/" + rel
-            guard let names = try? fm.contentsOfDirectory(atPath: dir) else { continue }
-            for name in names.sorted().prefix(request.maxChildrenPerDir) {
-                guard out.count < request.maxEntries else { return out }
-                let childRel = rel.isEmpty ? name : rel + "/" + name
-                let childAbs = dir + "/" + name
-                var isDirObj: ObjCBool = false
-                guard fm.fileExists(atPath: childAbs, isDirectory: &isDirObj) else { continue }
-                // A symlinked directory is listed but never descended into
-                // (loop safety); attributesOfItem does not follow links.
-                let isLink = (try? fm.attributesOfItem(atPath: childAbs)[.type])
-                    .flatMap { $0 as? FileAttributeType } == .typeSymbolicLink
-                let isDir = isDirObj.boolValue && !isLink
-                out.append(FileTreeEntry(relPath: childRel, isDir: isDir))
-                if isDir, depth + 1 < request.maxDepth, !request.skips(name) {
-                    queue.append((childRel, depth + 1))
-                }
-            }
+        guard let all = try? fm.contentsOfDirectory(atPath: path) else {
+            throw FilePreviewError.notFound(path)
         }
-        return out
+        // truncation computed BEFORE prefixing (exactly-maxChildren is not truncation)
+        let truncated = all.count > request.maxChildren
+        let sorted = all.sorted()
+        var out: [DirectoryEntry] = []
+        out.reserveCapacity(min(sorted.count, request.maxChildren))
+        for name in sorted.prefix(request.maxChildren) {
+            let childAbs = (path as NSString).appendingPathComponent(name)
+            var isDirObj: ObjCBool = false
+            guard fm.fileExists(atPath: childAbs, isDirectory: &isDirObj) else { continue }
+            // A symlinked directory is reported but never treated as a real
+            // directory (loop safety when a walk descends); attributesOfItem
+            // does not follow links.
+            let isLink = (try? fm.attributesOfItem(atPath: childAbs)[.type])
+                .flatMap { $0 as? FileAttributeType } == .typeSymbolicLink
+            out.append(DirectoryEntry(name: name, isDir: isDirObj.boolValue && !isLink))
+        }
+        return DirectoryListResult(entries: out, truncated: truncated)
     }
 }

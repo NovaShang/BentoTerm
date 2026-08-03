@@ -14,9 +14,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "936C1C72E0FCD9FE9EBCFAAF"
+               BlueprintIdentifier = "56592A641C2C6BE218F9BFD4"
                BuildableName = "BentoTerm.app"
-               BlueprintName = "BentoTermiOS"
+               BlueprintName = "BentoTermMac"
                ReferencedContainer = "container:BentoTerm.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -30,9 +30,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "936C1C72E0FCD9FE9EBCFAAF"
+            BlueprintIdentifier = "56592A641C2C6BE218F9BFD4"
             BuildableName = "BentoTerm.app"
-            BlueprintName = "BentoTermiOS"
+            BlueprintName = "BentoTermMac"
             ReferencedContainer = "container:BentoTerm.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -42,9 +42,9 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "E8C42D40FA1FEA6E13763B7E"
-               BuildableName = "BentoTermTests.xctest"
-               BlueprintName = "BentoTermTests"
+               BlueprintIdentifier = "7E084BEF96B5795C31BA12C5"
+               BuildableName = "BentoTermMacTests.xctest"
+               BlueprintName = "BentoTermMacTests"
                ReferencedContainer = "container:BentoTerm.xcodeproj">
             </BuildableReference>
          </TestableReference>
@@ -64,9 +64,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "936C1C72E0FCD9FE9EBCFAAF"
+            BlueprintIdentifier = "56592A641C2C6BE218F9BFD4"
             BuildableName = "BentoTerm.app"
-            BlueprintName = "BentoTermiOS"
+            BlueprintName = "BentoTermMac"
             ReferencedContainer = "container:BentoTerm.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -81,9 +81,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "936C1C72E0FCD9FE9EBCFAAF"
+            BlueprintIdentifier = "56592A641C2C6BE218F9BFD4"
             BuildableName = "BentoTerm.app"
-            BlueprintName = "BentoTermiOS"
+            BlueprintName = "BentoTermMac"
             ReferencedContainer = "container:BentoTerm.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

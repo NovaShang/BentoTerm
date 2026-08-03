@@ -87,10 +87,12 @@ import BentoFilePreviewKit
 // MARK: - Resolver
 
 /// In-memory source: a fixed set of absolute file paths + a listable tree.
+/// The old canned whole-tree `listTree` is now a per-directory listing map
+/// materialized from the flat relPath list (intermediate dirs included).
 final class MockFileSource: FilePreviewSource, @unchecked Sendable {
     let files: Set<String>            // absolute paths of regular files
     let treeRoot: String
-    let tree: [FileTreeEntry]
+    let dirs: [String: DirectoryListResult]
     let listSupported: Bool
     var statCalls = 0
     var listCalls = 0
@@ -99,8 +101,29 @@ final class MockFileSource: FilePreviewSource, @unchecked Sendable {
          listSupported: Bool = true) {
         self.files = files
         self.treeRoot = treeRoot
-        self.tree = tree
         self.listSupported = listSupported
+        var children: [String: [DirectoryEntry]] = [:]
+        for e in tree {
+            let comps = e.relPath.split(separator: "/")
+            let key = comps.count > 1
+                ? treeRoot + "/" + comps.dropLast().joined(separator: "/")
+                : treeRoot
+            children[key, default: []].append(DirectoryEntry(name: String(comps.last!), isDir: e.isDir))
+        }
+        // Intermediate directories materialize as real dirs.
+        for e in tree {
+            let comps = e.relPath.split(separator: "/")
+            for i in 0..<(comps.count - 1) {
+                let key = i == 0 ? treeRoot : treeRoot + "/" + comps[0..<i].joined(separator: "/")
+                let name = String(comps[i])
+                if !(children[key] ?? []).contains(where: { $0.name == name }) {
+                    children[key, default: []].append(DirectoryEntry(name: name, isDir: true))
+                }
+            }
+        }
+        self.dirs = children.mapValues {
+            DirectoryListResult(entries: $0.sorted { $0.name < $1.name }, truncated: false)
+        }
     }
 
     func stat(path: String, cwd: String?) async throws -> (resolvedPath: String, stat: FilePreviewStat) {
@@ -112,13 +135,13 @@ final class MockFileSource: FilePreviewSource, @unchecked Sendable {
 
     func read(resolvedPath: String, maxBytes: Int) async throws -> Data { Data() }
 
-    func listTree(root: String, request: TreeListRequest) async throws -> [FileTreeEntry] {
+    func listDirectory(path: String, request: DirectoryListRequest) async throws -> DirectoryListResult {
         listCalls += 1
         guard listSupported else {
             throw FilePreviewError.unavailable("unsupported")
         }
-        guard root == treeRoot else { return [] }
-        return tree
+        guard let d = dirs[path] else { throw FilePreviewError.notFound(path) }
+        return d
     }
 }
 
@@ -149,15 +172,43 @@ final class MockFileSource: FilePreviewSource, @unchecked Sendable {
     }
 
     @Test func relativeSuffixFoundViaIndex() async throws {
+        // Regression for the no-prune rule: the match's ancestor "pkg" is a
+        // name in no query component — the walk must still descend it.
         let src = MockFileSource(
-            files: ["/repo/pkg/src/main.rs"],
-            treeRoot: "/repo",
+            files: ["/repo-b/pkg/src/main.rs"],
+            treeRoot: "/repo-b",
             tree: [.init(relPath: "pkg", isDir: true),
                    .init(relPath: "pkg/src", isDir: true),
                    .init(relPath: "pkg/src/main.rs", isDir: false)])
         let r = try await SmartPathResolver.resolveFirst(paths: ["src/main.rs"],
-                                                         context: context(src, cwd: "/repo"))
-        #expect(r.resolvedPath == "/repo/pkg/src/main.rs")
+                                                         context: context(src, cwd: "/repo-b"))
+        #expect(r.resolvedPath == "/repo-b/pkg/src/main.rs")
+    }
+
+    @Test func deepBareFilenameFoundByLazySearch() async throws {
+        // The old index capped depth at 4 — the lazy walk has no depth cap.
+        let src = MockFileSource(
+            files: ["/repo-e/a/b/c/d/e/f.txt"],
+            treeRoot: "/repo-e",
+            tree: [.init(relPath: "a/b/c/d/e/f.txt", isDir: false)])
+        let r = try await SmartPathResolver.resolveFirst(paths: ["f.txt"],
+                                                         context: context(src, cwd: "/repo-e"))
+        #expect(r.resolvedPath == "/repo-e/a/b/c/d/e/f.txt")
+    }
+
+    @Test func secondCandidateOnlyResolves() async throws {
+        // Budget is prorated across the first two candidates — a fruitless
+        // search for candidate 0 must not eat the second candidate's chance
+        // (its walk shares the first one's cached directories, so it's nearly
+        // free).
+        let src = MockFileSource(
+            files: ["/repo-f/a/b/full.txt"],
+            treeRoot: "/repo-f",
+            tree: [.init(relPath: "a/b/full.txt", isDir: false)])
+        let r = try await SmartPathResolver.resolveFirst(
+            paths: ["nope.txt", "full.txt"], context: context(src, cwd: "/repo-f"))
+        #expect(r.index == 1)
+        #expect(r.resolvedPath == "/repo-f/a/b/full.txt")
     }
 
     @Test func ancestorWalkFindsRepoRootRelative() async throws {
@@ -180,11 +231,11 @@ final class MockFileSource: FilePreviewSource, @unchecked Sendable {
     }
 
     @Test func unsupportedListingDegradesGracefully() async throws {
-        let src = MockFileSource(files: ["/repo/deep/hidden.txt"],
-                                 treeRoot: "/repo", tree: [], listSupported: false)
+        let src = MockFileSource(files: ["/repo-c/deep/hidden.txt"],
+                                 treeRoot: "/repo-c", tree: [], listSupported: false)
         await #expect(throws: (any Error).self) {
             _ = try await SmartPathResolver.resolveFirst(paths: ["hidden.txt"],
-                                                         context: self.context(src, cwd: "/repo"))
+                                                         context: self.context(src, cwd: "/repo-c"))
         }
     }
 
@@ -226,29 +277,27 @@ final class MockFileSource: FilePreviewSource, @unchecked Sendable {
         }
     }
 
-    @Test func localSourceListsBoundedTree() async throws {
+    @Test func localSourceListsOneLevelIncludingSkipDirs() async throws {
         let fm = FileManager.default
         let root = NSTemporaryDirectory() + "bento-tree-test-\(UUID().uuidString)"
         defer { try? fm.removeItem(atPath: root) }
-        try fm.createDirectory(atPath: root + "/a/b", withIntermediateDirectories: true)
         try fm.createDirectory(atPath: root + "/node_modules/x", withIntermediateDirectories: true)
         try fm.createDirectory(atPath: root + "/dd.noindex/y", withIntermediateDirectories: true)
-        fm.createFile(atPath: root + "/a/b/deep.txt", contents: Data())
-        fm.createFile(atPath: root + "/node_modules/x/skip.js", contents: Data())
-        fm.createFile(atPath: root + "/dd.noindex/y/junk.o", contents: Data())
         fm.createFile(atPath: root + "/top.md", contents: Data())
 
-        let entries = try await LocalFileSource().listTree(root: root, request: TreeListRequest())
-        let paths = Set(entries.map(\.relPath))
-        #expect(paths.contains("a/b/deep.txt"))
-        #expect(paths.contains("top.md"))
-        #expect(paths.contains("node_modules"))          // listed…
-        #expect(!paths.contains("node_modules/x"))       // …but not descended
-        #expect(!paths.contains("dd.noindex/y"))         // suffix-skip pruned
+        // Browse shows EVERYTHING at one level — skip dirs cost nothing until
+        // expanded. Refusing to descend them is the walker's job (search),
+        // not the listing's.
+        let listing = try await LocalFileSource().listDirectory(path: root, request: .init())
+        let names = Set(listing.entries.map(\.name))
+        #expect(names.contains("top.md"))
+        #expect(names.contains("node_modules"))
+        #expect(names.contains("dd.noindex"))
+        #expect(!names.contains("node_modules/x"))   // one level only
     }
 
     @Test func skipMatcherHandlesSuffixPatterns() {
-        let req = TreeListRequest()
+        let req = SearchRequest()
         #expect(req.skips(".git"))
         #expect(req.skips("Build"))
         #expect(req.skips("Intermediates.noindex"))
@@ -258,23 +307,16 @@ final class MockFileSource: FilePreviewSource, @unchecked Sendable {
         #expect(!req.skips("distX"))
     }
 
-    @Test func perDirChildCapLimitsFlatDirs() async throws {
+    @Test func listDirectoryChildCapLimitsFlatDirs() async throws {
         let fm = FileManager.default
         let root = NSTemporaryDirectory() + "bento-flat-test-\(UUID().uuidString)"
         defer { try? fm.removeItem(atPath: root) }
-        try fm.createDirectory(atPath: root + "/flat", withIntermediateDirectories: true)
-        try fm.createDirectory(atPath: root + "/zz-src", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: root, withIntermediateDirectories: true)
         for i in 0..<40 {
-            fm.createFile(atPath: root + String(format: "/flat/f%03d.txt", i), contents: Data())
+            fm.createFile(atPath: root + String(format: "/f%03d.txt", i), contents: Data())
         }
-        fm.createFile(atPath: root + "/zz-src/real.swift", contents: Data())
-
-        var req = TreeListRequest()
-        req.maxChildrenPerDir = 10
-        let entries = try await LocalFileSource().listTree(root: root, request: req)
-        let flat = entries.filter { $0.relPath.hasPrefix("flat/") }
-        #expect(flat.count == 10)
-        // The flat directory didn't starve its siblings.
-        #expect(entries.contains { $0.relPath == "zz-src/real.swift" })
+        let capped = try await LocalFileSource().listDirectory(path: root, request: .init(maxChildren: 10))
+        #expect(capped.entries.count == 10)
+        #expect(capped.truncated)
     }
 }

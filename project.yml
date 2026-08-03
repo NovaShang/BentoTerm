@@ -34,8 +34,10 @@ packages:
     path: Modules/GhosttyKit
   BentoGhosttyKit:
     path: Modules/BentoGhosttyKit
-  BentoTerminalCore:
-    path: bento-terminal-core
+  BentoSessionKit:
+    path: Modules/BentoSessionKit
+  BentoUISharedKit:
+    path: Modules/BentoUISharedKit
 
 targets:
   BentoTermiOS:
@@ -63,7 +65,8 @@ targets:
       - package: BentoFilePreviewKit
       - package: BentoGhosttyKit
       - package: GhosttyKit
-      - package: BentoTerminalCore
+      - package: BentoSessionKit
+      - package: BentoUISharedKit
     settings:
       base:
         INFOPLIST_KEY_UILaunchScreen_Generation: true
@@ -73,8 +76,8 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Bento needs microphone access for voice input to terminal."
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Bento uses speech recognition to convert voice to text and shell commands."
-        INFOPLIST_KEY_NSFaceIDUsageDescription: "Bento uses Face ID to protect your SSH keys."
-        INFOPLIST_KEY_NSCameraUsageDescription: "Bento uses the camera to scan the pairing QR code shown by your Mac."
+        # No camera / Face ID: the QR-pairing camera and key-protection Face ID
+        # prompts were relay-era leftovers — no code path requests either.
         ITSAppUsesNonExemptEncryption: false
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_FILE: BentoTermiOS/Info.plist
@@ -84,6 +87,11 @@ targets:
         PRODUCT_NAME: BentoTerm
         INFOPLIST_KEY_CFBundleDisplayName: "BentoTerm"
         PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.app
+        # App version surfaced in the Settings About block and reported by
+        # Telemetry (CFBundleShortVersionString). Keep in step with the Mac
+        # target's MARKETING_VERSION — bump alongside release tags.
+        MARKETING_VERSION: "0.1.1"
+        CURRENT_PROJECT_VERSION: 1
 
   BentoTermTests:
     type: bundle.unit-test
@@ -111,6 +119,7 @@ targets:
     sources:
       - BentoTermMac/Sources
       - BentoTermMac/Resources/Assets.xcassets
+      - BentoTermMac/Resources/Fonts
     dependencies:
       - package: BentoTmuxKit
       - package: BentoAgentKit
@@ -119,7 +128,8 @@ targets:
       - package: BentoFilePreviewKit
       - package: BentoGhosttyKit
       - package: GhosttyKit
-      - package: BentoTerminalCore
+      - package: BentoSessionKit
+      - package: BentoUISharedKit
     settings:
       base:
         # Both platform targets ship the same user-facing product name,
@@ -188,7 +198,8 @@ targets:
       - package: BentoFilePreviewKit
       - package: BentoGhosttyKit
       - package: GhosttyKit
-      - package: BentoTerminalCore
+      - package: BentoSessionKit
+      - package: BentoUISharedKit
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true

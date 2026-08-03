@@ -1,6 +1,6 @@
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
-import BentoTerminalCore
+import BentoFoundationKit
 
 /// A small transient message that floats near the bottom of a pane and fades
 /// itself out. It exists for one job: explain a failure AT THE MOMENT IT

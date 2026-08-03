@@ -22,7 +22,6 @@ let package = Package(
         .package(path: "../GhosttyKit"),
         .package(path: "../BentoFoundationKit"),
         .package(path: "../BentoFilePreviewKit"),
-        .package(path: "../../bento-terminal-core"),
     ],
     targets: [
         .target(
@@ -31,10 +30,6 @@ let package = Package(
                 .product(name: "GhosttyKit", package: "GhosttyKit"),
                 "BentoFoundationKit",
                 "BentoFilePreviewKit",
-                // Explicit package identity: the bare-string shorthand can't
-                // resolve this one — identity "bento-terminal-core" (lowercase,
-                // dashed) doesn't match the product name after normalization.
-                .product(name: "BentoTerminalCore", package: "bento-terminal-core"),
             ],
             // The static libghostty needs these at link time. They live on the
             // consumers of the binary (this package — previously core) because

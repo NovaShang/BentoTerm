@@ -1,22 +1,153 @@
 import Foundation
 
-// Rule sets for the non-Claude agents. Same engine, same authoring discipline
-// as `AgentRuleSet.claudeCode` (AgentStatusRules.swift), with one difference in
-// evidence source: the UI invariants below (which strings each agent shows
-// while working / when a permission form is up) are cross-referenced from the
-// public detection manifests of herdr (github.com/ogulcancelik/herdr,
-// AGPL-3.0) — used as FACTUAL reference about third-party agent UIs, and
-// re-expressed here in our own schema/structure/priorities. The matched
-// strings are the agents' own interface text, not herdr's expression. Rules
-// marked "pending live calibration" haven't been verified against our own
-// capture-pane pipeline yet — treat mismatches as calibration bugs, not user
-// error.
+// Built-in agent rule sets for every recognized agent (the schema + engine
+// live in AgentStatusRules.swift). One authoring discipline for all sets; the
+// evidence source differs:
+//   * Claude's rules are authored from first-hand `capture-pane` evidence
+//     (verified on live sessions).
+//   * The other agents' UI invariants (which strings each agent shows while
+//     working / when a permission form is up) are cross-referenced from the
+//     public detection manifests of herdr (github.com/ogulcancelik/herdr,
+//     AGPL-3.0) — used as FACTUAL reference about third-party agent UIs, and
+//     re-expressed here in our own schema/structure/priorities. The matched
+//     strings are the agents' own interface text, not herdr's expression.
+//   * Per-set comments mark calibration status; "pending live calibration"
+//     means not yet verified against our own capture-pane pipeline — treat
+//     mismatches as calibration bugs, not user error.
 //
-// Priority conventions (mirror claudeCode's): title signals ~1100–1050,
+// Priority conventions (claudeCode is the reference): title signals ~1100–1050,
 // transient-overlay skips ~1000, strong on-screen blocker forms ~900, weak
 // blockers ~600, working hints ~500–100, idle markers lowest.
 
 extension AgentRuleSet {
+
+    // MARK: - Registry
+
+    /// Every built-in rule set the detector should know about. Order matters
+    /// only for identity resolution ties (first match wins); keep the
+    /// best-calibrated sets first.
+    static let builtIns: [AgentRuleSet] = [
+        .claudeCode, .codex, .gemini, .opencode, .hermes,
+        .antigravity, .cursorAgent, .copilot, .amp, .cline,
+    ]
+
+    /// Claude Code. Verified on a live session 2026-06-21:
+    ///   * working → title prefix is an animated braille spinner (U+2800–28FF);
+    ///     the footer shows `esc to interrupt`, a live status line `· Inferring…`.
+    ///   * idle    → title prefix is `✳` (U+2733); an empty `❯` input box sits
+    ///     between two `───` rules; footer shows `shift+tab to cycle` etc.
+    ///   * blocked → a permission/selection form: `Do you want to proceed?` with
+    ///     numbered `1. Yes` / `2. No` options, or `enter to select`/`esc to
+    ///     cancel`. Blocked/overlay evidence cross-referenced against herdr's
+    ///     field-tested claude manifest (see this file's header); final
+    ///     first-hand calibration of the bash-permission form still open.
+    static let claudeCode = AgentRuleSet(
+        id: "claude-code",
+        commandPatterns: ["claude"],
+        titleIdentity: [],
+        rules: [
+            // Working: animated braille spinner in the title. Highest confidence.
+            DetectRule(id: "title_working_spinner", status: .working, priority: 1100,
+                       region: .oscTitle,
+                       clause: .regex("^\\s*[\\x{2800}-\\x{28FF}]")),
+
+            // Working corroboration when the title isn't a spinner: the live
+            // footer/status line only appears while generating.
+            DetectRule(id: "footer_working", status: .working, priority: 1050,
+                       region: .bottomNonEmptyLines(4),
+                       clause: .containsAny(["esc to interrupt"])),
+
+            // Transcript viewer (ctrl+o) — a scrolling overlay, not a state
+            // change. Skip so browsing history can't flip the pane state.
+            DetectRule(id: "transcript_viewer", status: nil, priority: 1000,
+                       region: .bottomNonEmptyLines(3),
+                       clause: .all([
+                           .contains(["showing detailed transcript"]),
+                           .any([
+                               .contains(["ctrl+o", "to toggle"]),
+                               .contains(["ctrl+e", "show all"]),
+                               .contains(["ctrl+e", "collapse"]),
+                               .containsAny(["↑↓ scroll", "? for shortcuts"]),
+                           ]),
+                       ])),
+
+            // Model picker (/model) — a transient menu, not a blocker.
+            DetectRule(id: "model_picker", status: nil, priority: 950,
+                       region: .wholeSnapshot,
+                       clause: .all([
+                           .contains(["select model", "enter to set as default", "esc to cancel"]),
+                           .not(.containsAny(["do you want to proceed?", "enter to select"])),
+                       ])),
+
+            // Blocked: the bash-command permission form, corroborated by its
+            // distinctive chrome (tab to amend / ctrl+e to explain) plus the
+            // numbered yes/no option lines.
+            DetectRule(id: "bash_permission_prompt", status: .blocked, priority: 910,
+                       region: .wholeSnapshot,
+                       clause: .all([
+                           .contains(["do you want to proceed?"]),
+                           .containsAny(["bash command", "bash(", "contains expansion",
+                                         "tab to amend", "ctrl+e to explain"]),
+                           .any([
+                               .lineRegex("^\\s*❯?\\s*1\\.\\s*yes\\b"),
+                               .lineRegex("^\\s*2\\.\\s*no\\b"),
+                           ]),
+                       ])),
+
+            // Blocked: an actual permission form on screen. Scoped to
+            // the bottom of the screen so prose in the conversation above can't
+            // false-trigger it.
+            DetectRule(id: "permission_prompt", status: .blocked, priority: 900,
+                       region: .bottomNonEmptyLines(18),
+                       clause: .all([
+                           .containsAny(["do you want to proceed?", "do you want to make this edit",
+                                         "do you want to create", "would you like to proceed"]),
+                           .any([
+                               .lineRegex("(?i)^\\s*❯?\\s*1\\.\\s*yes"),
+                               .lineRegex("(?i)^\\s*2\\.\\s*no"),
+                               .containsAny(["esc to cancel", "enter to confirm"]),
+                           ]),
+                       ])),
+
+            // Blocked: a selection form (navigation + select/cancel controls).
+            DetectRule(id: "selection_form", status: .blocked, priority: 880,
+                       region: .afterLastHorizontalRule,
+                       clause: .all([
+                           .contains(["esc to cancel"]),
+                           .containsAny(["enter to select", "enter to confirm"]),
+                           .containsAny(["to navigate", "↑/↓", "↑↓", "arrow keys"]),
+                       ])),
+
+            // Idle: the empty input box is showing (a lone `❯`) and none of the
+            // blocker controls are present — high-confidence "your turn".
+            DetectRule(id: "idle_prompt_box", status: .idle, priority: 800,
+                       region: .promptBoxBody,
+                       clause: .all([
+                           .lineRegex("^\\s*❯"),
+                           .not(.containsAny(["do you want to", "esc to cancel",
+                                              "enter to select", "to navigate"])),
+                       ])),
+
+            // Blocked, low-confidence catch-all: permission chrome that leaked
+            // past the structured forms above. The `not` guard (an empty live
+            // `❯` prompt anywhere) keeps ordinary conversation prose about
+            // permissions from false-triggering once the turn has ended.
+            DetectRule(id: "legacy_permission_catchall", status: .blocked, priority: 300,
+                       region: .wholeSnapshot,
+                       clause: .all([
+                           .containsAny(["waiting for permission", "tab to amend",
+                                         "ctrl+e to explain", "review your answers",
+                                         "do you want to allow this connection?"]),
+                           .not(.regex("(?m)^\\s*❯\\s*$")),
+                       ])),
+
+            // Idle: the `✳` at-rest marker in the title (lowest priority — a
+            // visible blocker form above always wins).
+            DetectRule(id: "title_idle_marker", status: .idle, priority: 250,
+                       region: .oscTitle,
+                       clause: .regex("^\\s*\\x{2733}")),
+        ]
+    )
 
     /// OpenAI Codex CLI. Full three-state: OSC title carries both a braille
     /// spinner (working) and an explicit "Action Required" (blocked); the

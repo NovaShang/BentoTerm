@@ -163,7 +163,10 @@ public final class TerminalViewModel: ObservableObject {
     /// blue state) — drives the session tab's blue status dot.
     @Published public var agentsDoneUnseen: Int = 0
 
-    public let host: Host
+    // Qualified: the deprecated Foundation `NSHost` leaks into the bare-name
+    // lookup on macOS now that `Host` lives in BentoFoundationKit (it was
+    // module-local here before and shadowed it).
+    public let host: BentoFoundationKit.Host
     let transport: TerminalTransport
     /// The live transport, exposed for app-level features that need
     /// transport-specific capabilities (path-preview's file fetch picks its
@@ -274,7 +277,7 @@ public final class TerminalViewModel: ObservableObject {
     var windowsRefreshRetry: Task<Void, Never>?
     var statePollingTask: Task<Void, Never>?
 
-    public init(host: Host, transport: TerminalTransport, environment: TerminalEnvironment) {
+    public init(host: BentoFoundationKit.Host, transport: TerminalTransport, environment: TerminalEnvironment) {
         self.host = host
         self.transport = transport
         self.environment = environment

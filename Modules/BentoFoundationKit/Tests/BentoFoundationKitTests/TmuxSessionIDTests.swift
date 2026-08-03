@@ -1,5 +1,5 @@
 import XCTest
-@testable import BentoTerminalCore
+@testable import BentoFoundationKit
 
 /// The identity rules that keep a session on this Mac and a session on an ssh
 /// host from being mistaken for each other.

@@ -1,10 +1,11 @@
 import XCTest
 @testable import BentoAgentKit
 
-/// Coverage for the non-Claude rule sets (AgentRulePresets.swift). Fixtures are
-/// synthesized from the UI strings documented in herdr's detection manifests —
-/// the factual evidence source for these agents — so they lock our re-expression
-/// to that evidence until we replace them with first-hand captures.
+/// Coverage for the herdr-derived rule sets (AgentRulePresets.swift) plus the
+/// Claude rules that live there too. Fixtures are synthesized from the UI
+/// strings documented in herdr's detection manifests — the factual evidence
+/// source for these agents — so they lock our re-expression to that evidence
+/// until we replace them with first-hand captures.
 final class AgentRulePresetsTests: XCTestCase {
 
     private let detector = AgentDetector.shared

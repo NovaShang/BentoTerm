@@ -4,7 +4,6 @@ import BentoFoundationKit
 import AppKit
 import Carbon   // TIS* — identifies whether the input source is a plain layout
 import GhosttyKit
-import BentoTerminalCore
 
 /// Wire the runtime's input-source observer (kept in core) to this surface's
 /// layout cache. The surface class lives in the app target now, so the seam
@@ -23,8 +22,11 @@ private let _wireInputSourceCache: Void = {
 // Explicit @MainActor (not inherited from NSView): cross-module, inference
 // through AppKit's @preconcurrency annotation degrades to task-isolated, and
 // Swift 6 callers then reject sending the surface through async hops.
+// Sendable: the class is globally MainActor-isolated, so the conformance is
+// sound — the weak capture in `vm.onRawDataReceived` (a @Sendable closure
+// firing from the parse queue) can then hop back via `Task { @MainActor }`.
 @MainActor
-public final class GhosttyTerminalSurface: NSView, TerminalSurface {
+public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
 
     public var onInput: ((Data) -> Void)?
     public var onSizeChanged: ((TerminalSurfaceSize) -> Void)?
@@ -180,7 +182,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
         pendingReviewEntry = nil
         rightHoldTimer?.invalidate()
         rightHoldTimer = nil
-        searchBar?.cancelPendingQuery()
+        searchBar?.model.cancelPendingQuery()
         searchBar?.removeFromSuperview()
         searchBar = nil
         clearPathHover()
@@ -1811,6 +1813,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
         let seed = prefill ?? surface.flatMap { GhosttySel.selectedText($0) }
         if let seed, !seed.isEmpty, !seed.contains("\n") {
             bar.query = seed
+            bar.model.setQuery(seed)   // counts for a seed that never went through typing
             runSearch(seed)
         }
         layoutSearchBar()
@@ -1820,7 +1823,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     /// Close the find bar and hand the keyboard back to the terminal.
     public func endSearchUI() {
         guard let bar = searchBar else { return }
-        bar.cancelPendingQuery()
+        bar.model.cancelPendingQuery()
         bar.removeFromSuperview()
         searchBar = nil
         // Ask the engine to drop the search LAST: ghostty performs keybind
@@ -1846,6 +1849,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
               !text.isEmpty, !text.contains("\n") else { return }
         let bar = searchBar ?? makeSearchBar()
         bar.query = text
+        bar.model.setQuery(text)
         runSearch(text)
         layoutSearchBar()
     }
@@ -1861,10 +1865,10 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
 
     private func makeSearchBar() -> PaneSearchBar {
         let bar = PaneSearchBar(frame: PaneSearchBar.frame(in: bounds.size))
-        bar.onQueryChanged = { [weak self] text in self?.runSearch(text) }
-        bar.onNext = { [weak self] in self?.findNext() }
-        bar.onPrevious = { [weak self] in self?.findPrevious() }
-        bar.onClose = { [weak self] in self?.endSearchUI() }
+        bar.model.onQueryChanged = { [weak self] text in self?.runSearch(text) }
+        bar.model.onNext = { [weak self] in self?.findNext() }
+        bar.model.onPrevious = { [weak self] in self?.findPrevious() }
+        bar.model.onClose = { [weak self] in self?.endSearchUI() }
         addSubview(bar)
         searchBar = bar
         return bar
@@ -1873,7 +1877,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
     private func runSearch(_ needle: String) {
         guard let surface else { return }
         GhosttySel.search(surface, needle: needle)
-        if needle.isEmpty { searchBar?.setCounts(total: nil, selected: nil) }
+        if needle.isEmpty { searchBar?.model.setCounts(total: nil, selected: nil) }
         setNeedsDraw()
     }
 
@@ -1895,12 +1899,12 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface {
 
     public func handleSearchTotal(_ total: Int?) {
         searchTotal = total
-        searchBar?.setCounts(total: searchTotal, selected: searchSelected)
+        searchBar?.model.setCounts(total: searchTotal, selected: searchSelected)
     }
 
     public func handleSearchSelected(_ selected: Int?) {
         searchSelected = selected
-        searchBar?.setCounts(total: searchTotal, selected: searchSelected)
+        searchBar?.model.setCounts(total: searchTotal, selected: searchSelected)
     }
 
     private var searchTotal: Int?

@@ -4,11 +4,10 @@ import AppKit
 #elseif canImport(UIKit)
 import UIKit
 #endif
-import BentoAgentKit
 
-// View-facing color/tint language for `PaneState` (the enum itself lives in
-// BentoAgentKit with the detection domain that produces it). Platform-specific
-// NSColor/UIColor members stay here in the shared engine, guarded per platform.
+// View-facing color/tint language for `PaneState` (the enum lives in this
+// module with the detection domain that produces it). Platform-specific
+// NSColor/UIColor members are guarded per platform.
 
 public extension PaneState {
     /// The canonical state palette as 0xRRGGBB — ONE source of truth for every

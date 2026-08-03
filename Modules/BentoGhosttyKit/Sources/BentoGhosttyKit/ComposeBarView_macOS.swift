@@ -1,7 +1,7 @@
 import BentoFoundationKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
-import BentoTerminalCore
+import BentoFoundationKit
 
 /// Bottom bar for scroll-review-compose (macOS). Display-only — it never becomes
 /// first responder; the surface owns all key routing and pushes state here. Two

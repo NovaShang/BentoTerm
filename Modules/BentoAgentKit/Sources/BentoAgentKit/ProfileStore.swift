@@ -138,7 +138,7 @@ public final class ProfileStore: ObservableObject {
         ],
         isBuiltIn: true,
         // Precise region/priority engine (preset data; was hardcoded in
-        // AgentStatusRules). Drives working/idle/blocked from a clean snapshot.
+        // AgentRulePresets). Drives working/idle/blocked from a clean snapshot.
         agentRules: .claudeCode,
         // A user-turn starts at a line `❯ ` (U+276F + ASCII space + content).
         // The live empty prompt is `❯`+NBSP, so requiring an ASCII space excludes it.
