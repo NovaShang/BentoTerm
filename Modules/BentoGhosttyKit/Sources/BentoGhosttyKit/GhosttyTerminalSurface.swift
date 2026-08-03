@@ -1,6 +1,5 @@
 import BentoFilePreviewKit
 import BentoFoundationKit
-import BentoTerminalCore
 #if canImport(UIKit)
 import UIKit
 import Metal
@@ -736,6 +735,10 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
 
     public func handleColorChange(kind: ghostty_action_color_kind_e, red: UInt8, green: UInt8, blue: UInt8) {
         guard kind == GHOSTTY_ACTION_COLOR_KIND_BACKGROUND else { return }
+        // Trace every engine bg report (initial resolution / config reload /
+        // OSC 11) — the chrome's fusion depends on it landing; a missing line
+        // here pins a persistent dark-mode seam on the report path.
+        dlog("[color] engine reported bg #\(String(format: "%02X%02X%02X", red, green, blue))")
         reportedBackgroundColor = UIColor(
             red: CGFloat(red) / 255, green: CGFloat(green) / 255,
             blue: CGFloat(blue) / 255, alpha: 1)

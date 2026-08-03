@@ -38,12 +38,13 @@ public struct TerminalColorTheme: Identifiable, Hashable, Codable, Sendable {
 }
 
 public extension TerminalColorTheme {
-    /// Sentinel ID for the system-adaptive DARK theme (ghostty's built-in dark
-    /// default — `writeColorConfig` deliberately writes no palette for it).
+    /// Sentinel ID for the system-adaptive DARK theme. Its declared colors are
+    /// written to the ghostty config like every other theme's (see
+    /// GhosttyRuntime.writeColorConfig) — it once wrote nothing, so ghostty
+    /// rendered its built-in dark default (#292C33) while the chrome's fallback
+    /// painted this theme's declared bg (0x0F1115) → the dark-mode seam.
     static let systemID = "system"
-    /// Sentinel ID for the default LIGHT theme (warm paper, dark ink). Unlike the
-    /// dark "System" theme this DOES write an explicit palette, so light mode
-    /// renders a light terminal instead of ghostty's dark default.
+    /// Sentinel ID for the default LIGHT theme (warm paper, dark ink).
     static let systemLightID = "system-light"
 
     static let builtIn: [TerminalColorTheme] = [

@@ -151,7 +151,13 @@ public final class GhosttyRuntime {
     /// Write the theme's palette into a private XDG ghostty config and point
     /// ghostty at it via `XDG_CONFIG_HOME`. (No palette-setter API in the
     /// prebuilt binary, so a config file is the only route to custom colors.)
-    /// The "system" theme writes no colors → ghostty uses its built-in defaults.
+    /// EVERY theme writes its palette, including the dark "System" theme — it
+    /// used to write nothing (ghostty's built-in default), but the chrome's
+    /// pre-report fallback reads the theme's declared bg, and ghostty's native
+    /// default (#292C33) never matched it → a seam in dark mode. Light mode
+    /// fused only because the light sentinel's white matched the fallback.
+    /// Writing the declared colors makes what ghostty renders == what the
+    /// chrome expects, report or not.
     private static func writeColorConfig(theme: TerminalColorTheme) {
         let fm = FileManager.default
         guard let appSup = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
@@ -169,13 +175,11 @@ public final class GhosttyRuntime {
         lines.append("window-padding-x = 0")
         lines.append("window-padding-y = 0")
         lines.append("window-padding-balance = false")
-        if theme.id != TerminalColorTheme.systemID {
-            lines.append(String(format: "background = %06X", theme.bg))
-            lines.append(String(format: "foreground = %06X", theme.fg))
-            lines.append(String(format: "cursor-color = %06X", theme.cursor))
-            for (i, c) in theme.ansi.prefix(16).enumerated() {
-                lines.append(String(format: "palette = %d=#%06X", i, c))
-            }
+        lines.append(String(format: "background = %06X", theme.bg))
+        lines.append(String(format: "foreground = %06X", theme.fg))
+        lines.append(String(format: "cursor-color = %06X", theme.cursor))
+        for (i, c) in theme.ansi.prefix(16).enumerated() {
+            lines.append(String(format: "palette = %d=#%06X", i, c))
         }
         // Font family is app-wide (no per-surface family field); font SIZE stays
         // per-surface (cfg.font_size). nil token → ghostty's default font.
