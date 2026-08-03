@@ -6,6 +6,10 @@ options:
     macOS: "14.0"
   xcodeVersion: "26.4"
   defaultConfig: Debug
+  # Nest groups per directory so Xcode's navigator mirrors the real
+  # BentoTermiOS/BentoTermMac/... layout instead of flattening every source
+  # root (four top-level "Sources" groups) into the main group.
+  createIntermediateGroups: true
 
 settings:
   base:
