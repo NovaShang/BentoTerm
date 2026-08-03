@@ -241,8 +241,6 @@ extension TerminalViewModel {
     /// deep one adds latency to the window switch that reveals it. 2000 = tmux's
     /// own default `history-limit`. Override without a rebuild via the
     /// `terminal_seed_history_lines` default.
-    /// 2000 = tmux's own default `history-limit`, over a local pty where the
-    /// capture is a pipe read.
     ///
     /// Over a network link it is a very different bill: the same capture is
     /// decrypted and drained on the main thread (iOS does all of that there),

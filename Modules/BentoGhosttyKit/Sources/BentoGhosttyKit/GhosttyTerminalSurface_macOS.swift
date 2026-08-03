@@ -73,7 +73,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// chained through BOTH queues (`enqueueSurfaceFree`) so it can never run
     /// while a parse or a draw is still touching the surface.
     private let ioQueue = DispatchQueue(label: "com.novashang.bento.io", qos: .userInteractive)
-    nonisolated(unsafe) private let surfaceLock = NSLock()
+    private let surfaceLock = NSLock()
     /// TEMP: pane-id label + one-shot flags for the white-screen-on-switch trace. REMOVE when fixed.
     nonisolated(unsafe) public var debugLabel = "?"
     nonisolated(unsafe) private var diagLoggedFeed = false
@@ -2076,7 +2076,4 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
 // the input-context callbacks only ever arrive on the main thread.
 extension GhosttyTerminalSurface: @preconcurrency NSTextInputClient {}
 extension GhosttyTerminalSurface: @preconcurrency GhosttySurfaceUserdata {}
-// MainActor-isolated NSView — Swift 6 app code captures it in @Sendable
-// closures to hop work onto the main actor; the isolation travels with it.
-extension GhosttyTerminalSurface: @unchecked Sendable {}
 #endif

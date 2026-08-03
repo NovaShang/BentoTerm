@@ -281,7 +281,7 @@ public final class GhosttyRuntime {
     /// the main actor and added keystroke latency. We collapse a burst into a
     /// single main-thread tick (the 60fps timer is the backstop, so a dropped
     /// wakeup is at most one frame late).
-    nonisolated(unsafe) private static let wakeupScheduled =
+    private static let wakeupScheduled =
         OSAllocatedUnfairLock(initialState: false)
 
     private static func handleWakeup() {
@@ -299,10 +299,9 @@ public final class GhosttyRuntime {
 
     /// Open a clicked terminal link in the user's default app. Restricted to
     /// web/mail schemes so terminal output can't auto-launch `file://` or custom
-    /// app schemes by emitting a crafted "link".
-    /// Open a URL in the system browser/handler, gated to safe schemes.
-    /// Internal so the surfaces' link-activation paths (iOS tap probe, macOS
-    /// ⌘-click) share the one allowlist with the OPEN_URL action.
+    /// app schemes by emitting a crafted "link". Internal so the surfaces'
+    /// link-activation paths (iOS tap probe, macOS ⌘-click) share the one
+    /// allowlist with the OPEN_URL action.
     public static func openExternalURL(_ string: String) {
         guard let url = URL(string: string),
               let scheme = url.scheme?.lowercased(),

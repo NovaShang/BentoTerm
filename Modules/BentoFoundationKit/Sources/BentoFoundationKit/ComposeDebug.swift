@@ -13,7 +13,9 @@ public enum ComposeDebug {
     /// Master switch. Set true to capture phase transitions to the log file when
     /// diagnosing the scroll-review-compose interaction; off in production (every
     /// call site is `@autoclosure`-gated, so disabled = zero string-building I/O).
-    public static var enabled = false
+    // Read from the libghostty callback thread and flipped from app code —
+    // both legitimately; `nonisolated(unsafe)` says the race is deliberate.
+    public nonisolated(unsafe) static var enabled = false
 
     private static let queue = DispatchQueue(label: "com.bento.composedebug")
 

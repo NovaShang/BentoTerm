@@ -39,7 +39,11 @@ extension TerminalViewModel {
     /// records — `.duplicateCurrent` is only reached from the *Duplicate*
     /// menu item, not from the split every user actually presses. So ask for
     /// the pair here, purely to remember it.
+    ///
+    /// Fire-and-forget, no seed — the seeded variant (`splitPane(horizontal:seed:)`,
+    /// in Structure.swift) awaits and resolves a seed; pick by whether you need one.
     public func splitPane(horizontal: Bool) {
+        guard usingTmux else { return }
         if let activePaneID {
             tmuxService.sendFireAndForget(.selectPane(id: activePaneID))
         }

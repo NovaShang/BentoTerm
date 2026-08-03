@@ -21,7 +21,7 @@ public final class AgentWizardModel: ObservableObject {
     @Published public var error: String?
 
     public init(
-        sessionName: String = "agent-\(Int(Date().timeIntervalSince1970) % 10_000)",
+        sessionName: String = "agent-\(UUID().uuidString.prefix(8))",
         // NSHomeDirectory() (not FileManager's homeDirectoryForCurrentUser,
         // which is macOS-only): on Mac it's the user's home — same value the
         // Mac wizard always used — and on iOS it's the sandbox home, which is

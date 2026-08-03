@@ -475,8 +475,6 @@ public final class TerminalViewModel: ObservableObject {
         }
     }
 
-
-
     /// Synchronous hook invoked right after `%layout-change` geometry is applied,
     /// before the subsequent repaint output is processed. The view layer sets
     /// this to re-tile its surfaces. See `applyLayoutGeometry`.
