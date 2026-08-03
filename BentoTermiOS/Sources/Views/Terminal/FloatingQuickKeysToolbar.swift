@@ -1,43 +1,59 @@
 import UIKit
-import BentoTerminalCore
+import BentoSessionKit
 import BentoFoundationKit
+import BentoGhosttyKit
 
 /// Floating control strip for the active pane. Carries the agent-prompt nav
-/// keys (↑ ↓ ↵ Esc Tab) and — for tmux panes — the pane actions (zoom + menu) that
-/// used to live in the title bar. In tiled mode the title bar is only one
-/// character cell tall, too short to host touch targets, so these moved here.
+/// keys (↑ ↓ ↵ Esc) and — for tmux panes — the pane menu that used to live in
+/// the title bar. In tiled mode the title bar is only one character cell tall,
+/// too short to host touch targets, so these moved here.
 ///
 /// Rendered as a Liquid Glass capsule (`UIGlassEffect`, iOS 26+); older systems
-/// fall back to an opaque Bento card. Docked **just below the active pane**,
-/// right-aligned. The host reserves a fixed bottom band (`reservedBand`) so for
-/// the bottom-most / full-screen pane the toolbar lands in that terminal-free
-/// strip and never overlaps content; for a non-bottom tiled pane it sits over
-/// the neighbour below (by design — the keys belong to the active pane). Hidden
-/// while the keyboard is up, where the docked key bar takes over.
+/// fall back to an opaque Bento card. The host docks it **just below the active
+/// pane**, right-aligned: in non-fullscreen it reserves a dedicated band in
+/// `pageRect` (`reservedBand`) so the bar never overlaps the terminal grid; in
+/// fullscreen it floats OVER the pane content instead — clamped just above the
+/// home-indicator strip for the bottom-most / full-screen pane, or over the
+/// neighbour below for a non-bottom tiled pane (the keys belong to the active
+/// pane). `reservedBand` also serves as the voice compass's bottom edge clamp.
+/// Collapse is a bar-internal state: the bar folds sideways into a
+/// perfect-circle chevron (smaller occlusion) but never changes the band — the
+/// host's layout is untouched. Hidden while the keyboard is up, where the
+/// docked key bar takes over.
 final class FloatingQuickKeysToolbar: UIView {
 
     // MARK: - Public API
 
     var onKeyTap: ((AccessoryKey) -> Void)?
 
-    /// Tapped the zoom (maximize / restore) action.
-    var onZoomTap: (() -> Void)?
-
     /// The pane-menu button — the host sets `.menu` to the active pane's menu
-    /// (Split / Rename / Profile / Close). Shown only when `showsPaneActions`.
+    /// (Find / Maximize / Paste / Split / Profile / Close). Shown only when
+    /// `showsPaneActions`.
     let menuButton = UIButton(type: .system)
 
-    /// Show the pane-action group (zoom + menu). False for a non-tmux single
-    /// pane, which has nothing to split or zoom.
+    /// Show the pane-menu button. False for a non-tmux single pane, which has
+    /// no pane menu.
     var showsPaneActions: Bool = false {
         didSet { if oldValue != showsPaneActions { rebuild() } }
     }
 
-    /// Whether the active pane is zoomed — drives the zoom icon (expand vs.
-    /// restore).
-    var isZoomed: Bool = false {
-        didSet { if oldValue != isZoomed { updateZoomIcon() } }
+    /// Collapsed: the bar folds sideways into a perfect-circle chevron (tap to
+    /// unfold back). A bar-internal state — the host's reserved band and grid
+    /// are untouched, only the bar's own geometry changes.
+    var isCollapsed: Bool = false {
+        didSet {
+            guard oldValue != isCollapsed else { return }
+            // Cross-fade the capsule contents; the width change lands on the
+            // host's next re-position (never a layout pass — the grid must not
+            // move for a collapse).
+            UIView.transition(with: contentHost, duration: 0.15,
+                              options: [.transitionCrossDissolve]) { self.rebuild() }
+        }
     }
+
+    /// Fired on the collapse/expand tap with the NEW value. The host persists
+    /// it and re-positions (the frame's width changed; layout is unaffected).
+    var onCollapseToggle: ((Bool) -> Void)?
 
     // MARK: - Layout constants
 
@@ -50,14 +66,14 @@ final class FloatingQuickKeysToolbar: UIView {
     // MARK: - Keys
 
     /// Minimal set tuned for agent prompt navigation: arrows step through
-    /// option lists, Enter confirms, Esc dismisses, Tab completes / moves field.
+    /// option lists, Enter confirms, Esc dismisses. Tab and paste moved off
+    /// the bar (2026-08-02 user decision — the bar was longer than the
+    /// screen); paste lives in the pane menu, Tab was dropped.
     private static let keys: [Spec] = [
         .symbol(.up, system: "arrow.up"),
         .symbol(.down, system: "arrow.down"),
         .symbol(.enter, system: "return"),
         .text(.escape, label: "Esc"),
-        .text(.tab, label: "Tab"),
-        .symbol(.paste, system: "doc.on.clipboard"),
     ]
 
     private enum Spec {
@@ -81,7 +97,9 @@ final class FloatingQuickKeysToolbar: UIView {
     /// The view that hosts the key stack + separators — glass `contentView` or card.
     private var contentHost: UIView { glassView?.contentView ?? card }
     private let stack = UIStackView()
-    private let zoomButton = UIButton(type: .system)
+    /// Collapse / expand chevron — persistent across rebuilds; its icon and
+    /// presence depend on `isCollapsed`.
+    private let collapseButton = UIButton(type: .system)
     /// Hairlines between buttons, rebuilt with the stack.
     private var separators: [UIView] = []
 
@@ -177,33 +195,54 @@ final class FloatingQuickKeysToolbar: UIView {
         ])
     }
 
-    /// Configure the persistent zoom + menu buttons (reused across rebuilds).
+    /// Configure the persistent menu + collapse buttons (reused across rebuilds).
     private func configureActionButtons() {
-        zoomButton.configuration = symbolConfig("arrow.up.left.and.arrow.down.right")
-        applyButtonStyle(zoomButton)
-        zoomButton.addAction(UIAction { [weak self] _ in self?.onZoomTap?() }, for: .touchUpInside)
-
         menuButton.configuration = symbolConfig("ellipsis")
         applyButtonStyle(menuButton)
         menuButton.showsMenuAsPrimaryAction = true
         // Stable hook for UI tests — the nav bar has its own "More" ellipsis,
         // so the accessibility text alone is ambiguous.
         menuButton.accessibilityIdentifier = "pane-menu"
+
+        // NO 48pt min width: the collapsed state is a 38×38 circle, and the
+        // button must fit inside it (the stack's fillEqually stretches it).
+        collapseButton.configuration = symbolConfig("chevron.right")
+        applyButtonStyle(collapseButton, minWidth: nil)
+        collapseButton.accessibilityLabel = "Collapse quick keys"
+        collapseButton.addAction(UIAction { [weak self] _ in self?.collapseTapped() },
+                                 for: .touchUpInside)
     }
 
-    /// Rebuild the stack from the nav keys plus, when enabled, the pane-action
-    /// group. Cheap and infrequent (only when the mode flips).
+    /// Rebuild the stack from the nav keys plus, when enabled, the pane menu.
+    /// Cheap and infrequent (only when the mode flips).
     private func rebuild() {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         separators.forEach { $0.removeFromSuperview() }
         separators.removeAll()
 
+        // Collapsed: a single chevron in a perfect circle (the bar's height
+        // is its diameter — see `layoutFittingSize`), nothing else — the tap
+        // that made it small is the one that unfolds it again.
+        if isCollapsed {
+            collapseButton.configuration = symbolConfig("chevron.left")
+            collapseButton.accessibilityLabel = "Expand quick keys"
+            stack.addArrangedSubview(collapseButton)
+            invalidateIntrinsicContentSize()
+            return
+        }
+
+        // The bar folds sideways — right-aligned, so its left end retracts
+        // toward the right anchor (chevron.right); the circle unfolds back
+        // toward the left (chevron.left above).
+        collapseButton.configuration = symbolConfig("chevron.right")
+        collapseButton.accessibilityLabel = "Collapse quick keys"
+
         var items: [UIView] = Self.keys.map { makeKeyButton(spec: $0) }
         let actionStart = items.count
         if showsPaneActions {
-            items.append(zoomButton)
             items.append(menuButton)
         }
+        items.append(collapseButton)
 
         for (index, btn) in items.enumerated() {
             stack.addArrangedSubview(btn)
@@ -245,9 +284,12 @@ final class FloatingQuickKeysToolbar: UIView {
         return config
     }
 
-    /// Shared highlight + minimum-width styling for every button.
-    private func applyButtonStyle(_ btn: UIButton) {
-        btn.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.buttonWidth).isActive = true
+    /// Shared highlight + minimum-width styling for every button. `minWidth`
+    /// nil = no width floor (the collapse button, which must fit a 38pt circle).
+    private func applyButtonStyle(_ btn: UIButton, minWidth: CGFloat? = FloatingQuickKeysToolbar.buttonWidth) {
+        if let minWidth {
+            btn.widthAnchor.constraint(greaterThanOrEqualToConstant: minWidth).isActive = true
+        }
         btn.configurationUpdateHandler = { button in
             var updated = button.configuration
             updated?.background.backgroundColor = button.isHighlighted
@@ -288,11 +330,10 @@ final class FloatingQuickKeysToolbar: UIView {
         return btn
     }
 
-    private func updateZoomIcon() {
-        let name = isZoomed
-            ? "arrow.down.right.and.arrow.up.left"
-            : "arrow.up.left.and.arrow.down.right"
-        zoomButton.configuration = symbolConfig(name)
+    @objc private func collapseTapped() {
+        let next = !isCollapsed
+        isCollapsed = next            // didSet → rebuild() (cross-faded)
+        onCollapseToggle?(next)
     }
 
     // MARK: - Positioning
@@ -304,16 +345,17 @@ final class FloatingQuickKeysToolbar: UIView {
     /// Inset of the toolbar's right edge from the pane's right edge.
     private static let rightInset: CGFloat = 8
 
-    /// Total height the host must reserve at the bottom of the page so the
-    /// toolbar never overlaps the active pane's content: the toolbar plus its
-    /// top/bottom gaps.
+    /// Band the host reserves for the bar in `pageRect` while non-fullscreen
+    /// (the bar docks inside it, never over the grid). Also the height the
+    /// voice compass clears at the bottom of the page so its down target
+    /// doesn't land on the bar.
     static var reservedBand: CGFloat { toolbarHeight + paneGap + bottomGap }
 
-    /// Frame in `containerBounds`'s space: **right-aligned to the pane and docked
-    /// just below its bottom edge**. The host reserves `reservedBand` at the page
-    /// bottom, so for the bottom-most / full-screen pane this lands in that
-    /// terminal-free band; for a non-bottom tiled pane it sits over the neighbour
-    /// below (by design). Clamped to stay on screen.
+    /// Frame in `containerBounds`'s space: **right-aligned to the pane and
+    /// floated just below its bottom edge**, over the content. The host passes
+    /// `containerBounds` with the home-indicator strip already cut off, so the
+    /// clamp keeps the toolbar above it; for a non-bottom tiled pane it sits
+    /// over the neighbour below (by design). Clamped to stay on screen.
     func computeFrame(paneFrame: CGRect, containerBounds: CGRect) -> CGRect {
         let intrinsicW = max(intrinsicContentSize.width, layoutFittingSize().width)
         let size = CGSize(width: intrinsicW, height: Self.toolbarHeight)
@@ -350,6 +392,11 @@ final class FloatingQuickKeysToolbar: UIView {
     }
 
     private func layoutFittingSize() -> CGSize {
+        // Collapsed: a perfect circle — width == height == the bar height,
+        // matching the capsule's existing cornerRadius (height/2).
+        if isCollapsed {
+            return CGSize(width: Self.toolbarHeight, height: Self.toolbarHeight)
+        }
         stack.layoutIfNeeded()
         let buttonsW = stack.arrangedSubviews.reduce(CGFloat(0)) { acc, view in
             acc + max(view.intrinsicContentSize.width,
@@ -389,18 +436,14 @@ final class FloatingQuickKeysToolbar: UIView {
 /// counts all come from libghostty. This is a field and two chevrons.
 final class PaneFindBar: UIView, UITextFieldDelegate {
 
-    /// Fires (debounced) as the needle changes. Empty string = clear.
-    var onQueryChanged: ((String) -> Void)?
-    var onNext: (() -> Void)?
-    var onPrevious: (() -> Void)?
-    var onClose: (() -> Void)?
+    /// Shared find-bar state — debounce, counts, callbacks (see SearchBarModel,
+    /// the same model the Mac bar uses). The host wires
+    /// `onQueryChanged`/`onNext`/`onPrevious`/`onClose`; the count label tracks
+    /// `onCountsChanged`.
+    let model = SearchBarModel()
 
     static let barHeight: CGFloat = 44
     static let edgeGap: CGFloat = 10
-
-    /// Typing must not run a full scrollback walk per keystroke. Same window the
-    /// Mac bar uses, so both feel alike.
-    private static let debounceMs = 120
 
     private let field = UITextField()
     private let countLabel = UILabel()
@@ -410,7 +453,6 @@ final class PaneFindBar: UIView, UITextFieldDelegate {
     private let stack = UIStackView()
     private let card = UIView()
     private var glassView: UIVisualEffectView?
-    private var debounce: DispatchWorkItem?
 
     var query: String {
         get { field.text ?? "" }
@@ -450,6 +492,10 @@ final class PaneFindBar: UIView, UITextFieldDelegate {
         countLabel.textAlignment = .right
         countLabel.setContentHuggingPriority(.required, for: .horizontal)
         countLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        model.onCountsChanged = { [weak self] text in
+            self?.countLabel.text = text ?? ""
+        }
 
         configure(prevButton, symbol: "chevron.up", label: "Previous match",
                   action: #selector(previousTapped))
@@ -534,60 +580,27 @@ final class PaneFindBar: UIView, UITextFieldDelegate {
 
     var fieldHasFocus: Bool { field.isFirstResponder }
 
-    /// `total` / `selected` as libghostty reports them (nil = the engine's -1,
-    /// "none"). `selected` is its index into the match list, so it shows +1.
-    func setCounts(total: Int?, selected: Int?) {
-        guard !query.isEmpty else {
-            countLabel.text = ""
-            return
-        }
-        let totalCount = total ?? 0
-        if totalCount == 0 {
-            countLabel.text = "0/0"
-        } else if let selected, selected >= 0 {
-            countLabel.text = "\(selected + 1)/\(totalCount)"
-        } else {
-            countLabel.text = "–/\(totalCount)"
-        }
-    }
-
-    func cancelPendingQuery() {
-        debounce?.cancel()
-        debounce = nil
-    }
-
     // MARK: - Actions
 
-    @objc private func previousTapped() { flushPendingQuery(); onPrevious?() }
-    @objc private func nextTapped() { flushPendingQuery(); onNext?() }
-    @objc private func closeTapped() { onClose?() }
+    @objc private func previousTapped() {
+        model.flushPendingQuery(query)
+        model.onPrevious?()
+    }
+    @objc private func nextTapped() {
+        model.flushPendingQuery(query)
+        model.onNext?()
+    }
+    @objc private func closeTapped() { model.onClose?() }
 
     @objc private func textChanged() {
-        debounce?.cancel()
-        let text = query
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.debounce = nil
-            self.onQueryChanged?(text)
-            if text.isEmpty { self.setCounts(total: nil, selected: nil) }
-        }
-        debounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.debounceMs),
-                                      execute: work)
-    }
-
-    private func flushPendingQuery() {
-        guard let work = debounce else { return }
-        work.cancel()
-        debounce = nil
-        onQueryChanged?(query)
+        model.queryChanged(query)
     }
 
     // MARK: - UITextFieldDelegate
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        flushPendingQuery()
-        onNext?()
+        model.flushPendingQuery(query)
+        model.onNext?()
         return false   // keep the keyboard up; you're stepping through hits
     }
 

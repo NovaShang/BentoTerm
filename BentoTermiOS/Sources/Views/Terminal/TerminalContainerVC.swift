@@ -2,7 +2,7 @@ import UIKit
 import SwiftUI
 import Combine
 import BentoAgentKit
-import BentoTerminalCore
+import BentoSessionKit
 import BentoTmuxKit
 import BentoFilePreviewKit
 import BentoFoundationKit
@@ -29,7 +29,10 @@ enum TitleDragPhase {
 /// the concrete renderer.
 final class TerminalContainerVC: UIViewController {
     private(set) var surface: GhosttyTerminalSurface!
-    private let accessoryView = KeyboardAccessoryView()
+    /// The quick-keys bar controller — its row floats in the host's shared
+    /// keyboard-bar overlay (internal so the host can bind the active pane's
+    /// row).
+    let accessoryView = KeyboardAccessoryView()
     let titleBar = PaneTitleBar()
 
     /// Translucent color wash over the terminal surface that signals pane state
@@ -88,6 +91,11 @@ final class TerminalContainerVC: UIViewController {
 
     /// User asked to toggle zoom (maximize / restore) on this pane.
     var onToggleZoom: (() -> Void)?
+
+    /// Whether this pane is currently zoomed — the pane menu's Maximize /
+    /// Restore entry reads it at open time (deferred element), so the host
+    /// wires it once per active-pane change.
+    var isZoomed: (() -> Bool)?
 
     /// User picked a detection profile for this pane (nil = auto-detect).
     var onSetProfile: ((_ profileID: String?) -> Void)?
@@ -344,7 +352,11 @@ final class TerminalContainerVC: UIViewController {
             self?.onFindRequested?(needle)
         }
 
-        surface.inputAccessoryView = accessoryView
+        // The quick-keys bar is no longer an inputAccessoryView (2026-08-02):
+        // it floats as a shared overlay above the keyboard, like the compose
+        // bar — see TerminalWrapperView's FloatingKeyboardBar. The surface
+        // stays the plain first responder, so the keyboard is bare and ~40pt
+        // shorter, and mode switches are pure overlay swaps.
         accessoryView.onKeyTap = { [weak self] key in
             self?.handleAccessoryKey(key)
         }
@@ -354,11 +366,14 @@ final class TerminalContainerVC: UIViewController {
             self?.surface.resignFirstResponder()
         }
         // One-tap back from raw keyboard to the compose box; makes compose the
-        // remembered mode so the next double-tap resumes it.
+        // remembered mode so the next double-tap resumes it. NO explicit
+        // resignFirstResponder: openManagedCompose focuses the compose TextField,
+        // which takes the first responder over from the surface — the keyboard
+        // stays up through the switch (an explicit resign first would collapse
+        // it and re-show it).
         accessoryView.onSwitchToCompose = { [weak self] in
             guard let self else { return }
             Self.prefersRawKeyboard = false
-            self.surface.resignFirstResponder()
             self.openManagedCompose()
         }
 
@@ -1008,8 +1023,11 @@ extension TerminalContainerVC {
         controller.readScreenText = { [weak self] in self?.surface?.readScrollback() }
         controller.onRequestRawKeyboard = { [weak self] in
             // "直接输入" — switching to raw makes raw the remembered mode.
+            // Synchronous becomeFirstResponder: it must take over from the
+            // compose TextField BEFORE the bar is dismissed, or the keyboard
+            // collapses and re-shows through the switch.
             Self.prefersRawKeyboard = true
-            DispatchQueue.main.async { _ = self?.surface.becomeFirstResponder() }
+            _ = self?.surface.becomeFirstResponder()
         }
         controller.beginManualCompose()
     }
@@ -1311,10 +1329,33 @@ extension TerminalContainerVC {
                 },
             ])
         }
+        // Maximize / Restore — state resolved at menu-open (deferred) like the
+        // split entries, since the zoom can flip under the user at any moment
+        // (another client, or the old title-bar target). Moved off the quick
+        // keys bar (2026-08-02 user decision: the bar was longer than the
+        // screen; the zoom button and paste now live here).
+        let zoomSection = UIDeferredMenuElement.uncached { [weak self] completion in
+            let zoomed = self?.isZoomed?() ?? false
+            completion([
+                UIAction(title: zoomed ? "Restore" : "Maximize",
+                         image: UIImage(systemName: zoomed
+                             ? "arrow.down.right.and.arrow.up.left"
+                             : "arrow.up.left.and.arrow.down.right")) { [weak self] _ in
+                    self?.onToggleZoom?()
+                },
+            ])
+        }
         return UIMenu(children: [
             UIAction(title: "Find…",
                      image: UIImage(systemName: "magnifyingglass")) { [weak self] _ in
                 self?.onFindRequested?(nil)
+            },
+            zoomSection,
+            UIAction(title: "Paste",
+                     image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
+                // Same path the bar's paste key used: the pane surface's
+                // clipboard paste.
+                self?.handleAccessoryKey(.paste)
             },
             splitSection,
             copyModeSection,

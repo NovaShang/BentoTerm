@@ -3,10 +3,11 @@ import BentoTmuxKit
 import Combine
 import BentoVoiceKit
 import BentoAgentKit
-import BentoTerminalCore
+import BentoSessionKit
 import BentoFilePreviewKit
 import BentoFoundationKit
 import BentoGhosttyKit
+import BentoUISharedKit
 
 /// Bridges the UIKit terminal views into SwiftUI navigation.
 /// The session has already been picked (and the SSH is up) before this view
@@ -40,9 +41,9 @@ struct TerminalWrapperView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showSettings = false
     /// In-session immersive fullscreen (hides the nav bar; its buttons float
-    /// as glass discs, the session name moves to the bottom strip). Pure UI
-    /// state — deliberately not in the VM (which macOS shares) and not a
-    /// size-class change (which would remount the terminal, see `chrome`).
+    /// as glass discs). Pure UI state — deliberately not in the VM (which
+    /// macOS shares) and not a size-class change (which would remount the
+    /// terminal, see `chrome`).
     @State private var isFullscreen = false
     @State private var showOnboarding: Bool = GestureOnboardingOverlay.shouldShow
     @State private var sizingResolved = false
@@ -66,20 +67,50 @@ struct TerminalWrapperView: View {
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .detailOnly
     /// Reaches the live pane container (see PaneContainerBridge).
     @StateObject private var paneBridge = PaneContainerBridge()
+    /// Keyboard top edge in global (screen) coordinates; nil while hidden.
+    /// Tracked ONCE here and shared by both floating keyboard bars (compose +
+    /// quick-keys) so they move with the same animated value.
+    @State private var keyboardTopGlobal: CGFloat?
+
+    /// The quick-keys bar floats whenever the raw keyboard is up and nothing
+    /// else owns the bottom strip (compose bar, find bar).
+    private var showRawKeyboardBar: Bool {
+        keyboardTopGlobal != nil && !voiceController.showPreview && !paneBridge.findBarActive
+    }
 
     private var host: Host { viewModel.host }
 
     // MARK: - Fullscreen
 
+    /// The fullscreen choice is remembered per DEVICE (not per host/session),
+    /// so a phone that works in fullscreen comes back fullscreen and an iPad's
+    /// manual toggle survives re-entry too. Keyed globally, mirroring how the
+    /// choice is a personal UI preference, not a property of any session.
+    private var fullscreenPreferenceKey: String { "fullscreenMode" }
+
     private func toggleFullscreen() {
         isFullscreen.toggle()
+        UserDefaults.standard.set(isFullscreen, forKey: fullscreenPreferenceKey)
     }
 
-    /// iPhone landscape auto-enters fullscreen; portrait auto-exits. A manual
-    /// toggle (button / menu) wins until the next rotation flips the class.
+    /// First mount: the saved choice wins on iPhone and iPad alike. A fresh
+    /// mount doesn't fire the size-class onChange, so a phone that mounts in
+    /// landscape still gets the auto-enter default on first run (no choice yet).
+    private func restoreFullscreenPreference() {
+        if let saved = UserDefaults.standard.object(forKey: fullscreenPreferenceKey) as? Bool {
+            isFullscreen = saved
+        } else if !isRegularWidth, verticalSizeClass == .compact {
+            isFullscreen = true
+        }
+    }
+
+    /// iPhone landscape auto-enters fullscreen. A saved choice always wins —
+    /// rotation never overrides it — and once fullscreen, rotating to portrait
+    /// never auto-exits: leaving fullscreen is a manual choice.
     private func syncFullscreenToOrientation() {
         guard !isRegularWidth else { return }   // iPad is manual-only
-        isFullscreen = (verticalSizeClass == .compact)
+        guard UserDefaults.standard.object(forKey: fullscreenPreferenceKey) == nil else { return }
+        if verticalSizeClass == .compact { isFullscreen = true }
     }
 
     /// The pane background as a SwiftUI color — the full-screen backdrop of
@@ -220,23 +251,56 @@ struct TerminalWrapperView: View {
     private var terminalChrome: some View {
         chrome
             .ignoresSafeArea(.keyboard)
-            .onAppear { wireVoiceController() }
-            // iPhone landscape → auto-fullscreen; portrait → auto-exit.
+            .onAppear {
+                wireVoiceController()
+                restoreFullscreenPreference()
+            }
+            // iPhone landscape → auto-fullscreen (unless a choice is saved);
+            // no size-class change ever auto-exits fullscreen.
             .onChange(of: verticalSizeClass) { _, _ in syncFullscreenToOrientation() }
             .overlay(alignment: .top) { reconnectingBanner }
             .overlay { voiceOverlay }
             // The managed input surface: an inline bar riding the keyboard's top
             // edge (NOT a modal — the terminal stays visible and pans clear, so
-            // you compose while watching output). ComposeBar tracks the keyboard
-            // frame itself; the hit target is just the bar, the rest of the
+            // you compose while watching output). Both keyboard bars float
+            // through FloatingKeyboardBar, sharing the keyboard top tracked
+            // above — switching modes is a pure overlay swap, the keyboard
+            // never collapses. The hit target is just the bar, the rest of the
             // overlay passes touches through to the panes.
             .overlay(alignment: .bottom) {
+                if showRawKeyboardBar,
+                   let row = paneBridge.container?.focusedOrActiveVC?.accessoryView.makeRow() {
+                    FloatingKeyboardBar(keyboardTopGlobal: keyboardTopGlobal,
+                                        onHeightChanged: { _ in }) {
+                        row
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
                 if voiceController.showPreview {
-                    ComposeBar(controller: voiceController)
+                    ComposeBar(controller: voiceController, keyboardTopGlobal: keyboardTopGlobal)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: voiceController.showPreview)
+            .animation(.easeInOut(duration: 0.2), value: showRawKeyboardBar)
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+                guard let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+                else { return }
+                let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey]
+                    as? Double ?? 0.25
+                // Off-screen frame (hide / undock) → treat as no keyboard.
+                let top: CGFloat? = end.minY >= UIScreen.main.bounds.maxY ? nil : end.minY
+                withAnimation(.easeOut(duration: max(duration, 0.1))) {
+                    keyboardTopGlobal = top
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillHideNotification)) { _ in
+                withAnimation(.easeOut(duration: 0.25)) {
+                    keyboardTopGlobal = nil
+                }
+            }
             .overlay { onboardingOverlay }
             .overlay(alignment: .top) { tipToastView }
             .overlay { stateLegendOverlay }
@@ -393,17 +457,19 @@ struct TerminalWrapperView: View {
                     WindowTabBar(viewModel: viewModel)
                 }
             }
-            // Without the tab bar the terminal reclaims the home-indicator
-            // strip (PRD §2.2 — the page runs to the very bottom edge). With
-            // the bar, the VStack respects the bottom inset and the bar owns
-            // it. The keyboard is ignored on `body` either way: it slides OVER
-            // the bar (hiding it) and never resizes the page (PRD §2.6).
-            .ignoresSafeArea(.container, edges: showsWindowTabs ? [] : .bottom)
+            // Landscape (compact vertical size class): the terminal — and in
+            // List mode the window tab bar under it — runs to the very bottom
+            // edge (PRD §2.2). Portrait: the bottom safe area stays reserved
+            // for the grid, and the tab bar keeps resting above it. The
+            // keyboard is ignored on `body` either way: it slides OVER the bar
+            // (hiding it) and never resizes the page (PRD §2.6).
+            .ignoresSafeArea(.container, edges: verticalSizeClass == .compact
+                ? .bottom
+                : (showsWindowTabs ? [] : .bottom))
         }
-        // Fullscreen: drop the nav bar (its buttons float as glass discs
-        // instead, the session name moves to the bottom strip). Hiding the bar
-        // shrinks safeAreaInsets.top to the status bar, so the grid reclaims
-        // the bar's 44pt by itself — pageRect needs no change.
+        // Fullscreen: drop the nav bar (its buttons float as glass discs).
+        // Hiding the bar shrinks safeAreaInsets.top to the status bar, so the
+        // grid reclaims the bar's 44pt by itself — pageRect needs no change.
         .modifier(FullscreenNavBar(isFullscreen: isFullscreen))
         // Standard system navigation bar (Liquid Glass on iOS 26, no override):
         // back + session-switcher on the left, the mode switch centered, the ⋯
@@ -452,13 +518,14 @@ struct TerminalWrapperView: View {
             }
         }
         // Fullscreen floating chrome (glass discs over the pane background):
-        // back top-left; Files + ⋯ top-right; the session name in the bottom
-        // (non-safe) strip. One overlay to keep this modifier chain type-checkable.
+        // back top-left; Files + ⋯ top-right. One overlay to keep this modifier
+        // chain type-checkable.
         .overlay { if isFullscreen { fullscreenOverlay } }
     }
 
     /// Fullscreen floating chrome as one overlay: top row (back left, Files +
-    /// ⋯ right) above a spacer, session name resting in the bottom strip.
+    /// ⋯ right) above a spacer. The session name used to rest in the bottom
+    /// strip — removed; the terminal owns the whole floor.
     private var fullscreenOverlay: some View {
         VStack {
             HStack {
@@ -468,7 +535,6 @@ struct TerminalWrapperView: View {
             }
             .padding(.top, 8)
             Spacer()
-            fullscreenSessionName
         }
     }
 
@@ -919,19 +985,6 @@ struct TerminalWrapperView: View {
         .padding(.trailing, 12)
     }
 
-    /// The session name, resting in the bottom non-safe strip (home-indicator
-    /// band) while fullscreen — the nav bar is gone, so the name floats there.
-    private var fullscreenSessionName: some View {
-        Text(viewModel.activeTmuxSessionName ?? host.displayName)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(Color.bentoInkDim)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
-            .modifier(GlassChrome(shape: .capsule))
-            .padding(.bottom, 6)
-    }
-
-
     /// Split section — Tiled only (List mode never shows a split entry: inside
     /// Bento you cannot build a third shape). The two seeded entries mirror
     /// List's window creation exactly.
@@ -1079,6 +1132,10 @@ struct TerminalWrapperView: View {
     /// which point `paneBgColor` falls back to the theme bg.
     @Published var terminalBgColor: UIColor?
 
+    /// The find bar is up (its field holds the keyboard) — the floating
+    /// quick-keys bar must hide so the two don't both sit on the keyboard top.
+    @Published var findBarActive = false
+
     override init() {
         super.init()
         NotificationCenter.default.addObserver(
@@ -1124,6 +1181,7 @@ struct SinglePaneSurface: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> PaneContainerVC {
         let vc = PaneContainerVC()
         bridge.container = vc
+        vc.bridge = bridge
         vc.viewModel = viewModel
         vc.voiceController = voiceController
         vc.sizingMode = sizingMode
@@ -1175,6 +1233,9 @@ struct SinglePaneSurface: UIViewControllerRepresentable {
 ///     Its surface drives the tmux client size (device-fit).
 /// Non-tmux sessions are a single pane (focus layout).
 final class PaneContainerVC: UIViewController {
+    /// Back-reference so the find bar's visibility can publish to the SwiftUI
+    /// chrome (the floating quick-keys bar hides while find owns the keyboard).
+    weak var bridge: PaneContainerBridge?
     var viewModel: TerminalViewModel? {
         didSet { wireGeometryHook() }
     }
@@ -1212,6 +1273,12 @@ final class PaneContainerVC: UIViewController {
     }
 
     private let floatingToolbar = FloatingQuickKeysToolbar()
+    /// Collapsed quick-keys bar (a perfect-circle chevron). Persisted per
+    /// device, same convention as `fullscreenMode`. Pure bar-internal state —
+    /// it never touches the reserved band or the grid, so it has no layout
+    /// didSet hook.
+    private static let quickKeysCollapsedKey = "quickKeysBarCollapsed"
+    private var quickKeysCollapsed = false
     private let findBar = PaneFindBar()
     /// The pane the find bar is searching. Held so the bar keeps talking to the
     /// same surface even if the active pane changes underneath it.
@@ -1239,7 +1306,16 @@ final class PaneContainerVC: UIViewController {
         // The find bar occupies the same strip as the compose bar and is never
         // up at the same time, so they share one reserve.
         let reserve = max(composeReserve, findReserve)
-        guard reserve > 0 else { return max(0, keyboardInsetBottom) }
+        guard reserve > 0 else {
+            // Raw keyboard mode: the quick-keys bar floats on the bare
+            // keyboard's top edge (no system accessory anymore). Its height is
+            // FIXED by design, so the occlusion uses the constant directly —
+            // a measured report would land a frame later than the pan (the
+            // overlay renders after the keyboard animation starts) and the
+            // caret would sit under the bar.
+            return max(0, keyboardInsetBottom)
+                + (keyboardInsetBottom > 0 ? AccessoryKeyRow.barHeight : 0)
+        }
         return max(keyboardInsetBottom, view.safeAreaInsets.bottom) + reserve
     }
 
@@ -1375,7 +1451,7 @@ final class PaneContainerVC: UIViewController {
     }
 
     /// The VC the floating toolbar / keyboard target: focused pane, else active.
-    private var focusedOrActiveVC: TerminalContainerVC? {
+    fileprivate var focusedOrActiveVC: TerminalContainerVC? {
         if let s = singlePaneVC { return s }
         if let f = focusedPaneVC { return f }
         if let id = viewModel?.activePaneID, let vc = paneControllers[id] { return vc }
@@ -1630,12 +1706,21 @@ final class PaneContainerVC: UIViewController {
         // columns under the notch/home-indicator that aren't usable (the PTY
         // ends up a few columns too wide and TUIs wrap/misalign).
         //
-        // Reserve a fixed band at the BOTTOM for the floating quick-keys toolbar
-        // so the terminal grid ends above it and never overlaps content. The band
-        // OVERLAPS the home-indicator safe area rather than stacking on top of it
-        // — reserving both double-counts and steals too much height, so we give up
-        // only the toolbar's own band. Keyboard-INDEPENDENT (PRD §2.6) — a
-        // constant layout reserve, not tied to the keyboard.
+        // Bottom reserve is ORIENTATION-DEPENDENT (2026-08-02 user decision):
+        // in landscape the grid reclaims the home-indicator strip and runs to
+        // the very bottom edge (the indicator auto-dims over the last row via
+        // prefersHomeIndicatorAutoHidden). In portrait the bottom safe area
+        // stays reserved so the last row never sits under the indicator.
+        // Keyboard-INDEPENDENT (PRD §2.6) — a constant layout, not tied to the
+        // keyboard.
+        //
+        // Non-fullscreen with a pane, the quick-keys bar owns a dedicated band
+        // on top of the above: `reservedBand` is cut out of the page so the
+        // grid never sits under the bar (2026-08-02 user decision — in
+        // fullscreen the bar floats OVER the content instead and the band is
+        // not reserved). The band is keyboard- and collapse-independent for
+        // the same §2.6 reason: it only changes with manual layout actions
+        // (fullscreen toggle, orientation), never with overlays.
         //
         // Fullscreen: the nav bar is hidden but SwiftUI keeps THIS view's frame
         // (and thus its insets) where it was — the grid would never grow. Reach
@@ -1652,10 +1737,15 @@ final class PaneContainerVC: UIViewController {
         } else {
             top = insets.top
         }
+        // Landscape = compact vertical size class (the phone rotated): reclaim
+        // the strip. Portrait: keep the bottom safe area reserved. Either way,
+        // add the quick-keys band when it owns a dedicated strip.
+        let bottomReserve: CGFloat =
+            (view.traitCollection.verticalSizeClass == .compact ? 0 : insets.bottom)
+            + (quickKeysBandActive ? FloatingQuickKeysToolbar.reservedBand : 0)
         let result = CGRect(x: insets.left, y: top,
                             width: max(0, view.bounds.width - insets.left - insets.right),
-                            height: max(0, view.bounds.height - top
-                                           - FloatingQuickKeysToolbar.reservedBand))
+                            height: max(0, view.bounds.height - top - bottomReserve))
         let winTop = view.window.map { view.convert(.zero, to: $0).y } ?? -1
         dlog("[pageRect] frame=\(view.frame) winTop=\(winTop) full=\(isFullscreen) bounds=\(view.bounds) insets=\(insets) top=\(top) page=\(result)")
         return result
@@ -1699,6 +1789,15 @@ final class PaneContainerVC: UIViewController {
     /// hides while the keyboard is up — the docked accessory key bar covers keys
     /// then, and the toolbar's reserved band sits behind the keyboard anyway.
     private var hasVisiblePane: Bool { singlePaneVC != nil || !paneControllers.isEmpty }
+
+    /// Reserve the quick-keys band in the page? Non-fullscreen with a pane.
+    /// KEYBOARD-INDEPENDENT on purpose (PRD §2.6): show/hide of the keyboard,
+    /// compose bar, or find bar never resizes tmux, so the band stays reserved
+    /// while they cover it (it's behind them anyway). Collapse is a bar-internal
+    /// state — it shrinks the bar, never the band.
+    private var quickKeysBandActive: Bool {
+        !isFullscreen && hasVisiblePane
+    }
 }
 
 // MARK: - Keyboard & compose occlusion
@@ -2221,8 +2320,21 @@ final class PaneDropZoneOverlayView: UIView {
 
 extension PaneContainerVC {
     private func setupFloatingToolbar() {
+        // Restore the per-device collapse choice BEFORE the first layout pass,
+        // so the bar's first frame is already the circle or the full strip.
+        quickKeysCollapsed = UserDefaults.standard.bool(forKey: Self.quickKeysCollapsedKey)
+        floatingToolbar.isCollapsed = quickKeysCollapsed
+
         floatingToolbar.onKeyTap = { [weak self] key in
             self?.focusedOrActiveVC?.handleAccessoryKey(key)
+        }
+        floatingToolbar.onCollapseToggle = { [weak self] collapsed in
+            guard let self else { return }
+            self.quickKeysCollapsed = collapsed
+            UserDefaults.standard.set(collapsed, forKey: Self.quickKeysCollapsedKey)
+            // Only the bar's width changed — the band and grid are untouched,
+            // so this is a re-position, not a layout pass.
+            self.positionFloatingToolbar()
         }
         floatingToolbar.isHidden = true
         view.addSubview(floatingToolbar)
@@ -2247,19 +2359,29 @@ extension PaneContainerVC {
         let origin = contentView.frame.origin
         let anchor = CGRect(x: paneFrame.minX + origin.x, y: paneFrame.minY + origin.y,
                             width: paneFrame.width, height: paneFrame.height)
-        // The reserved band overlaps the home-indicator area, so the toolbar may
-        // sit down into the bottom strip (its own `bottomGap` keeps a small
-        // margin from the edge). It hides while the keyboard is up, so no keyboard
-        // reserve is needed here.
-        let containerBounds = CGRect(x: 0, y: 0, width: view.bounds.width,
-                                     height: view.bounds.height)
+        // Two homes, chosen by `quickKeysBandActive`:
+        //   - Docked: the reserved band between the page bottom and the bottom
+        //     safe inset — the bar sits in its own strip, never over the grid.
+        //   - Floating: over the pane content (fullscreen, where no band is
+        //     reserved), clamped just above the home-indicator strip. Hides
+        //     while the keyboard is up, so no keyboard reserve is needed.
+        let containerBounds: CGRect
+        if quickKeysBandActive {
+            containerBounds = CGRect(x: 0, y: pageRect.maxY,
+                                     width: view.bounds.width,
+                                     height: max(0, view.bounds.height - pageRect.maxY
+                                                     - view.safeAreaInsets.bottom))
+        } else {
+            containerBounds = CGRect(x: 0, y: 0, width: view.bounds.width,
+                                     height: max(0, view.bounds.height - view.safeAreaInsets.bottom))
+        }
         floatingToolbar.updatePosition(paneFrame: anchor,
                                        containerBounds: containerBounds, animated: false)
     }
 
-    /// Point the floating toolbar's zoom + menu at the active pane. Pane actions
-    /// only exist for tmux panes (a non-tmux single pane has nothing to split or
-    /// zoom), so the action group is hidden otherwise.
+    /// Point the floating toolbar's menu at the active pane. Pane actions only
+    /// exist for tmux panes (a non-tmux single pane has no pane menu), so the
+    /// menu button is hidden otherwise.
     private func refreshFloatingToolbarActions(for activeVC: TerminalContainerVC?) {
         let isTmuxPane = activeVC?.paneVM != nil
         floatingToolbar.showsPaneActions = isTmuxPane
@@ -2269,9 +2391,10 @@ extension PaneContainerVC {
         // per-layout-pass calls don't churn UIKit's menu plumbing.
         if floatingToolbar.menuButton.menu !== activeVC.paneMenu {
             floatingToolbar.menuButton.menu = activeVC.paneMenu
+            // The menu's Maximize/Restore entry reads this live at open time
+            // (deferred element), so wiring it once per pane change is enough.
+            activeVC.isZoomed = { [weak self] in self?.viewModel?.zoomedPaneID != nil }
         }
-        floatingToolbar.isZoomed = viewModel?.zoomedPaneID != nil
-        floatingToolbar.onZoomTap = { [weak activeVC] in activeVC?.onToggleZoom?() }
     }
 }
 
@@ -2314,16 +2437,16 @@ extension PaneContainerVC {
         // keyboard, so it must not pan with the tmux page.
         view.addSubview(findBar)
 
-        findBar.onQueryChanged = { [weak self] needle in
+        findBar.model.onQueryChanged = { [weak self] needle in
             self?.findTargetVC?.surface.runSearch(needle)
         }
-        findBar.onNext = { [weak self] in
+        findBar.model.onNext = { [weak self] in
             self?.findTargetVC?.surface.navigateSearch(forward: true)
         }
-        findBar.onPrevious = { [weak self] in
+        findBar.model.onPrevious = { [weak self] in
             self?.findTargetVC?.surface.navigateSearch(forward: false)
         }
-        findBar.onClose = { [weak self] in self?.hideFindBar() }
+        findBar.model.onClose = { [weak self] in self?.hideFindBar() }
     }
 
     /// Open the find bar on the pane the user is working in. A single-line
@@ -2334,16 +2457,18 @@ extension PaneContainerVC {
 
         // The engine reports counts per surface; route this one's to the bar.
         vc.surface.onSearchCounts = { [weak self] total, selected in
-            self?.findBar.setCounts(total: total, selected: selected)
+            self?.findBar.model.setCounts(total: total, selected: selected)
         }
         vc.surface.onSearchEnded = { [weak self] in self?.hideFindBar() }
 
         findBar.isHidden = false
+        bridge?.findBarActive = true
         findReserve = PaneFindBar.barHeight + PaneFindBar.edgeGap
         updateFloatingToolbarVisibility()
 
         if let seed = prefill ?? vc.surface.selectionAsNeedle(), !seed.isEmpty {
             findBar.query = seed
+            findBar.model.setQuery(seed)   // counts for a seed that never went through typing
             vc.surface.runSearch(seed)
         }
         positionFindBar()
@@ -2355,11 +2480,12 @@ extension PaneContainerVC {
 
     func hideFindBar() {
         guard !findBar.isHidden else { return }
-        findBar.cancelPendingQuery()
+        findBar.model.cancelPendingQuery()
         findBar.dismissKeyboard()
         findBar.isHidden = true
+        bridge?.findBarActive = false
         findBar.query = ""
-        findBar.setCounts(total: nil, selected: nil)
+        findBar.model.setCounts(total: nil, selected: nil)
         findReserve = 0
         // Drop the search AND the per-surface reporting hooks, so a pane the bar
         // is no longer pointed at can't drive it.
@@ -2422,7 +2548,9 @@ struct WindowTabBar: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(viewModel.windows) { window in
-                        WindowTab(name: viewModel.windowDisplayName(window.id),
+                        // Body name only — the chips are small, the "N:" index
+                        // prefix adds noise here (the sidebar keeps it).
+                        WindowTab(name: viewModel.windowBodyName(window.id),
                                   state: viewModel.windowState(window.id),
                                   paneCount: viewModel.panes(in: window.id).count,
                                   isActive: window.id == viewModel.activeWindowID)
@@ -2460,12 +2588,10 @@ struct WindowTabBar: View {
             // Transparent: the terminal background (paneBgColor behind) flows
             // through the bar (and under the home indicator — the backdrop
             // already fills it), so the floor fuses with the terminal instead
-            // of wearing a hardcoded hex.
+            // of wearing a hardcoded hex. The chips wear their own glass
+            // (BarItemGlass); the bar itself stays bare.
             Color.clear
         )
-        .overlay(alignment: .top) {
-            Rectangle().fill(Color.bentoBorder).frame(height: 1)
-        }
         .alert(closeAlertTitle, isPresented: Binding(
             get: { pendingClose != nil },
             set: { if !$0 { pendingClose = nil } }
@@ -2555,8 +2681,7 @@ struct WindowTabBar: View {
                 .foregroundStyle(Color.bentoInkDim)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(Capsule().fill(Color.bentoSurface))
-                .overlay(Capsule().strokeBorder(Color.bentoBorder, lineWidth: 1))
+                .modifier(BarItemGlass(isActive: false, state: .idle))
                 .contentShape(Capsule())
         }
     }
@@ -2639,6 +2764,51 @@ struct NewWindowSheet: View {
     }
 }
 
+/// Liquid-glass capsule for the window tab bar's chips — each tab and the
+/// "+" button. The bar itself stays transparent so the terminal flows through
+/// it; only the items wear glass. iOS 26: the chip's glass is tinted by its
+/// window's state (`chromeAccentHex` — working blue, awaiting amber, idle
+/// plain); the active chip wears the full color, inactive chips a weakened
+/// version of the same, so the bar shows every window's state at a glance
+/// while the active tab stays the strongest. Earlier systems: the flat bento
+/// chip with the emerald ring. The chip's content (dot, label, badge) is
+/// INSIDE the glassEffect — anything layered after glass gets swallowed by
+/// the material.
+private struct BarItemGlass: ViewModifier {
+    var isActive: Bool
+    var state: PaneState = .idle
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            let glass = tint.map { Glass.regular.tint($0).interactive() }
+                ?? Glass.regular.interactive()
+            content.glassEffect(glass, in: .capsule)
+        } else {
+            content
+                .background(Capsule().fill(isActive ? Color.bentoSurfaceHi : Color.bentoSurface))
+                .overlay(
+                    Capsule().strokeBorder(isActive ? Color.bentoEmerald : Color.bentoBorder,
+                                           lineWidth: isActive ? 1.5 : 1)
+                )
+        }
+    }
+
+    /// State accent for the glass, from the canonical palette (working blue /
+    /// awaiting amber) — full strength when active, half when not, so the
+    /// state reads on every chip and the active one is the loudest. Idle has
+    /// no state accent: the active chip wears the theme accent (emerald) so a
+    /// resting window's selected tab still stands out; inactive idle chips
+    /// wear plain glass.
+    private var tint: Color? {
+        if let hex = state.chromeAccentHex {
+            let base = Color(PaneState.uiColor(hex: hex))
+            return isActive ? base : base.opacity(0.5)
+        }
+        return isActive ? Color.bentoEmerald : nil
+    }
+}
+
 private struct WindowTab: View {
     var name: String
     var state: PaneState
@@ -2647,14 +2817,21 @@ private struct WindowTab: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(Color(STTheme.dotColor(for: state)))
-                .frame(width: 8, height: 8)
-                .shadow(color: glowColor, radius: glowRadius)
+            // State icon — same glyph language as the sidebar rows: play =
+            // working, question = awaiting, hollow ring = idle. Active: white,
+            // matching the text (the tinted chip owns the color then);
+            // inactive: the state color.
+            Image(systemName: stateIconName)
+                .font(.system(size: 12))
+                .foregroundStyle(isActive ? Color.white : Color(STTheme.dotColor(for: state)))
 
             Text(name.isEmpty ? "window" : name)
                 .font(.system(.footnote, design: .monospaced))
-                .foregroundStyle(isActive ? Color.bentoInk : Color.bentoInkDim)
+                // One active rule for every state: the chip is colored (state
+                // tint, or the theme accent when idle) and the text is white
+                // against it (same rule as the voice compass's lit discs).
+                // Inactive chips sit on plain/weakened glass, dim ink reads.
+                .foregroundStyle(isActive ? Color.white : Color.bentoInkDim)
                 .lineLimit(1)
                 .frame(maxWidth: 140)
 
@@ -2670,27 +2847,18 @@ private struct WindowTab: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(Capsule().fill(isActive ? Color.bentoSurfaceHi : Color.bentoSurface))
-        .overlay(
-            Capsule().strokeBorder(isActive ? Color.bentoEmerald : Color.bentoBorder,
-                                   lineWidth: isActive ? 1.5 : 1)
-        )
+        // Glass chip on iOS 26, tinted by the window's state — active wears
+        // the full color, inactive a weakened version of the same. Flat bento
+        // chip with the emerald ring on earlier systems (deployment target 17).
+        .modifier(BarItemGlass(isActive: isActive, state: state))
         .contentShape(Capsule())
     }
 
-    private var glowColor: Color {
+    private var stateIconName: String {
         switch state {
-        case .awaitingInput: return Color(STTheme.dotColor(for: state)).opacity(0.8)
-        case .working: return Color(STTheme.dotColor(for: state)).opacity(0.6)
-        case .idle: return .clear
-        }
-    }
-
-    private var glowRadius: CGFloat {
-        switch state {
-        case .awaitingInput: return 3
-        case .working: return 2.5
-        case .idle: return 0
+        case .working:       return "play.circle.fill"
+        case .awaitingInput: return "questionmark.circle.fill"
+        case .idle:          return "circle"
         }
     }
 }
