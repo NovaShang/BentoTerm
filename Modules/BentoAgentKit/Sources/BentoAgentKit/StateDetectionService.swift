@@ -12,6 +12,11 @@ import BentoTmuxKit
 public final class StateDetectionService {
     private var lastOutputTime: [TmuxPaneID: Date] = [:]
     private var recentLinesStore: [TmuxPaneID: [String]] = [:]
+    /// Arrival time of each line in `recentLinesStore` (same indexes, trimmed in
+    /// lockstep), so pattern matches can be gated on freshness — a prompt line
+    /// that has gone quiet past `silenceThreshold` must not keep a pane in
+    /// awaitingInput forever.
+    private var recentLinesArrival: [TmuxPaneID: [Date]] = [:]
     /// Raw output buffered per pane, awaiting lazy processing. `recordOutput`
     /// runs on the hot output path (every chunk of every pane), so it must do
     /// no string/regex work — stripping and line-splitting happen on demand
@@ -40,11 +45,6 @@ public final class StateDetectionService {
         pattern: "\\x1b\\[[\\d;]*[A-Za-z]|\\x1b\\][^\\x07]*\\x07|[\\x00-\\x08\\x0e-\\x1f]"
     )
 
-    var recentLines: [TmuxPaneID: [String]] {
-        for pane in Array(pendingRaw.keys) { processPending(pane) }
-        return recentLinesStore
-    }
-
     public init() {}
 
     var profiles: [StateProfile] { ProfileStore.shared.profiles }
@@ -67,7 +67,7 @@ public final class StateDetectionService {
         // after overshooting by a slab (not every chunk once at the cap), so heavy
         // output doesn't pay an O(maxPendingBytes) copy per chunk on the main
         // thread — same memmove-storm pattern as PaneViewModel's history trim.
-        if buf.count > maxPendingBytes + maxPendingBytes {
+        if buf.count > 2 * maxPendingBytes {
             buf = Data(buf.suffix(maxPendingBytes))
         }
         pendingRaw[pane] = buf
@@ -94,28 +94,24 @@ public final class StateDetectionService {
 
         guard !lines.isEmpty else { return }
 
-        lastOutputTime[pane] = arrival ?? Date()
+        let stamp = arrival ?? Date()
+        lastOutputTime[pane] = stamp
         var current = recentLinesStore[pane] ?? []
+        var currentArrivals = recentLinesArrival[pane] ?? []
         current.append(contentsOf: lines)
+        currentArrivals.append(contentsOf: Array(repeating: stamp, count: lines.count))
         if current.count > maxLines {
             current = Array(current.suffix(maxLines))
+            currentArrivals = Array(currentArrivals.suffix(maxLines))
         }
         recentLinesStore[pane] = current
+        recentLinesArrival[pane] = currentArrivals
     }
 
-    /// Compiled-regex cache. Detection runs for every pane on each poll, and
-    /// `NSRegularExpression(pattern:)` compilation dominated that main-thread cost
-    /// (it was recompiled on every call). Compile once, keyed by pattern. Accessed
-    /// only from the (main-thread) detection path, like the other caches here.
-    private var regexCache: [String: NSRegularExpression] = [:]
-
+    /// Compiled-regex cache — shared with AgentDetector's rule engine
+    /// (AgentStatusRules.swift); the pattern set is small, so never recompile.
     private func compiledRegex(_ pattern: String) -> NSRegularExpression? {
-        if let cached = regexCache[pattern] { return cached }
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
-            return nil
-        }
-        regexCache[pattern] = regex
-        return regex
+        AgentDetector.compiled(pattern)
     }
 
     /// Returns true if any of `patterns` matches `text` (case-insensitive regex).
@@ -155,12 +151,19 @@ public final class StateDetectionService {
         let lines = recentLinesStore[pane] ?? []
         let recentText = lines.joined(separator: "\n")
         let titleText = title ?? ""
+        // Only honor an output-pattern match while the pane is still talking:
+        // a prompt line that has sat past `silenceThreshold` is stale (the user
+        // already answered it) and must not keep the pane in awaitingInput
+        // forever. Title patterns aren't gated — a title like "git add" stays
+        // current regardless of output silence.
+        let newestLine = recentLinesArrival[pane]?.max() ?? .distantPast
+        let outputFresh = now.timeIntervalSince(newestLine) <= silenceThreshold
 
         // Manual override (pane menu → Change Profile): use only this profile's
         // patterns, ignoring command matching.
         if let overrideID = paneProfileOverride[pane],
            let profile = profiles.first(where: { $0.id == overrideID }) {
-            if anyMatch(profile.titlePatterns, in: titleText) || anyMatch(profile.outputPatterns, in: recentText) {
+            if anyMatch(profile.titlePatterns, in: titleText) || (outputFresh && anyMatch(profile.outputPatterns, in: recentText)) {
                 return .awaitingInput(profile: profile.id)
             }
             if now.timeIntervalSince(lastOutput) > silenceThreshold { return .idle }
@@ -182,7 +185,7 @@ public final class StateDetectionService {
                 }
 
                 // Title patterns take priority over output patterns (PRD §3.4).
-                if anyMatch(profile.titlePatterns, in: titleText) || anyMatch(profile.outputPatterns, in: recentText) {
+                if anyMatch(profile.titlePatterns, in: titleText) || (outputFresh && anyMatch(profile.outputPatterns, in: recentText)) {
                     return .awaitingInput(profile: profile.id)
                 }
             }
@@ -251,6 +254,7 @@ public final class StateDetectionService {
     public func clearPane(_ pane: TmuxPaneID) {
         lastOutputTime.removeValue(forKey: pane)
         recentLinesStore.removeValue(forKey: pane)
+        recentLinesArrival.removeValue(forKey: pane)
         pendingRaw.removeValue(forKey: pane)
         pendingArrival.removeValue(forKey: pane)
         paneProfileOverride.removeValue(forKey: pane)
@@ -261,7 +265,7 @@ public final class StateDetectionService {
     public func recentText(for pane: TmuxPaneID, lines: Int) -> String {
         processPending(pane)
         let buffer = recentLinesStore[pane] ?? []
-        let slice = buffer.suffix(lines)
+        let slice = buffer.suffix(max(0, lines))
         return slice.joined(separator: "\n")
     }
 }

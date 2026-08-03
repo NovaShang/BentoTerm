@@ -85,10 +85,10 @@ extension TerminalViewModel {
             log.warning("refreshPanes: ignored raced list-panes parse (\(allPanes.count, privacy: .public)/\(paneLineCount, privacy: .public) lines, have \(self.paneViewModels.count, privacy: .public) panes) — re-fetching")
             DIAG("[DUP] refreshPanes DEFER raced parse (\(allPanes.count)/\(paneLineCount) lines) — re-fetch in 250ms; shared layoutChangeDebounce token")
             layoutChangeDebounce?.cancel()
-            layoutChangeDebounce = Task {
+            layoutChangeDebounce = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(250))
-                guard !Task.isCancelled else { return }
-                await refreshPanes()
+                guard let self, !Task.isCancelled else { return }
+                await self.refreshPanes()
             }
             return
         }
@@ -97,6 +97,9 @@ extension TerminalViewModel {
         // updatePaneViewModels → syncPanes tears its surface down = "闪一下就关掉".
         let dropped = Set(sessionPanes.map(\.id)).subtracting(allPanes.map(\.id))
         DIAG("[DUP] refreshPanes APPLY all=[\(allPanes.map { "\($0.id)" }.joined(separator: ","))] active=[\(panes.map { "\($0.id)" }.joined(separator: ","))]\(dropped.isEmpty ? "" : " DROPPED=[\(dropped.map { "\($0)" }.joined(separator: ","))]")")
+        // Panes that no longer exist anywhere: drop their detection state too,
+        // so the per-pane dictionaries don't grow unbounded across splits/closes.
+        for pane in dropped { stateDetection.clearPane(pane) }
         if sessionPanes != allPanes { sessionPanes = allPanes }
         updatePaneViewModels(panes)
         recomputeSessionMode()
@@ -121,10 +124,10 @@ extension TerminalViewModel {
         if usingTmux, !windows.isEmpty, parsed.count != lineCount || parsed.isEmpty {
             log.warning("refreshWindows: ignored corrupt list-windows parse (\(parsed.count, privacy: .public)/\(lineCount, privacy: .public) lines, have \(self.windows.count, privacy: .public)) — re-fetching")
             windowsRefreshRetry?.cancel()
-            windowsRefreshRetry = Task {
+            windowsRefreshRetry = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(300))
-                guard !Task.isCancelled else { return }
-                await refreshWindows()
+                guard let self, !Task.isCancelled else { return }
+                await self.refreshWindows()
             }
             return
         }

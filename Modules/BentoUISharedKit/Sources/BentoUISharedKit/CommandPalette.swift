@@ -172,10 +172,6 @@ private extension Character {
     }
 }
 
-// MARK: - Recents store
-
-/// Persisted, capped recents backing the palette's empty state: files you've
-
 // MARK: - File browsing provider
 
 /// Result of a file-browser query — rows plus the honesty flags for a walk

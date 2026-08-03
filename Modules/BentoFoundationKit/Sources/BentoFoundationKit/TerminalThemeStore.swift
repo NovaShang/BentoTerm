@@ -33,7 +33,11 @@ public struct TerminalColorTheme: Identifiable, Hashable, Codable, Sendable {
         self.bg = (try? c.decode(UInt32.self, forKey: .bg)) ?? 0x000000
         self.fg = (try? c.decode(UInt32.self, forKey: .fg)) ?? 0xFFFFFF
         self.cursor = (try? c.decode(UInt32.self, forKey: .cursor)) ?? 0xFFFFFF
-        self.ansi = (try? c.decode([UInt32].self, forKey: .ansi)) ?? TerminalColorTheme.defaultAnsi
+        // The ghostty consumer writes exactly 16 entries (0-7 normal, 8-15
+        // bright); a corrupt/short palette would silently render a truncated
+        // ansi table, so anything but 16 falls back to the default.
+        let ansi = (try? c.decode([UInt32].self, forKey: .ansi)) ?? []
+        self.ansi = ansi.count == 16 ? ansi : TerminalColorTheme.defaultAnsi
     }
 }
 
@@ -95,10 +99,14 @@ public extension TerminalColorTheme {
         0x000000, 0xC82829, 0x718C00, 0xEAB700, 0x4271AE, 0x8959A8, 0x3E999F, 0xFFFFFF,
     ]
 
-    static func find(id: String) -> TerminalColorTheme {
+    /// Resolve a theme id to a concrete theme: built-ins, then custom themes
+    /// saved on disk. An unknown id falls back to the built-in for the slot's
+    /// own appearance — a light slot never silently lands on a dark palette.
+    static func resolve(id: String, isDark: Bool) -> TerminalColorTheme {
         if let m = builtIn.first(where: { $0.id == id }) { return m }
         if let m = ThemeStore.loadCustomThemes().first(where: { $0.id == id }) { return m }
-        return builtIn[0]
+        return isDark ? builtIn[0]
+                      : builtIn.first { $0.id == systemLightID } ?? builtIn[0]
     }
 
     /// Parse an iTerm2 `.itermcolors` plist into a theme.
@@ -196,7 +204,7 @@ public final class ThemeStore: ObservableObject {
     /// The active terminal theme, resolved from the appearance + per-slot choice.
     /// Replaces the old stored `current`; setting it routes to the active slot.
     public var current: TerminalColorTheme {
-        get { TerminalColorTheme.find(id: effectiveIsDark ? darkThemeID : lightThemeID) }
+        get { TerminalColorTheme.resolve(id: effectiveIsDark ? darkThemeID : lightThemeID, isDark: effectiveIsDark) }
         set { select(id: newValue.id, forDark: effectiveIsDark) }
     }
 
@@ -240,10 +248,20 @@ public final class ThemeStore: ObservableObject {
     /// targets use to CREATE surfaces (iPad 14 / iPhone 12 / mac 13), or a
     /// config reload nudges untouched-slider installs to a different size.
     public var fontSize: Double {
-        let v = UserDefaults.standard.double(forKey: "terminal_font_size")
-        if v > 0 {
-            lastKnownFontSize = v
-            return v
+        resolveFontSize(UserDefaults.standard.double(forKey: "terminal_font_size"))
+    }
+
+    /// Resolve the persisted size, seeding the unlock-race cache in the
+    /// process. UserDefaults can transiently read EMPTY right after device
+    /// unlock (the prefs plist is protected until the first post-unlock read);
+    /// a config reload in that window must answer with the real size, not the
+    /// fallback, or every live surface snaps to the wrong font. Mirrors
+    /// STTheme.terminalFontSize's cache. (An explicit method rather than a
+    /// side-effectful getter so the mutation is visible at the call site.)
+    private func resolveFontSize(_ persisted: Double) -> Double {
+        if persisted > 0 {
+            lastKnownFontSize = persisted
+            return persisted
         }
         if lastKnownFontSize > 0 { return lastKnownFontSize }
         #if canImport(UIKit)
@@ -304,6 +322,7 @@ public final class ThemeStore: ObservableObject {
         // Assign the new theme to the slot matching its own light/dark, and switch
         // appearance to show it (so importing a theme has an immediate effect).
         select(id: theme.id, forDark: theme.isDark)
+        appearanceMode = theme.isDark ? .dark : .light
     }
 
     public func removeCustomTheme(_ id: String) {

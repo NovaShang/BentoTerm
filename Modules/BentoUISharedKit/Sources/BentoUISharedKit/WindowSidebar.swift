@@ -186,7 +186,7 @@ public struct WindowSidebar: View {
     private func name(_ id: TmuxWindowID, status: WindowDisplayStatus) -> some View {
         let label = Text(rowName(id))
         if let hex = statusHex(status) {
-            label.foregroundStyle(Color(rgbHex: hex))
+            label.foregroundStyle(Color(hex: hex))
         } else {
             label
         }
@@ -252,7 +252,7 @@ public struct WindowSidebar: View {
     private func glyph(_ systemName: String, _ hex: UInt32) -> some View {
         Image(systemName: systemName)
             .font(.system(size: 12))
-            .foregroundStyle(Color(rgbHex: hex))
+            .foregroundStyle(Color(hex: hex))
     }
 
     /// Trailing per-row close affordance. Faint at rest, full on hover (pointer
@@ -270,6 +270,7 @@ public struct WindowSidebar: View {
         }
         .buttonStyle(.plain)
         .help("Close Window")
+        .accessibilityLabel("Close Window")
         .opacity(hoveredWindow == id ? 1 : 0.35)
     }
 
@@ -439,16 +440,3 @@ struct NewWindowForm: View {
     }
 }
 
-private extension Color {
-    /// Build a SwiftUI Color from a 0xRRGGBB literal, so the sidebar wash can
-    /// reuse `PaneState.dotColorHex` — the same palette the pane chrome uses.
-    init(rgbHex hex: UInt32) {
-        self.init(
-            .sRGB,
-            red: Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue: Double(hex & 0xFF) / 255,
-            opacity: 1
-        )
-    }
-}

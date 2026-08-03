@@ -171,6 +171,14 @@ extension TerminalViewModel {
         reconnectTask = nil
         statePollingTask?.cancel()
         statePollingTask = nil
+        layoutChangeDebounce?.cancel()
+        layoutChangeDebounce = nil
+        windowsRefreshRetry?.cancel()
+        windowsRefreshRetry = nil
+        // A pending debounce would otherwise fire refreshPanes against the dead
+        // service (each send pays the full 10s timeout), and queued %output
+        // would still drain onto the torn-down VM.
+        pendingTmuxNotifications.withLock { $0.queue.removeAll() }
         transport.disconnect()
         // Fail any in-flight tmux commands and drop parser state so a later
         // fresh connect on this VM starts clean.
@@ -199,6 +207,10 @@ extension TerminalViewModel {
         isReconnecting = false
         statePollingTask?.cancel()
         statePollingTask = nil
+        layoutChangeDebounce?.cancel()
+        layoutChangeDebounce = nil
+        windowsRefreshRetry?.cancel()
+        windowsRefreshRetry = nil
         // Suspend regardless of phase. If the WS already died mid-handshake
         // we still want resume to retry rather than show an alert.
         // Remember where we were: if the socket survives the suspension,

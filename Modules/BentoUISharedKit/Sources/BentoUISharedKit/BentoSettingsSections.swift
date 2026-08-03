@@ -2,6 +2,23 @@ import SwiftUI
 import UniformTypeIdentifiers
 import BentoFoundationKit
 
+/// UserDefaults keys shared with the app shells and engine kits — matched by
+/// convention, so the strings live in this one place.
+enum SettingsKey {
+    static let fontSize = "terminal_font_size"
+    static let fontFamily = "terminal_font_family"
+    static let speechEngine = "speech_engine"
+    static let speechLocale = "speech_locale"
+    static let openAIKey = "openai_api_key"
+    static let dashScopeKey = "dashscope_api_key"
+    static let asrAutoContext = "asr_auto_context"
+    static let asrVocab = "asr_vocab"
+    static let llmEnabled = "llm_enabled"
+    static let llmKey = "llm_api_key"
+    static let llmModel = "llm_model"
+    static let llmEndpoint = "llm_endpoint"
+}
+
 /// Settings sections shared by both platforms.
 ///
 /// Mac and iOS used to render these sections twice with drift (different font
@@ -47,12 +64,12 @@ public struct SettingsFontSection: View {
     /// Fresh-install size (persisted values always win): 12 on Mac, 10 on iOS.
     public let defaultSize: Double
 
-    @AppStorage("terminal_font_size") private var fontSize: Double = 12
-    @AppStorage("terminal_font_family") private var fontFamily: String = "maple-nf-cn"
+    @AppStorage(SettingsKey.fontSize) private var fontSize: Double = 12
+    @AppStorage(SettingsKey.fontFamily) private var fontFamily: String = "maple-nf-cn"
 
     public init(defaultSize: Double = 12) {
         self.defaultSize = defaultSize
-        _fontSize = AppStorage(wrappedValue: defaultSize, "terminal_font_size")
+        _fontSize = AppStorage(wrappedValue: defaultSize, SettingsKey.fontSize)
     }
 
     public var body: some View {
@@ -124,6 +141,7 @@ public struct SettingsThemeSection: View {
                         themeStore.removeCustomTheme(theme.id)
                     } label: { Image(systemName: "trash") }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Remove \(theme.name)")
                 }
             }
         } header: { Text("Color theme") } footer: {
@@ -155,12 +173,12 @@ public struct SettingsThemeSection: View {
 // MARK: - Speech recognition
 
 public struct SettingsSpeechSection: View {
-    @AppStorage("speech_engine") private var speechEngine = "apple"
-    @AppStorage("speech_locale") private var speechLocale = "auto"
-    @AppStorage("openai_api_key") private var openaiKey = ""
-    @AppStorage("dashscope_api_key") private var dashscopeKey = ""
-    @AppStorage("asr_auto_context") private var asrAutoContext = true
-    @AppStorage("asr_vocab") private var asrVocab = ""
+    @AppStorage(SettingsKey.speechEngine) private var speechEngine = "apple"
+    @AppStorage(SettingsKey.speechLocale) private var speechLocale = "auto"
+    @AppStorage(SettingsKey.openAIKey) private var openaiKey = ""
+    @AppStorage(SettingsKey.dashScopeKey) private var dashscopeKey = ""
+    @AppStorage(SettingsKey.asrAutoContext) private var asrAutoContext = true
+    @AppStorage(SettingsKey.asrVocab) private var asrVocab = ""
 
     public init() {}
 
@@ -227,10 +245,10 @@ public struct SettingsSpeechSection: View {
 // MARK: - Voice → shell command (LLM)
 
 public struct SettingsLLMSection: View {
-    @AppStorage("llm_enabled") private var llmEnabled = true
-    @AppStorage("llm_api_key") private var llmKey = ""
-    @AppStorage("llm_model") private var llmModel = ""
-    @AppStorage("llm_endpoint") private var llmEndpoint = "https://api.openai.com/v1/chat/completions"
+    @AppStorage(SettingsKey.llmEnabled) private var llmEnabled = true
+    @AppStorage(SettingsKey.llmKey) private var llmKey = ""
+    @AppStorage(SettingsKey.llmModel) private var llmModel = ""
+    @AppStorage(SettingsKey.llmEndpoint) private var llmEndpoint = "https://api.openai.com/v1/chat/completions"
 
     public init() {}
 

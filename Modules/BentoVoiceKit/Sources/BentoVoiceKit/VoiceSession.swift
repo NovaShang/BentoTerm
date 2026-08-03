@@ -25,6 +25,13 @@ public final class VoiceSession {
     private var lastTranscript = ""
     public private(set) var isActive = false
 
+    /// Incremented on every `start()`. The permission slow-path Task captures
+    /// the value it was spawned under and bails if the session ended (or a
+    /// newer one began) while the system permission dialog was up — a late
+    /// grant must never fire an engine for a session that's already gone,
+    /// which would stack a second mic tap on the input bus.
+    private var sessionGeneration = 0
+
     /// Wall-clock of the last streamed interim. Lets `finish()` tell "spoke, then
     /// released" (interim has settled → send it immediately) from "released mid-
     /// speech" (wait briefly for the tail). nil until the first interim arrives.
@@ -45,6 +52,12 @@ public final class VoiceSession {
     private var realtimeFinalArrived = false
     private var realtimeCompleted = false
 
+    /// Set by `cancel()`: the session was torn down mid-`finish()` (the error
+    /// path). A cancelled session must resolve empty — otherwise the batch
+    /// fallback would transcribe the clip and insert text right after the user
+    /// saw an error. Reset on every `start()`.
+    private var interrupted = false
+
     /// PCM captured before the realtime socket is open, flushed once it connects
     /// so the opening words aren't lost to the (cold) WSS handshake latency.
     private var pendingPCM: [Data] = []
@@ -61,6 +74,18 @@ public final class VoiceSession {
     /// `audioCapture`). The right-swipe preview flow grabs this after `stop()` to
     /// re-transcribe the full clip with a higher-accuracy batch model.
     private var recordedPCM = Data()
+
+    /// Ceiling on the locally buffered full clip (~5 min of 24 kHz 16-bit mono
+    /// ≈ 48 KB/s). Past it, PCM keeps streaming to the realtime engine but stops
+    /// being buffered — a right-swipe/batch re-transcription of an hours-long
+    /// hold would otherwise POST a huge base64 WAV. Full-clip capture is
+    /// deliberate (right-swipe re-transcription); this only adds the ceiling.
+    private static let recordedPCMMaxBytes = 14_400_000
+
+    /// True once the local buffer hit `recordedPCMMaxBytes` — the buffered PCM is
+    /// a truncated prefix, so the batch paths treat it as "nothing captured"
+    /// rather than transcribing a partial clip.
+    private var recordedPCMOverflowed = false
 
     public init() {}
 
@@ -80,12 +105,15 @@ public final class VoiceSession {
         // leave a second mic engine / ASR socket running.
         if isActive { cancel() }
         engine = .current()
+        sessionGeneration += 1
         isActive = true
         lastTranscript = ""
         lastInterimAt = nil
         recordedPCM = Data()
+        recordedPCMOverflowed = false
         realtimeFinalArrived = false
         realtimeCompleted = false
+        interrupted = false
         dlog("[voice] start engine=\(engine)")
 
         // Fast path: when permission is already granted (the common case after the
@@ -103,6 +131,7 @@ public final class VoiceSession {
         }
 
         // Slow path: permission not yet determined — request it, then begin.
+        let generation = sessionGeneration
         Task {
             guard await MicPermission.ensureMic() else {
                 dlog("[voice] mic permission DENIED")
@@ -111,6 +140,13 @@ public final class VoiceSession {
             if engine == .apple, await MicPermission.ensureSpeech() == false {
                 dlog("[voice] speech permission DENIED")
                 isActive = false; onError("Speech recognition permission denied"); return
+            }
+            // The user may have released (finish/cancel) or started a newer
+            // session while the dialog was up — a late grant must not fire an
+            // engine for a session that's gone.
+            guard isActive, generation == sessionGeneration else {
+                dlog("[voice] session ended while awaiting permission — bailing")
+                return
             }
             dlog("[voice] permissions ok → begin \(engine)")
             switch engine {
@@ -148,6 +184,9 @@ public final class VoiceSession {
     /// transcription if streaming caught nothing. `language` is the batch hint.
     public func finish(language: String) async -> String {
         isActive = false
+        // A cancel() (error path) may have torn the session down before we got
+        // here — a cancelled session resolves empty, never with text.
+        guard !interrupted else { return "" }
         // Qwen's interims are a rolling window (they reset mid-utterance), NOT the
         // full running transcript, so a settled interim is not the final — force
         // the commit + wait path so we return the authoritative `completed`.
@@ -203,10 +242,14 @@ public final class VoiceSession {
             realtime = nil
             realtimeReady = false
             pendingPCM = []
+            // The session may have been cancelled (error) while we awaited the
+            // final — resolve empty, never text right after the user saw an error.
+            guard !interrupted else { return "" }
             if !streamed.isEmpty { return streamed }
             // Realtime delivered nothing (short clip): batch-transcribe the full
-            // captured clip so the utterance is never lost.
-            guard !recordedPCM.isEmpty else { return "" }
+            // captured clip so the utterance is never lost. A clip that hit the
+            // accumulation ceiling is truncated — treat it as nothing captured.
+            guard !recordedPCM.isEmpty, !recordedPCMOverflowed else { return "" }
             dlog("[voice] realtime empty → batch fallback (\(recordedPCM.count) bytes)")
             let better = await BatchTranscriptionService.shared.transcribe(
                 pcm: recordedPCM, sampleRate: activeSampleRate, language: language, corpus: activeCorpus)
@@ -218,6 +261,7 @@ public final class VoiceSession {
     /// error / right-swipe, which re-transcribes the clip itself / defensive
     /// re-entry). Preserves `recordedPCM` so a caller can still batch it.
     public func cancel() {
+        interrupted = true
         switch engine {
         case .apple:
             _ = apple?.stopRecording()
@@ -249,7 +293,7 @@ public final class VoiceSession {
     /// `stop()` (cleared on the next `start()`). Nil when no PCM was captured —
     /// e.g. the Apple on-device engine, which records internally.
     public func takeRecordedPCM() -> (pcm: Data, sampleRate: Double)? {
-        guard !recordedPCM.isEmpty else { return nil }
+        guard !recordedPCM.isEmpty, !recordedPCMOverflowed else { return nil }
         // A clip with no speech above the gate would only make the batch model
         // hallucinate in the preview editor — treat it as "nothing captured".
         guard speechGate.isOpen else { return nil }
@@ -276,6 +320,7 @@ public final class VoiceSession {
 
     private func beginApple(onPartial: @escaping @MainActor (String) -> Void,
                             onError: @escaping @MainActor (String) -> Void) {
+        guard isActive else { return }
         let eng = AppleSpeechEngine()
         apple = eng
         Task {
@@ -297,6 +342,8 @@ public final class VoiceSession {
 
     private func beginRealtime(onPartial: @escaping @MainActor (String) -> Void,
                                onError: @escaping @MainActor (String) -> Void) {
+        guard isActive else { return }
+        let generation = sessionGeneration   // for the WSS connect Task below
         let defaults = UserDefaults.standard
         // Empty hint = auto-detect, which is best for 中英混说 on both engines.
         let language = openAILanguageHint(for: defaults.string(forKey: "speech_locale") ?? "auto")
@@ -343,7 +390,11 @@ public final class VoiceSession {
         audioCapture.onPCM = { [weak self, weak asr] pcm in
             Task { @MainActor in
                 guard let self else { return }
-                self.recordedPCM.append(pcm)   // full clip for the right-swipe batch path
+                if self.recordedPCM.count < Self.recordedPCMMaxBytes {
+                    self.recordedPCM.append(pcm)   // full clip for the right-swipe batch path
+                } else {
+                    self.recordedPCMOverflowed = true
+                }
                 let wasOpen = self.speechGate.isOpen
                 let admitted = self.speechGate.admit(pcm)
                 if !wasOpen, self.speechGate.isOpen {
@@ -365,6 +416,10 @@ public final class VoiceSession {
             onError(error.localizedDescription)
         }
         Task {
+            // Session may have ended (or a newer one begun) while the socket
+            // was connecting — don't mark the new session ready or flush its
+            // buffered audio into this stale socket.
+            guard isActive, generation == sessionGeneration else { return }
             do {
                 try await asr.start()
                 realtimeReady = true

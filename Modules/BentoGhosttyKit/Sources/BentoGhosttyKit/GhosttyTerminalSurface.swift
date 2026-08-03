@@ -123,7 +123,13 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         lifecycleObservers.removeAll()
         renderLink?.invalidate()
         renderLink = nil
-        if let surface { ghostty_surface_free(surface) }
+        if let surface {
+            // The runtime answers clipboard reads (OSC 52) on whichever surface
+            // last pasted — don't leave it pointing at a surface we're about to
+            // free (mirrors the macOS teardown).
+            if GhosttyRuntime.shared.pasteSurface == surface { GhosttyRuntime.shared.pasteSurface = nil }
+            ghostty_surface_free(surface)
+        }
         surface = nil
     }
 
@@ -614,6 +620,10 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         guard let surface, let text = TerminalClipboard.read(), !text.isEmpty else { return }
         GhosttyRuntime.shared.pasteSurface = surface
         GhosttySel.bindingAction("paste_from_clipboard", on: surface)
+        // The clipboard read completes synchronously inside the action (see
+        // GhosttyRuntime.pasteSurface), so drop the registration now — a stale
+        // pointer must never answer a later OSC 52 read on a freed surface.
+        if GhosttyRuntime.shared.pasteSurface == surface { GhosttyRuntime.shared.pasteSurface = nil }
     }
 
     /// `nonisolated` to satisfy the protocol (macOS needs output off the main
@@ -766,7 +776,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// target.
     public func pathTapHits(at point: CGPoint, wrapCols: Int?) -> SurfacePathHitEngine.TapScan {
         guard let cs = currentSize, cs.cellWidthPx > 0, cs.cellHeightPx > 0 else { return .empty }
-        let s = currentScale
+        let s = renderScale
         guard s > 0 else { return .empty }
         let cell = CGSize(width: CGFloat(cs.cellWidthPx) / s, height: CGFloat(cs.cellHeightPx) / s)
         return pathHitEngine.tapHits(

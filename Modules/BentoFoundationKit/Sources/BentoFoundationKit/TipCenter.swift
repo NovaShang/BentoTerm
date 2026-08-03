@@ -82,13 +82,18 @@ public final class TipCenter: ObservableObject {
         return true
     }
 
-    /// Replay every tip and the gesture overlay (Settings → Help).
-    public func resetAll() {
+    /// Replay every tip (Settings → Help). One-shot keys owned by other
+    /// subsystems (e.g. the iOS gesture overlay's `storageKey`) are passed in
+    /// by the caller — TipCenter is the ledger for BentoTips, not for every
+    /// app-specific flag.
+    public func resetAll(extraKeys: [String] = []) {
         for tip in BentoTip.allCases {
             defaults.removeObject(forKey: tip.rawValue)
         }
         defaults.removeObject(forKey: Self.voiceSendCountKey)
-        defaults.removeObject(forKey: "gestureOnboardingShown_v1")
+        for key in extraKeys {
+            defaults.removeObject(forKey: key)
+        }
         objectWillChange.send()
     }
 

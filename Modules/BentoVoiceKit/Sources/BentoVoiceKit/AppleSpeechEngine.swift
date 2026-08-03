@@ -14,10 +14,10 @@ public final class AppleSpeechEngine: NSObject, SpeechEngine, @unchecked Sendabl
     public private(set) var isRecording = false
 
     /// Resolves `finishRecording()` once the recognizer delivers its final result
-    /// (or the grace window elapses). Guarded by `finalLock` since the recognition
-    /// callback and the timeout race to resume it.
+    /// (or the grace window elapses). Touched only on the main actor: the
+    /// recognition callback hops there, and the timeout task inherits it from
+    /// `finishRecording()`.
     private var finalContinuation: CheckedContinuation<String, Never>?
-    private let finalLock = NSLock()
 
     public override init() {
         super.init()
@@ -57,15 +57,21 @@ public final class AppleSpeechEngine: NSObject, SpeechEngine, @unchecked Sendabl
         recognitionRequest = request
 
         recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
-            if let result {
-                let transcript = result.bestTranscription.formattedString
-                self?.latestTranscript = transcript
-                onPartialResult(transcript)
-            }
-            if error != nil || (result?.isFinal ?? false) {
-                // Hand the final to a pending finishRecording() before tearing down.
-                self?.resolveFinal()
-                self?.cleanupAudio()
+            // SFSpeechRecognizer calls back on its own queue — hop to the main
+            // actor, where all engine state lives (same pattern as VoiceSession).
+            let partial = result?.bestTranscription.formattedString
+            let isFinal = error != nil || (result?.isFinal ?? false)
+            Task { @MainActor in
+                guard let self else { return }
+                if let partial {
+                    self.latestTranscript = partial
+                    onPartialResult(partial)
+                }
+                if isFinal {
+                    // Hand the final to a pending finishRecording() before tearing down.
+                    self.resolveFinal()
+                    self.cleanupAudio()
+                }
             }
         }
 
@@ -76,12 +82,22 @@ public final class AppleSpeechEngine: NSObject, SpeechEngine, @unchecked Sendabl
         }
 
         audioEngine.prepare()
-        try audioEngine.start()
+        do {
+            try audioEngine.start()
+        } catch {
+            // A failed start leaves the tap + recognition task installed (and the
+            // record session active) with isRecording still false — tear down now
+            // so the caller's stopRecording()/cancel() isn't a no-op.
+            cleanupAudio()
+            throw error
+        }
         isRecording = true
     }
 
+    /// Stop capturing and return whatever was recognized. Unconditional: a start
+    /// that failed mid-way can leave a live recognition task/tap installed while
+    /// `isRecording` is still false, and a cancel must still release it.
     public func stopRecording() -> String? {
-        guard isRecording else { return nil }
         cleanupAudio()
         let result = latestTranscript
         latestTranscript = ""
@@ -101,9 +117,7 @@ public final class AppleSpeechEngine: NSObject, SpeechEngine, @unchecked Sendabl
         recognitionRequest?.endAudio()   // flush; final result follows
 
         let final = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
-            finalLock.lock()
             finalContinuation = cont
-            finalLock.unlock()
             Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(1500))
                 self?.resolveFinal()
@@ -118,10 +132,8 @@ public final class AppleSpeechEngine: NSObject, SpeechEngine, @unchecked Sendabl
 
     /// Resume a pending `finishRecording()` exactly once with the latest text.
     private func resolveFinal() {
-        finalLock.lock()
         let cont = finalContinuation
         finalContinuation = nil
-        finalLock.unlock()
         cont?.resume(returning: latestTranscript)
     }
 

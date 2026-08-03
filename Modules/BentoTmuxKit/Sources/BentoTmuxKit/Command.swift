@@ -28,7 +28,6 @@ public enum SpawnCommand: Sendable, Equatable {
 public enum TmuxCommand: Sendable {
     // Session
     case newSession(name: String? = nil, groupWith: String? = nil)
-    case attachSession(name: String)
     case listSessions
 
     // Window
@@ -157,15 +156,12 @@ public enum TmuxCommand: Sendable {
         case .newSession(let name, let groupWith):
             var cmd = "new-session -d"
             if let group = groupWith {
-                cmd += " -t \(group)"
+                cmd += " -t \(escapeArg(group))"
             }
             if let name {
                 cmd += " -s \(escapeArg(name))"
             }
             return cmd
-
-        case .attachSession(let name):
-            return "attach-session -t \(escapeArg(name))"
 
         case .listSessions:
             return "list-sessions -F '#{session_id}:#{session_name}'"

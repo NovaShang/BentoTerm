@@ -80,10 +80,10 @@ public final class FilePreviewWebView: WKWebView, WKNavigationDelegate {
     /// the base there meant markdown images never filled at all.
     private func send(_ payload: Payload) {
         guard let data = try? JSONEncoder().encode(payload),
-              var json = String(data: data, encoding: .utf8) else { return }
-        // U+2028/2029 are valid JSON but not valid JS string literals.
-        json = json.replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+              let json = String(data: data, encoding: .utf8) else { return }
+        // The JSON-encoded payload embeds directly as a JS object literal.
+        // Raw U+2028/U+2029 (legal in filenames) are valid in JS string
+        // literals since ES2019, which every supported WebKit version has.
         evaluateJavaScript("bentoRender(\(json))") { [weak self] _, _ in
             MainActor.assumeIsolated { self?.fillImages() }
         }
@@ -125,8 +125,12 @@ public final class FilePreviewWebView: WKWebView, WKNavigationDelegate {
         let maxBytes = 8 * 1024 * 1024
         guard let (resolved, st) = try? await base.source.stat(path: path, cwd: base.directory),
               st.isRegular, st.size <= maxBytes,
-              let mime = Self.imageMIME[(resolved as NSString).pathExtension.lowercased()],
-              let bytes = try? await base.source.read(resolvedPath: resolved, maxBytes: maxBytes)
+              let mime = FilePreviewImageMIME.table[(resolved as NSString).pathExtension.lowercased()],
+              let bytes = try? await base.source.read(resolvedPath: resolved, maxBytes: maxBytes),
+              // A transport-truncated read (or a file that grew after the
+              // stat — TOCTOU) must not ship a cut-off data: URI; fail the
+              // image like any other miss.
+              Int64(bytes.count) == st.size
         else {
             callJS("bentoFailImage", src)
             return
@@ -134,7 +138,8 @@ public final class FilePreviewWebView: WKWebView, WKNavigationDelegate {
         callJS("bentoSetImage", src, "data:\(mime);base64,\(bytes.base64EncodedString())")
     }
 
-    /// Evaluate `fn(args…)` with each argument JSON-encoded (safe embedding).
+    /// Evaluate `fn(args…)` with each argument JSON-encoded (safe embedding;
+    /// raw U+2028/U+2029 are fine on WebKit ≥ ES2019 — see `send`).
     private func callJS(_ fn: String, _ args: String...) {
         let encoded = args.map { arg -> String in
             let data = (try? JSONEncoder().encode([arg])).flatMap { String(data: $0, encoding: .utf8) } ?? "[\"\"]"
@@ -142,14 +147,6 @@ public final class FilePreviewWebView: WKWebView, WKNavigationDelegate {
         }
         evaluateJavaScript("\(fn)(\(encoded.joined(separator: ",")))")
     }
-
-    private static let imageMIME: [String: String] = [
-        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-        "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml",
-        "bmp": "image/bmp", "tiff": "image/tiff", "tif": "image/tiff",
-        "ico": "image/x-icon", "heic": "image/heic", "heif": "image/heif",
-        "avif": "image/avif",
-    ]
 
     /// Follow an appearance change without re-rendering.
     public func setDark(_ dark: Bool) {

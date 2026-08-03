@@ -17,6 +17,7 @@ public struct ArchitectureDiagramView: View {
     let compact: Bool
 
     @State private var pulse = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(accent: Color = .green, compact: Bool = false) {
         self.accent = accent
@@ -39,6 +40,7 @@ public struct ArchitectureDiagramView: View {
             )
         }
         .onAppear {
+            guard !reduceMotion else { return }   // pulse stays false: the dot rests at the start
             withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: false)) {
                 pulse = true
             }
@@ -169,7 +171,7 @@ public struct StateLegendCard: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: symbol)
                 .font(.system(size: 14))
-                .foregroundStyle(Color(legendHex: hex))
+                .foregroundStyle(Color(hex: hex))
                 .frame(width: 18)
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
@@ -182,14 +184,3 @@ public struct StateLegendCard: View {
     }
 }
 
-private extension Color {
-    init(legendHex hex: UInt32) {
-        self.init(
-            .sRGB,
-            red: Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue: Double(hex & 0xFF) / 255,
-            opacity: 1
-        )
-    }
-}

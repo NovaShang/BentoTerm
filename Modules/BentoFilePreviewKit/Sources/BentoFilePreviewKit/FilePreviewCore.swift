@@ -189,6 +189,19 @@ public enum FilePreviewLimits {
     public static let imageBytes = 20 * 1024 * 1024
 }
 
+/// Image formats the preview handles, extension → MIME — the single source
+/// of truth for the loader's image gate and the web renderer's
+/// markdown-relative image fill, so the two can never drift.
+public enum FilePreviewImageMIME {
+    public static let table: [String: String] = [
+        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml",
+        "bmp": "image/bmp", "tiff": "image/tiff", "tif": "image/tiff",
+        "ico": "image/x-icon", "heic": "image/heic", "heif": "image/heif",
+        "avif": "image/avif",
+    ]
+}
+
 // MARK: - Loader
 
 public enum FilePreviewLoader {
@@ -216,7 +229,7 @@ public enum FilePreviewLoader {
         guard st.isRegular else { throw FilePreviewError.notAFile(resolved) }
         if st.size == 0 { return make(.text("", truncated: false)) }
 
-        let wantsImage = Self.imageExtensions.contains((name as NSString).pathExtension.lowercased())
+        let wantsImage = FilePreviewImageMIME.table[(name as NSString).pathExtension.lowercased()] != nil
         if wantsImage && st.size <= FilePreviewLimits.imageBytes {
             let data = try await context.source.read(resolvedPath: resolved,
                                                      maxBytes: FilePreviewLimits.imageBytes)
@@ -243,10 +256,6 @@ public enum FilePreviewLoader {
         let text = String(decoding: data, as: UTF8.self)
         return .text(text, truncated: Int64(data.count) < size)
     }
-
-    static let imageExtensions: Set<String> = [
-        "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "bmp", "tiff", "tif", "ico",
-    ]
 
     private static func looksLikeImage(_ data: Data) -> Bool {
         guard data.count >= 12 else { return false }

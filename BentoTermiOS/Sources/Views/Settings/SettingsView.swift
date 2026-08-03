@@ -45,7 +45,7 @@ struct SettingsView: View {
                         Label("How BentoTerm works", systemImage: "questionmark.circle")
                     }
                     Button {
-                        TipCenter.shared.resetAll()
+                        TipCenter.shared.resetAll(extraKeys: [GestureOnboardingOverlay.storageKey])
                         showTipsResetConfirm = true
                     } label: {
                         Label("Replay tips & gesture guide", systemImage: "arrow.counterclockwise")

@@ -67,15 +67,50 @@ public struct Host: Identifiable, Codable, Hashable, Sendable {
     // is degraded, the rest of the file still loads.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
         self.name = (try? c.decode(String.self, forKey: .name)) ?? ""
         self.hostname = (try? c.decode(String.self, forKey: .hostname)) ?? ""
         self.port = (try? c.decode(UInt16.self, forKey: .port)) ?? 22
         self.username = (try? c.decode(String.self, forKey: .username)) ?? "root"
+        // A missing id gets a DETERMINISTIC fallback derived from the address
+        // fields — minting `UUID()` here would give a legacy hosts.json entry
+        // a brand-new identity on every decode, so the same host would change
+        // id across launches (HostStore keys update/delete/markConnected off
+        // id, and ids flow into onSessionUpdate/Live Activity).
+        self.id = (try? c.decode(UUID.self, forKey: .id)) ?? Self.stableID(username: username, hostname: hostname, port: port)
         self.authMethod = (try? c.decode(AuthMethod.self, forKey: .authMethod)) ?? .password
         self.transport = (try? c.decode(HostTransport.self, forKey: .transport)) ?? .directTCP
         self.lastConnected = try? c.decodeIfPresent(Date.self, forKey: .lastConnected)
         self.lastInputMode = try? c.decodeIfPresent(String.self, forKey: .lastInputMode)
         self.unlockMacKeychain = (try? c.decode(Bool.self, forKey: .unlockMacKeychain)) ?? false
+    }
+
+    /// Deterministic UUID for a host entry without a stored id, derived from
+    /// its immutable address fields (user@host:port): the same legacy entry
+    /// decodes to the same id on every launch and platform. Swift's `Hasher`
+    /// is randomly seeded per process so it can't be used here; FNV-1a is a
+    /// stable, dependency-free 64-bit hash.
+    private static func stableID(username: String, hostname: String, port: UInt16) -> UUID {
+        let material = "\(username)@\(hostname):\(port)".utf8
+        // Two FNV-1a passes with different seeds fill all 16 bytes.
+        let h1 = fnv1a(material, seed: 0xCBF2_9CE4_8422_2325)  // FNV-1a offset basis
+        let h2 = fnv1a(material, seed: 0x9E37_79B9_7F4A_7C15)  // golden-ratio noise
+        var bytes = [UInt8](repeating: 0, count: 16)
+        for i in 0..<8 {
+            bytes[i] = UInt8(truncatingIfNeeded: h1 >> (8 * UInt64(i)))
+            bytes[8 + i] = UInt8(truncatingIfNeeded: h2 >> (8 * UInt64(i)))
+        }
+        bytes[6] = (bytes[6] & 0x0F) | 0x50  // version 5
+        bytes[8] = (bytes[8] & 0x3F) | 0x80  // RFC 4122 variant
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                           bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+    }
+
+    private static func fnv1a<S: Sequence>(_ bytes: S, seed: UInt64) -> UInt64 where S.Element == UInt8 {
+        var h = seed
+        for b in bytes {
+            h ^= UInt64(b)
+            h &*= 0x0000_0100_0000_01B3  // FNV-1a prime
+        }
+        return h
     }
 }

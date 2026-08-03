@@ -181,7 +181,9 @@ public final class TmuxControlMode: @unchecked Sendable {
         command: String? = nil
     ) -> String {
         // The shell — not tmux — expands `~`, and this string is read by the
-        // shell, so quote it for the shell (see TmuxShellQuote.path).
+        // shell, so quote it for the shell (see TmuxShellQuote.path). Session
+        // names too: a user-picked session name is legal with spaces, and
+        // spliced bare it would word-split the line and break the launch.
         let dir = path.map { " -c \(TmuxShellQuote.path($0))" } ?? ""
         let prog = command.flatMap { $0.isEmpty ? nil : " \(TmuxShellQuote.arg($0))" } ?? ""
         if let groupWith {
@@ -189,9 +191,9 @@ public final class TmuxControlMode: @unchecked Sendable {
             // A grouped session shares the source's windows; seeding a
             // directory or program would be meaningless (and tmux rejects the
             // combination), so those are deliberately not applied here.
-            return "tmux -CC new-session -A -s \(name) -t \(groupWith)"
+            return "tmux -CC new-session -A -s \(TmuxShellQuote.arg(name)) -t \(TmuxShellQuote.arg(groupWith))"
         } else if let sessionName {
-            return "tmux -CC new-session -A -s \(sessionName)\(dir)\(prog)"
+            return "tmux -CC new-session -A -s \(TmuxShellQuote.arg(sessionName))\(dir)\(prog)"
         } else {
             return "tmux -CC new-session\(dir)\(prog)"
         }
@@ -290,10 +292,10 @@ public final class TmuxControlMode: @unchecked Sendable {
 
             // Safety valve, see `maxAbandonedPlaceholders`.
             var dropped = 0
-            while state.pendingQueue.count(where: { if case .abandoned = $0.kind { return true } else { return false } })
+            while state.pendingQueue.count(where: { if case .abandoned = $0.kind { true } else { false } })
                     > Self.maxAbandonedPlaceholders,
                   let oldest = state.pendingQueue.firstIndex(where: {
-                      if case .abandoned = $0.kind { return true } else { return false }
+                      if case .abandoned = $0.kind { true } else { false }
                   }) {
                 state.pendingQueue.remove(at: oldest)
                 dropped += 1
@@ -356,19 +358,18 @@ public final class TmuxControlMode: @unchecked Sendable {
     ///      old instances: input still works, rendering is dead.
     public func reset() {
         bufferLock.withLock { $0.removeAll(keepingCapacity: false) }
-        var outputWaiters: [PendingBoolEntry] = []
-        let (orphans, waiters) = responseLock.withLock { state -> ([PendingEntry], [PendingBoolEntry]) in
+        let (orphans, waiters, outputWaiters) = responseLock.withLock { state -> ([PendingEntry], [PendingBoolEntry], [PendingBoolEntry]) in
             let o = state.pendingQueue
             let w = state.controlModeWaiters
+            let outW = state.outputWaiters
             state.pendingQueue.removeAll()
             state.controlModeWaiters.removeAll()
             state.currentBlock = nil
             state.greetingConsumed = false
             state.sawAnyOutput = false
-            outputWaiters = state.outputWaiters
             state.outputWaiters.removeAll()
             state.preGreetingLines.removeAll()
-            return (o, w)
+            return (o, w, outW)
         }
         if !orphans.isEmpty || !waiters.isEmpty {
             log("tmux parser reset: dropping \(orphans.count) pending command(s), \(waiters.count) waiter(s)")
@@ -478,7 +479,7 @@ public final class TmuxControlMode: @unchecked Sendable {
             sendToSSH?(cmd)
             return true
         }
-        if !sent { log("tmux dropped pre-greeting pane input (\(hex.count / 2) bytes)") }
+        if !sent { log("tmux dropped pre-greeting pane input (\(data.count) bytes)") }
     }
 
     private static let hexDigits = Array("0123456789abcdef".utf8)
@@ -894,8 +895,10 @@ public final class TmuxControlMode: @unchecked Sendable {
     }
 
     private func parseSessionRenamed(_ line: String) {
-        let rest = String(line.dropFirst(18))
-        onNotification?(.sessionRenamed(name: rest))
+        let parts = line.split(separator: " ", maxSplits: 2)
+        guard parts.count >= 3 else { return }
+        let name = String(parts[2])
+        onNotification?(.sessionRenamed(name: name))
     }
 
     private func parsePaneModeChanged(_ line: String) {

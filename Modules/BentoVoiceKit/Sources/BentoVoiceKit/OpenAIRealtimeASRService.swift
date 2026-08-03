@@ -147,7 +147,9 @@ public final class OpenAIRealtimeASRService: NSObject, @unchecked Sendable, Real
         self.task = wsTask
         wsTask.resume()
 
-        let firstMsg = try await receiveText(task: wsTask)
+        let firstMsg = try await withHandshakeTimeout(cancelling: wsTask) {
+            try await self.receiveText(task: wsTask)
+        }
         guard let json = parseJSON(firstMsg),
               json["type"] as? String == "session.created" else {
             throw ASRError.unexpectedInitialMessage(firstMsg)

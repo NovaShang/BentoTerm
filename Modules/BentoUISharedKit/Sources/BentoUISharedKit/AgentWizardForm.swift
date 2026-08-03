@@ -85,6 +85,10 @@ private struct LayoutPickerGrid: View {
             ForEach(TmuxLayout.allCases) { layout in
                 LayoutTile(layout: layout, isSelected: layout == selection)
                     .onTapGesture { selection = layout }
+                    .accessibilityLabel(layout.displayName)
+                    .accessibilityValue(layout == selection ? "Selected" : "")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { selection = layout }
             }
         }
         .padding(.vertical, 4)

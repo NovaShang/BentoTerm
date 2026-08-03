@@ -94,13 +94,13 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// never emits a RENDER action) and any un-marked local change still recovers.
     /// Touched only under `surfaceLock`.
     nonisolated(unsafe) private var lastDrawNs: UInt64 = 0
-    private static let idleRedrawIntervalNs: UInt64 = 250_000_000   // 250ms ≈ 4fps
+    nonisolated private static let idleRedrawIntervalNs: UInt64 = 250_000_000   // 250ms ≈ 4fps
     /// Floor between *draw-on-arrival* kicks (a draw fired straight from output
     /// processing instead of waiting for the next CVDisplayLink tick). Keeps a
     /// flood of output from driving the render queue past the display refresh —
     /// anything skipped here is still picked up by the next vsync tick. ~7ms ≈
     /// 140fps ceiling, below ProMotion's 120Hz only marginally.
-    private static let minArrivalDrawIntervalNs: UInt64 = 7_000_000
+    nonisolated private static let minArrivalDrawIntervalNs: UInt64 = 7_000_000
     /// Once ghostty's cell grid first reports a non-zero size, stop polling it from
     /// every render frame (see `renderTick`): later size changes arrive through
     /// `set_size` (window resize / font change), which calls `reportSizeIfNeeded`
@@ -254,7 +254,8 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
                      NSWindow.didMiniaturizeNotification,
                      NSWindow.didDeminiaturizeNotification] {
             renderObservers.append(nc.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                self?.updateRenderActive()
+                guard let self else { return }
+                MainActor.assumeIsolated { self.updateRenderActive() }
             })
         }
         // The renderer picks its vsync cadence from the display it believes it is
@@ -265,7 +266,8 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
         // differs, so it can't stand in for this.
         renderObservers.append(nc.addObserver(forName: NSWindow.didChangeScreenNotification,
                                               object: window, queue: .main) { [weak self] _ in
-            self?.syncDisplayID()
+            guard let self else { return }
+            MainActor.assumeIsolated { self.syncDisplayID() }
         })
         syncDisplayID()
         updateRenderActive()
@@ -593,6 +595,13 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
         // follow-system flip), so this must not live inside the recreate branch.
         syncColorScheme()
         if surface != nil, abs(theme.fontSize - Double(lastAppliedFontSize)) > 0.01 {
+            // Stop the render loop BEFORE the create, and defer the create by
+            // one main tick so the old surface's last frame commits before a
+            // new surface binds the same CAMetalLayer — the iOS
+            // recreateSurface discipline (the free/create pair under a live
+            // display link is the renderer.Metal initTarget abort pattern,
+            // which crashed on device on every font-size change).
+            stopRenderLink()
             // Free the old surface only after any in-flight parse/draw finish
             // (see enqueueSurfaceFree) — never out from under either queue.
             surfaceLock.lock()
@@ -603,7 +612,10 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
             currentSize = nil
             // New surface → re-poll the grid from the draw loop until it settles.
             surfaceLock.lock(); gridSettled = false; surfaceLock.unlock()
-            createSurfaceIfNeeded()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isTornDown else { return }
+                self.createSurfaceIfNeeded()   // draws + restarts the render link
+            }
         }
     }
 
@@ -1131,7 +1143,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
             // Add in `.common` modes so it still fires while the mouse button is
             // held (a default-mode timer is starved during event tracking).
             let timer = Timer(timeInterval: Self.voiceHoldThreshold, repeats: false) { [weak self] _ in
-                self?.triggerVoiceHold()
+                MainActor.assumeIsolated { self?.triggerVoiceHold() }
             }
             RunLoop.current.add(timer, forMode: .common)
             rightHoldTimer = timer

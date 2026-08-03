@@ -139,6 +139,14 @@ struct NotificationTests {
         } else { Issue.record("Expected sessionChanged") }
     }
 
+    @Test func sessionRenamed() {
+        let (s, c) = makeService()
+        s.feedData(Data("%session-renamed $25 renamed-name\n".utf8))
+        if case .sessionRenamed(let name) = c.last {
+            #expect(name == "renamed-name")
+        } else { Issue.record("Expected sessionRenamed") }
+    }
+
     @Test func layoutChange() {
         let (s, c) = makeService()
         s.feedData(Data("%layout-change @0 b25d,80x24,0,0,0\n".utf8))

@@ -22,8 +22,11 @@ public enum TerminalGeometry {
 
     public static func scalarCells(_ v: UInt32) -> Int {
         if v == 0 { return 0 }
-        // Combining marks / zero-width joiners & spaces.
-        if (0x0300...0x036F).contains(v) || (0x200B...0x200F).contains(v) || v == 0xFEFF { return 0 }
+        // Combining marks / zero-width joiners & spaces / variation selectors
+        // (VS15/VS16 select emoji vs. text presentation — they don't occupy
+        // cells themselves, so "❤️" must not count U+FE0F as an extra cell).
+        if (0x0300...0x036F).contains(v) || (0x200B...0x200F).contains(v) || v == 0xFEFF ||
+           v == 0xFE0E || v == 0xFE0F { return 0 }
         // East Asian Wide / Fullwidth + emoji → 2 cells.
         if (0x1100...0x115F).contains(v) || (0x2E80...0x303E).contains(v) ||
            (0x3041...0x33FF).contains(v) || (0x3400...0x4DBF).contains(v) ||

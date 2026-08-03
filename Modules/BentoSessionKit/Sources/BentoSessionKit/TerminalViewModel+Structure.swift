@@ -214,42 +214,49 @@ public extension TerminalViewModel {
             .first { !$0.isEmpty } ?? "shell"
     }
 
-    /// Aggregate agent state for a window's row/tab, highest priority first:
-    /// any pane awaiting input → awaiting; else any working → working; else
-    /// idle. Reads the `paneStates` cache that `updatePaneStates` fills for
-    /// every session pane through the one detection pipeline — the SAME
-    /// judgment that colors the Tiled pane chrome, never a separate re-run.
-    /// Background windows keep reporting because control mode streams every
-    /// pane's output and titles.
-    func windowState(_ windowID: TmuxWindowID) -> PaneState {
-        var sawWorking = false
-        for pane in panes(in: windowID) {
-            guard let state = paneStates[pane.id] else { continue }
-            if case .awaitingInput = state { return state }
-            if state == .working { sawWorking = true }
-        }
-        return sawWorking ? .working : .idle
-    }
-
-    /// A window's display status, richest first — the same aggregate as
-    /// `windowState` PLUS the blue "done, unseen" layer, which isn't a PaneState
-    /// (an agent finished its turn in a window you weren't looking at). Reads the
-    /// `paneStates` / `paneDoneUnseen` caches the one pipeline fills, so it stays
-    /// in lockstep with the Tiled pane chrome. Priority: awaiting → working →
-    /// done → idle.
-    func windowStatus(_ windowID: TmuxWindowID) -> WindowDisplayStatus {
+    /// One pass over a window's panes, aggregating the two layers its rows
+    /// show: the richest `PaneState` (awaiting wins outright, else any pane
+    /// working), plus whether any pane is marked "done, unseen" — an agent
+    /// finished its turn in a window nobody was looking at, which isn't a
+    /// `PaneState`. Reads the `paneStates` / `paneDoneUnseen` caches the one
+    /// detection pipeline fills for every session pane — the SAME judgment
+    /// that colors the Tiled pane chrome, never a separate re-run. Background
+    /// windows keep reporting because control mode streams every pane's
+    /// output and titles.
+    private func aggregateWindowStatus(_ windowID: TmuxWindowID)
+        -> (state: PaneState?, doneUnseen: Bool) {
         var sawWorking = false
         var sawDone = false
         for pane in panes(in: windowID) {
             if let state = paneStates[pane.id] {
-                if case .awaitingInput = state { return .awaiting }
+                if case .awaitingInput = state {
+                    return (state, sawDone || paneDoneUnseen[pane.id] == true)
+                }
                 if state == .working { sawWorking = true }
             }
             if paneDoneUnseen[pane.id] == true { sawDone = true }
         }
-        if sawWorking { return .working }
-        if sawDone { return .doneUnseen }
-        return .idle
+        return (sawWorking ? .working : nil, sawDone)
+    }
+
+    /// Aggregate agent state for a window's row/tab, highest priority first:
+    /// any pane awaiting input → awaiting; else any working → working; else
+    /// idle.
+    func windowState(_ windowID: TmuxWindowID) -> PaneState {
+        aggregateWindowStatus(windowID).state ?? .idle
+    }
+
+    /// A window's display status, richest first — the same aggregate as
+    /// `windowState` PLUS the blue "done, unseen" layer, which isn't a
+    /// PaneState (an agent finished its turn in a window you weren't looking
+    /// at). Priority: awaiting → working → done → idle.
+    func windowStatus(_ windowID: TmuxWindowID) -> WindowDisplayStatus {
+        let aggregate = aggregateWindowStatus(windowID)
+        switch aggregate.state {
+        case .awaitingInput?: return .awaiting
+        case .working?: return .working
+        default: return aggregate.doneUnseen ? .doneUnseen : .idle
+        }
     }
 
     // MARK: - Creation (identical in both modes; only the landing differs)
@@ -561,40 +568,13 @@ public extension TerminalViewModel {
         }
         guard let base = ordered.first else { return false }
 
-        // All panes merge INTO base's window. `join-pane -t prev` splits its
-        // target IN HALF; a naive chain advances prev to each freshly-joined
-        // pane, so successive targets shrink geometrically (½, ¼, ⅛…) and past
-        // ~5-6 panes the target is below tmux's minimum pane size → join-pane is
-        // refused ("create pane failed: pane too small") and the pane is stranded
-        // in its own window. That geometric shrink — not any device-size cap — is
-        // the ~5 "Parallel pane limit". Fix: even the window out
-        // (`select-layout tiled`) after each join to reclaim the space, and retry
-        // once on failure, so as many panes as the window TRULY fits merge into
-        // one (the real, device-size limit tmux computes from the dimensions).
-        // `prev` only advances to panes actually IN base's window, so a genuine
-        // overflow (more panes than physically fit) stays as its own window
-        // rather than scattering into a second multi-pane window. The final saved
+        // All panes merge INTO base's window — the chain is evened out and
+        // retried inside `joinChain` (see its comment for why). The final saved
         // layout (below) overwrites these intermediate even layouts.
         let baseWin = sessionPanes.first(where: { $0.id == base })?.windowID
-        var prev = base
-        for pane in ordered.dropFirst() {
-            var resp = await tmuxService.send(.joinPane(source: pane, target: prev))
-            if resp.isError, let win = baseWin {
-                _ = await tmuxService.send(.selectLayout(window: win, layout: "tiled"))
-                resp = await tmuxService.send(.joinPane(source: pane, target: prev))
-            }
-            if resp.isError {
-                // Genuinely doesn't fit (or "can't join a pane to its own window"
-                // in a mixed merge) — leave it in its own window; keep prev on a
-                // base-window pane so the next join still targets base's window.
-                dlog("mergeToTiled: join-pane \(pane): \(resp.output)")
-                DIAG("[MODE] mergeToTiled join-pane \(pane) → \(prev) FAILED: \(resp.output.trimmingCharacters(in: .whitespacesAndNewlines)) — left in its own window (overflow past device fit)")
-            } else {
-                // Reclaim space so the NEXT chain-split has room.
-                if let win = baseWin { _ = await tmuxService.send(.selectLayout(window: win, layout: "tiled")) }
-                prev = pane
-            }
-        }
+        await joinChain(Array(ordered.dropFirst()), base: base, baseWin: baseWin,
+                        label: "mergeToTiled",
+                        failureNote: " (overflow past device fit)")
 
         await refreshPanes()
         if let baseWin = sessionPanes.first(where: { $0.id == base })?.windowID {
@@ -617,38 +597,15 @@ public extension TerminalViewModel {
     /// single-pane window before the spread too), so it is left untouched —
     /// notably it is NOT renamed: `rename-window` turns tmux's
     /// `automatic-rename` off for that window, which would quietly freeze names
-    /// that used to track what's running.
-    ///
-    /// `join-pane -t prev` splits its target IN HALF; a naive chain advances
-    /// `prev` to each freshly-joined pane, so successive targets shrink
-    /// geometrically (½, ¼, ⅛…) and past ~5-6 panes the target is below tmux's
-    /// minimum pane size → join-pane is refused ("create pane failed: pane too
-    /// small") and the pane is stranded. That geometric shrink — not any
-    /// device-size cap — was the ~5 "Parallel pane limit". Evening the window out
-    /// after each join reclaims the space; a retry covers the boundary case. A
-    /// pane that genuinely doesn't fit stays in its own window, and `prev` stays
-    /// on a pane that IS in the base window so the next join still targets it.
+    /// that used to track what's running. The joining itself is `joinChain`
+    /// (see its comment for why each join is evened out and retried, and what
+    /// happens to a pane that genuinely doesn't fit).
     func rebuildWindow(_ step: TmuxStructureSnapshot.RestoreStep) async {
         guard !step.join.isEmpty else { return }
         await refreshPanes()
         let baseWin = sessionPanes.first(where: { $0.id == step.base })?.windowID
-        var prev = step.base
-        for pane in step.join {
-            var resp = await tmuxService.send(.joinPane(source: pane, target: prev))
-            if resp.isError, let win = baseWin {
-                _ = await tmuxService.send(.selectLayout(window: win, layout: "tiled"))
-                resp = await tmuxService.send(.joinPane(source: pane, target: prev))
-            }
-            if resp.isError {
-                dlog("restoreStructure: join-pane \(pane): \(resp.output)")
-                DIAG("[MODE] restore join-pane \(pane) → \(prev) FAILED: \(resp.output.trimmingCharacters(in: .whitespacesAndNewlines)) — left in its own window")
-            } else {
-                if let win = baseWin {
-                    _ = await tmuxService.send(.selectLayout(window: win, layout: "tiled"))
-                }
-                prev = pane
-            }
-        }
+        await joinChain(step.join, base: step.base, baseWin: baseWin,
+                        label: "restore", dlogTag: "restoreStructure")
         await refreshPanes()
         guard let win = sessionPanes.first(where: { $0.id == step.base })?.windowID else {
             DIAG("[MODE] restore NO window for base=\(step.base) — layout not applied")
@@ -659,6 +616,47 @@ public extension TerminalViewModel {
         let layout = step.layout ?? "tiled"
         let resp = await tmuxService.send(.selectLayout(window: win, layout: layout))
         DIAG("[MODE] restore select-layout win=\(win) name=[\(step.name)] layout=[\(layout)] err=\(resp.isError) out=[\(resp.output.trimmingCharacters(in: .whitespacesAndNewlines))]")
+    }
+
+    /// Join `panes` into `base`'s window, one at a time, evening the window
+    /// out (`select-layout tiled`) after each join and retrying once on
+    /// failure, so as many panes as the window TRULY fits merge into one.
+    ///
+    /// `join-pane -t prev` splits its target IN HALF; a naive chain advances
+    /// `prev` to each freshly-joined pane, so successive targets shrink
+    /// geometrically (½, ¼, ⅛…) and past ~5-6 panes the target is below tmux's
+    /// minimum pane size → join-pane is refused ("create pane failed: pane too
+    /// small") and the pane is stranded. That geometric shrink — not any
+    /// device-size cap — was the ~5 "Parallel pane limit". `prev` only
+    /// advances to panes actually IN base's window, so a genuine overflow
+    /// (more panes than physically fit) stays in its own window rather than
+    /// scattering into a second multi-pane window.
+    ///
+    /// `label` names the caller in the DIAG trace lines; `dlogTag` names it in
+    /// the `dlog` lines (defaults to `label`); `failureNote` appends extra
+    /// context to a failure trace line.
+    private func joinChain(_ panes: [TmuxPaneID], base: TmuxPaneID,
+                           baseWin: TmuxWindowID?, label: String,
+                           dlogTag: String? = nil, failureNote: String = "") async {
+        var prev = base
+        for pane in panes {
+            var resp = await tmuxService.send(.joinPane(source: pane, target: prev))
+            if resp.isError, let win = baseWin {
+                _ = await tmuxService.send(.selectLayout(window: win, layout: "tiled"))
+                resp = await tmuxService.send(.joinPane(source: pane, target: prev))
+            }
+            if resp.isError {
+                // Genuinely doesn't fit (or "can't join a pane to its own window"
+                // in a mixed merge) — leave it in its own window; keep prev on a
+                // base-window pane so the next join still targets base's window.
+                dlog("\(dlogTag ?? label): join-pane \(pane): \(resp.output)")
+                DIAG("[MODE] \(label) join-pane \(pane) → \(prev) FAILED: \(resp.output.trimmingCharacters(in: .whitespacesAndNewlines)) — left in its own window\(failureNote)")
+            } else {
+                // Reclaim space so the NEXT chain-split has room.
+                if let win = baseWin { _ = await tmuxService.send(.selectLayout(window: win, layout: "tiled")) }
+                prev = pane
+            }
+        }
     }
 
     // MARK: - Window sizing authority
@@ -919,7 +917,13 @@ public extension TerminalViewModel {
             landing: soleID == nil ? .newWindow : landing,
             kind: "moveWindow \(windowID)",
             join: { session in
-                guard let soleID else { fatalError("join without a sole pane") }
+                guard let soleID else {
+                    // The window's panes changed since the probe (an external
+                    // tmux client split or closed them) — report the join as
+                    // refused so moveToSession falls back to the window path.
+                    return TmuxCommandResponse(commandNumber: -1, isError: true,
+                                               output: "window \(windowID) has no single pane to join")
+                }
                 return await self.tmuxService.send(
                     .joinPaneToSession(source: soleID, session: session))
             },

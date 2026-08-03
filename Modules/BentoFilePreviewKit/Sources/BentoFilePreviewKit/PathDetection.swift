@@ -54,7 +54,12 @@ public enum PathDetector {
     /// beats the slashful fragment inside it, etc.).
     private static let patterns: [(explicit: Bool, regex: NSRegularExpression)] = {
         func re(_ p: String) -> NSRegularExpression {
-            try! NSRegularExpression(pattern: p)
+            guard let regex = try? NSRegularExpression(pattern: p) else {
+                // Compile-time literals — a typo must fail loudly at first
+                // use, not silently drop a whole pattern class.
+                fatalError("PathDetector: invalid hardcoded pattern: \(p)")
+            }
+            return regex
         }
         return [
             // "quoted path with spaces" — inner group must contain a slash.
@@ -115,23 +120,32 @@ public enum PathDetector {
             .sorted { ($0.priority, $0.range.lowerBound) < ($1.priority, $1.range.lowerBound) }
         guard let best = hits.first else { return nil }
         let tokenRange = best.quotedInner ?? best.range
-        // TUI-truncated prefix: "…/App/File.swift" would otherwise read as an
-        // absolute path that can never exist. Reclassify as a relative suffix
-        // (drop the leading slash) that resolves via tree search.
-        let truncated = best.explicit
-            && tokenRange.lowerBound > line.startIndex
-            && line[tokenRange.lowerBound] == "/"
-            && "…⋯".contains(line[line.index(before: tokenRange.lowerBound)])
         guard var cand = clean(line: line, tokenRange: tokenRange, explicit: best.explicit) else {
             return nil
         }
-        if truncated, cand.path.hasPrefix("/") {
-            let suffix = String(cand.path.dropFirst())
+        // TUI-truncated prefix: "…/App/File.swift" would otherwise read as an
+        // absolute path that can never exist. Reclassify as a relative suffix
+        // (drop the leading slash) that resolves via tree search.
+        if best.explicit,
+           let suffix = Self.reclassifyTruncated(path: cand.path, in: line,
+                                                 atStart: tokenRange.lowerBound) {
             guard suffix.count > 1 else { return nil }
             cand = Candidate(path: suffix, line: cand.line, column: cand.column,
                              explicit: false, range: cand.range)
         }
         return cand
+    }
+
+    /// TUI-truncated prefix: a token whose leading "/" sits right after an
+    /// ellipsis is a cut-off path ("…/App/File.swift"), not an absolute path.
+    /// Returns the reclassified relative suffix (leading slash dropped), or
+    /// nil when the token isn't truncated. Shared by single-line candidates
+    /// and wrap-chain joins.
+    static func reclassifyTruncated(path: String, in line: String,
+                                    atStart start: String.Index) -> String? {
+        guard path.hasPrefix("/"), start > line.startIndex,
+              "…⋯".contains(line[line.index(before: start)]) else { return nil }
+        return String(path.dropFirst())
     }
 
     /// All absolute / `~` path tokens in one logical line — the raw material
@@ -638,10 +652,10 @@ public struct PathHitTester {
                 var path = ct.path
                 // Same reclassification as the single-line case: a leading slash
                 // right after a TUI ellipsis is a truncated prefix, not a root.
-                let firstLine = lines[first.li]
-                if path.hasPrefix("/"), first.range.lowerBound > firstLine.startIndex,
-                   "…⋯".contains(firstLine[firstLine.index(before: first.range.lowerBound)]) {
-                    path = String(path.dropFirst())
+                if let suffix = PathDetector.reclassifyTruncated(path: path,
+                                                                 in: lines[first.li],
+                                                                 atStart: first.range.lowerBound) {
+                    path = suffix
                 }
                 guard path.count > 1, path.contains("/") || path.contains("."),
                       !seen.contains(path) else { continue }

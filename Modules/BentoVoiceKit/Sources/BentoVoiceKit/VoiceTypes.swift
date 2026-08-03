@@ -124,3 +124,23 @@ public func openAILanguageHint(for locale: String) -> String {
     default: return ""
     }
 }
+
+/// Run a WSS handshake receive under a deadline. `timeoutIntervalForRequest`
+/// bounds the connection, not the first server message — a server that accepts
+/// but never sends `session.created` would otherwise hang `start()` forever.
+/// The timeout cancels the socket (so a pending `receive()` can't leak past the
+/// throw) and the `URLError(.timedOut)` feeds the caller's transient→retry path.
+func withHandshakeTimeout(cancelling wsTask: URLSessionWebSocketTask,
+                          _ receive: @escaping @Sendable () async throws -> String) async throws -> String {
+    try await withThrowingTaskGroup(of: String.self) { group in
+        group.addTask { try await receive() }
+        group.addTask {
+            try await Task.sleep(for: .seconds(10))
+            wsTask.cancel(with: .abnormalClosure, reason: nil)
+            throw URLError(.timedOut)
+        }
+        guard let first = try await group.next() else { throw URLError(.timedOut) }
+        group.cancelAll()
+        return first
+    }
+}

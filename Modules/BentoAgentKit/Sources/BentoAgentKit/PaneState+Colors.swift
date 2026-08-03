@@ -83,19 +83,11 @@ public extension PaneState {
 
     #if canImport(AppKit)
     var chromeAccentNSColor: NSColor? {
-        chromeAccentHex.map {
-            NSColor(srgbRed: CGFloat(($0 >> 16) & 0xFF) / 255,
-                    green: CGFloat(($0 >> 8) & 0xFF) / 255,
-                    blue: CGFloat($0 & 0xFF) / 255, alpha: 1)
-        }
+        chromeAccentHex.map { Self.nsColor(hex: $0) }
     }
     #elseif canImport(UIKit)
     var chromeAccentUIColor: UIColor? {
-        chromeAccentHex.map {
-            UIColor(red: CGFloat(($0 >> 16) & 0xFF) / 255,
-                    green: CGFloat(($0 >> 8) & 0xFF) / 255,
-                    blue: CGFloat($0 & 0xFF) / 255, alpha: 1)
-        }
+        chromeAccentHex.map { Self.uiColor(hex: $0) }
     }
     #endif
 }

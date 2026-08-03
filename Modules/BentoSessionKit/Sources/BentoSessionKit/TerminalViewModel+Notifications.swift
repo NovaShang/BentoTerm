@@ -28,10 +28,10 @@ extension TerminalViewModel {
             // removed panes, active / zoom state).
             applyLayoutGeometry(layout)
             layoutChangeDebounce?.cancel()
-            layoutChangeDebounce = Task {
+            layoutChangeDebounce = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(300))
-                guard !Task.isCancelled else { return }
-                await refreshPanes()
+                guard let self, !Task.isCancelled else { return }
+                await self.refreshPanes()
             }
 
         case .windowAdd(let win):
@@ -56,6 +56,9 @@ extension TerminalViewModel {
             // and panes — the new session has different pane IDs, so the surfaces
             // must be rebuilt from the fresh list.
             activeTmuxSessionName = name
+            // Sizing is a per-session policy on the server — re-adopt it, or
+            // sizingMode/owner still describe the previous session.
+            restoreSizingMode(for: name)
             Task {
                 await refreshWindows()
                 await refreshPanes()

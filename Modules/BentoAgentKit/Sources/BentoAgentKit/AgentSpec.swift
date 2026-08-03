@@ -1,7 +1,7 @@
 import Foundation
 
 /// AgentPreset is the menu of "well-known" coding agents the wizard offers.
-/// Mirrors BentoTermMac/Sources/Services/TmuxCLI.swift — keep both in sync.
+/// This is the canonical copy — the Mac app's TmuxCLI.swift references it.
 public enum AgentPreset: String, CaseIterable, Identifiable {
     case claudeCode = "Claude Code"
     case opencode = "OpenCode"
@@ -173,12 +173,6 @@ public struct AgentSpec: Hashable {
     }
 }
 
-// A spec used to render a `setupScript` — a `tmux new-session -d …;
-// split-window …` line typed into the remote login shell a second before
-// attaching. It was removed, not moved: that write raced the freshly spawned
-// pty and, when it lost, dropped `-c <dir>` silently so the agent started in
-// the wrong folder. The session is now seeded on the `tmux -CC` launch line
-// itself (`TmuxControlMode.launchCommand`) and the extra panes are added over
-// control mode, where every command has a response we can log. The tilde
-// quoting rule that lived here now lives in `TmuxShellQuote`, with its
-// regression tests in swift-tmux's `LaunchCommandTests`.
+// The session is seeded on the `tmux -CC` launch line
+// (`TmuxControlMode.launchCommand`); extra panes are added over control mode,
+// where every command has a response we can log.

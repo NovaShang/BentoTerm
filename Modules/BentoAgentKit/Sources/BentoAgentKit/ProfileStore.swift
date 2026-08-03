@@ -28,10 +28,16 @@ public final class ProfileStore: ObservableObject {
             // couldn't absorb). Preserve the raw bytes under a sibling key so
             // we can recover later, and seed with built-ins so the app keeps
             // working. Do NOT overwrite the original key, that would silently
-            // delete the broken data.
-            let stamp = Int(Date().timeIntervalSince1970)
-            UserDefaults.standard.set(data, forKey: "\(storageKey)_broken_\(stamp)")
-            profileLog.error("Failed to decode state_profiles: \(String(describing: error)). Backed up under state_profiles_broken_\(stamp)")
+            // delete the broken data. Stamp the backup only once — otherwise a
+            // store that keeps failing to decode appends a
+            // state_profiles_broken_* key on every launch, accumulating forever.
+            let hasBackup = UserDefaults.standard.dictionaryRepresentation().keys
+                .contains { $0.hasPrefix("\(storageKey)_broken_") }
+            if !hasBackup {
+                let stamp = Int(Date().timeIntervalSince1970)
+                UserDefaults.standard.set(data, forKey: "\(storageKey)_broken_\(stamp)")
+                profileLog.error("Failed to decode state_profiles: \(String(describing: error)). Backed up under state_profiles_broken_\(stamp)")
+            }
             profiles = Self.defaultProfiles
         }
     }
@@ -53,7 +59,7 @@ public final class ProfileStore: ObservableObject {
         // boundary existed) pick them up. These have no editor, so this can't
         // clobber a user edit; user-editable fields (name/outputPatterns/
         // titlePatterns/quickKeys) are left as stored.
-        let presetByID = Dictionary(uniqueKeysWithValues: Self.defaultProfiles.map { ($0.id, $0) })
+        let presetByID = Dictionary(Self.defaultProfiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for i in profiles.indices where profiles[i].isBuiltIn {
             guard let preset = presetByID[profiles[i].id] else { continue }
             // Adopt preset detection logic (idempotent: only writes when different).
@@ -327,10 +333,4 @@ public final class ProfileStore: ObservableObject {
         ],
         isBuiltIn: true
     )
-}
-
-/// Backward compatibility
-@MainActor
-public enum BuiltInProfiles {
-    public static var all: [StateProfile] { ProfileStore.shared.profiles }
 }

@@ -128,7 +128,7 @@ struct AgentDetector {
         case .bottomNonEmptyLines(let n):
             guard let lines else { return nil }
             let nonEmpty = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            return nonEmpty.suffix(n).joined(separator: "\n")
+            return nonEmpty.suffix(max(0, n)).joined(separator: "\n")
         case .afterLastHorizontalRule:
             guard let lines else { return nil }
             guard let last = lines.lastIndex(where: Self.isHorizontalRule) else { return nil }
@@ -190,11 +190,12 @@ struct AgentDetector {
         return Double(hits) / Double(trimmed.count) >= 0.8
     }
 
-    /// Compiled-regex cache — detection runs every poll for several panes; the
-    /// patterns are a small fixed set, so never recompile.
-    private static let regexCache = NSCache<NSString, NSRegularExpression>()
+    /// Compiled-regex cache, shared with StateDetectionService — detection
+    /// runs every poll for several panes; the patterns are a small fixed set,
+    /// so never recompile.
+    static let regexCache = NSCache<NSString, NSRegularExpression>()
 
-    private static func compiled(_ pattern: String) -> NSRegularExpression? {
+    static func compiled(_ pattern: String) -> NSRegularExpression? {
         if let cached = regexCache.object(forKey: pattern as NSString) { return cached }
         guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive)
         else { return nil }

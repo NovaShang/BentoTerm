@@ -183,7 +183,11 @@ public enum TmuxLayoutTree {
             switch n {
             case .leaf(let id, let w, let h, _, _):
                 let area = w * h
-                if best == nil || area > best!.area { best = (id, area) }
+                if let current = best {
+                    if area > current.area { best = (id, area) }
+                } else {
+                    best = (id, area)
+                }
             case .hsplit(_, _, _, _, let c), .vsplit(_, _, _, _, let c):
                 c.forEach(walk)
             }

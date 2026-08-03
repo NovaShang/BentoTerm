@@ -19,6 +19,10 @@ final class PaneHintChip: NSView {
     private let background = NSVisualEffectView()
     private let label = NSTextField(labelWithString: "")
     nonisolated(unsafe) private var dismissWork: DispatchWorkItem?
+    /// Generation counter: a re-show bumps it so a fade-out completion that was
+    /// already committed (cancelling `dismissWork` can't reach it) won't remove
+    /// the live chip.
+    private var showSeq = 0
 
     override var isFlipped: Bool { true }
     /// Never steal the mouse — the gesture that triggered this chip is usually
@@ -71,6 +75,7 @@ final class PaneHintChip: NSView {
 
     private func present(_ text: String, in host: NSView, for seconds: TimeInterval) {
         dismissWork?.cancel()
+        showSeq += 1
         label.stringValue = text
         label.sizeToFit()
 
@@ -96,11 +101,19 @@ final class PaneHintChip: NSView {
     private func finish() {
         dismissWork?.cancel()
         dismissWork = nil
+        showSeq += 1
+        let seq = showSeq
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
             animator().alphaValue = 0
         } completionHandler: { [weak self] in
-            self?.removeFromSuperview()
+            // A re-show bumps showSeq — skip removal so a fade-out that was
+            // already in flight can't tear down the re-shown chip. The
+            // completion runs on the main thread.
+            MainActor.assumeIsolated {
+                guard let self, self.showSeq == seq else { return }
+                self.removeFromSuperview()
+            }
         }
     }
 

@@ -45,7 +45,7 @@ struct LaunchCommandTests {
     /// on the one line that actually launches tmux.
     @Test func directoryAndProgramRideTheLaunchLine() {
         let cmd = svc.launchCommand(sessionName: "work", path: "~/code/app", command: "claude")
-        #expect(cmd.hasPrefix("tmux -CC new-session -A -s work "))
+        #expect(cmd.hasPrefix("tmux -CC new-session -A -s 'work' "))
         #expect(cmd.contains("-c ~/'code/app'"))
         #expect(cmd.contains("'claude'"))
         #expect(cmd.hasSuffix("\n"))
@@ -53,7 +53,7 @@ struct LaunchCommandTests {
 
     @Test func emptyProgramAddsNothing() {
         let cmd = svc.launchCommand(sessionName: "work", path: "/tmp", command: "")
-        #expect(cmd == "tmux -CC new-session -A -s work -c '/tmp'\n")
+        #expect(cmd == "tmux -CC new-session -A -s 'work' -c '/tmp'\n")
     }
 
     /// A grouped session shares the source's windows, so seeding a directory or
@@ -61,11 +61,11 @@ struct LaunchCommandTests {
     @Test func groupedSessionIgnoresSeed() {
         let cmd = svc.launchCommand(sessionName: "work-mobile", groupWith: "work",
                                     path: "/tmp", command: "claude")
-        #expect(cmd == "tmux -CC new-session -A -s work-mobile -t work\n")
+        #expect(cmd == "tmux -CC new-session -A -s 'work-mobile' -t 'work'\n")
     }
 
     @Test func noSeedMatchesPreviousBehavior() {
-        #expect(svc.launchCommand(sessionName: "work") == "tmux -CC new-session -A -s work\n")
+        #expect(svc.launchCommand(sessionName: "work") == "tmux -CC new-session -A -s 'work'\n")
         #expect(svc.launchCommand() == "tmux -CC new-session\n")
     }
 }
@@ -104,7 +104,7 @@ struct LaunchCommandLineTests {
     @Test func hasNoTrailingNewline() {
         let line = TmuxControlMode.launchCommandLine(sessionName: "work")
         #expect(!line.contains("\n"))
-        #expect(line == "tmux -CC new-session -A -s work")
+        #expect(line == "tmux -CC new-session -A -s 'work'")
     }
 
     /// One builder, so the local and remote launches can never drift into
