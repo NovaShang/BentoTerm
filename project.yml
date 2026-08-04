@@ -82,7 +82,21 @@ targets:
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Bento uses speech recognition to convert voice to text and shell commands."
         # No camera / Face ID: the QR-pairing camera and key-protection Face ID
         # prompts were relay-era leftovers — no code path requests either.
-        ITSAppUsesNonExemptEncryption: false
+        # Export compliance. This MUST carry the INFOPLIST_KEY_ prefix: spelled
+        # as a bare build setting (as it was until 2026-08-03) Xcode never
+        # copies it into Info.plist, and the key is simply absent from the
+        # shipped app — App Store Connect then stops every upload to ask the
+        # export questions by hand.
+        #
+        # YES, not NO: the app statically links BoringSSL via swift-crypto and
+        # speaks SSH through NIOSSH, so it plainly implements strong encryption
+        # of its own — none of Apple's exemptions (Apple-OS-only crypto,
+        # HTTPS-only, authentication-only) describe that. The algorithms are
+        # all published standards, so it qualifies for the mass-market
+        # exemption under EAR 5D002 / License Exception ENC — which is claimed
+        # in the App Store Connect questionnaire and costs one annual
+        # self-classification report to BIS each January.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: true
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_FILE: BentoTermiOS/Info.plist
         CODE_SIGN_STYLE: Automatic

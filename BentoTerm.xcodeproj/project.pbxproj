@@ -27,6 +27,7 @@
 		341CF69E9B598D00045A814C /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 8427BCC6524800417F8C41CC /* SwiftTerm */; };
 		354615115BE921DEC8C6DE30 /* BentoFilePreviewKit in Frameworks */ = {isa = PBXBuildFile; productRef = 9FFB4D8CEA3A5CDB1A432888 /* BentoFilePreviewKit */; };
 		3950D8BD2F972C35BDB2A658 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3645AA617BF76F6076FAD817 /* SettingsView.swift */; };
+		3D3B8AC20677BBB849C2DF23 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = BD4901C69ED106A98CD7DB60 /* PrivacyInfo.xcprivacy */; };
 		3D67EEB3E772360974793D3B /* TmuxParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3F63F6D86CDEDA846856B83 /* TmuxParserTests.swift */; };
 		3F30B5C6B5CA2BFDE7A74A3D /* BentoSessionKit in Frameworks */ = {isa = PBXBuildFile; productRef = F74675C2740074CBC8EC842D /* BentoSessionKit */; };
 		465061AE560B23038B642DA5 /* BentoAgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = D127E59F5EE82D4345079B6E /* BentoAgentKit */; };
@@ -173,6 +174,7 @@
 		B73561C6F88999D2ABEF2F0B /* GhosttyKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GhosttyKit; path = Modules/GhosttyKit; sourceTree = SOURCE_ROOT; };
 		B75E58A2AE8BB259D1E2A63A /* SessionsMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsMenu.swift; sourceTree = "<group>"; };
 		B7C4A837B9CCF54EBAD7A6C2 /* BentoMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BentoMark.swift; sourceTree = "<group>"; };
+		BD4901C69ED106A98CD7DB60 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		BDBFC733C786999BE3298FF5 /* AgentSessionWizardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionWizardView.swift; sourceTree = "<group>"; };
 		BEDB6939B5F75DD39412CBAF /* SessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionManager.swift; sourceTree = "<group>"; };
 		C1B2FFDC5ED192F9C857392B /* GhosttyTerminalTabBar_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyTerminalTabBar_macOS.swift; sourceTree = "<group>"; };
@@ -490,6 +492,7 @@
 			children = (
 				0B796E58C0A8E6162A7DC774 /* .gitkeep */,
 				A79506589FAADCC2767D8287 /* MapleMono-NF-CN-Regular.ttf */,
+				BD4901C69ED106A98CD7DB60 /* PrivacyInfo.xcprivacy */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -738,6 +741,7 @@
 			files = (
 				577B2395B0224F233E1521D3 /* Assets.xcassets in Resources */,
 				79792F449E3994E8D36D74EC /* MapleMono-NF-CN-Regular.ttf in Resources */,
+				3D3B8AC20677BBB849C2DF23 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -914,11 +918,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BentoTermiOS/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bento needs microphone access for voice input to terminal.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Bento uses speech recognition to convert voice to text and shell commands.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				ITSAppUsesNonExemptEncryption = NO;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1122,11 +1126,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BentoTermiOS/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Bento needs microphone access for voice input to terminal.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Bento uses speech recognition to convert voice to text and shell commands.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				ITSAppUsesNonExemptEncryption = NO;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

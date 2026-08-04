@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Privacy manifest for the BentoTerm iOS app target.
+
+	  Required by App Store Connect: an upload that touches a "required reason"
+	  API without declaring it here is rejected outright (ITMS-91053), which is
+	  what happens to this app without this file.
+
+	  Dependencies that ship their own manifest (swift-crypto, swift-nio) carry
+	  it inside their own resource bundle — this file covers only first-party
+	  Bento code. Keep it in step with the code: adding a call to any API in
+	  Apple's required-reason list means adding its category here.
+	-->
+
+	<!-- No tracking: nothing here is combined with data from other companies,
+	     and no data is shared with data brokers. -->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<!--
+		  The complete collection surface is the opt-in telemetry in
+		  BentoFoundationKit/Telemetry.swift: a closed enum of bare event
+		  names plus a random install UUID, POSTed to Bento's own endpoint.
+		  Default OFF; the install ID is deleted when the toggle goes off.
+
+		  Deliberately NOT listed: voice audio. The default ASR engine is
+		  Apple's on-device recognizer, and the optional Qwen/OpenAI engines
+		  stream audio through a proxy that forwards in real time and retains
+		  nothing — transient processing, which Apple does not count as
+		  collection. If that server ever starts logging audio or
+		  transcripts, NSPrivacyCollectedDataTypeAudioData must be added here
+		  and to the App Privacy label.
+		-->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- The random `install_id` that batches carry. No account, no
+			     device identifier, no link to anything else. -->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeDeviceID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+	</array>
+
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<!-- Every preference the app keeps (theme, font size, engine
+			     choice, host list metadata, consent toggles) lives in
+			     UserDefaults, read and written only by this app. -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- BentoFilePreviewKit stats a path the user tapped in the
+			     terminal and shows its modification date in the preview. -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- BentoFoundationKit's diagnostic log stamps each line with
+			     ProcessInfo.systemUptime to measure elapsed time between
+			     in-app events. -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
