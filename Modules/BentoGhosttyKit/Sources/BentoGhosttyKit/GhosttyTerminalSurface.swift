@@ -128,9 +128,39 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
             // last pasted — don't leave it pointing at a surface we're about to
             // free (mirrors the macOS teardown).
             if GhosttyRuntime.shared.pasteSurface == surface { GhosttyRuntime.shared.pasteSurface = nil }
+            detachGhosttySublayers()
             ghostty_surface_free(surface)
         }
         surface = nil
+    }
+
+    /// Take ghostty's Metal sublayer(s) out of this view's layer tree.
+    ///
+    /// ghostty attaches its render layer as a SUBLAYER of ours (see
+    /// `synchronizeGhosttyLayerGeometry`) and `ghostty_surface_free` releases
+    /// the renderer that owns it. Nothing used to remove it from the tree, so
+    /// a layer that died with its surface stayed a child of a live layer, and
+    /// the next CoreAnimation commit walked into it and read a freed object:
+    /// `CA::Context::commit_transaction → object_getClass`, EXC_BAD_ACCESS at
+    /// 0x2500000000 — twice within ten seconds, same stack, same fault
+    /// address, on 2026-08-02.
+    ///
+    /// Recreation carried a quieter second version of the same bug: every new
+    /// surface added ANOTHER sublayer, so a pane whose font size changed N
+    /// times accumulated N dead layers, each stretched over the full bounds by
+    /// `synchronizeGhosttyLayerGeometry`.
+    ///
+    /// Removing ALL sublayers is correct rather than lazy: this view
+    /// deliberately owns no chrome of its own (the pane's view controller does
+    /// — see `onRendererHealthChanged`), so every sublayer here is ghostty's.
+    ///
+    /// Must run BEFORE the free, while the layer is still a valid object.
+    private func detachGhosttySublayers() {
+        guard let sublayers = layer.sublayers, !sublayers.isEmpty else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for sublayer in sublayers { sublayer.removeFromSuperlayer() }
+        CATransaction.commit()
     }
 
     // MARK: - Lifecycle / surface creation
@@ -200,9 +230,14 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         if active {
             // Nothing was drawn while we were away and the engine has no reason
             // to think the screen is stale — ask for one frame on return.
+            //
+            // Anything banked while we were away stays banked for now: the
+            // render link drains it a slice per frame from `renderTick`.
+            // Flushing it here instead — before the first draw of the returning
+            // app — is exactly the push-with-no-drain that hung the app on
+            // reopen. See `drainBudgetPerTurn`.
             needsDraw = true
             startRenderLink()
-            flushPendingBytes()
         } else {
             stopRenderLink()
         }
@@ -237,12 +272,64 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         }
     }
 
-    private func flushPendingBytes() {
-        guard !pendingBytes.isEmpty else { return }
-        let queued = pendingBytes
-        pendingBytes.removeAll()
-        pendingByteCount = 0
-        for chunk in queued { feedOnMainActor(chunk) }
+    /// How much backlog may be pushed into ghostty in a single main-thread turn.
+    ///
+    /// `ghostty_surface_process_output` is a SYNCHRONOUS push into a mailbox
+    /// that only `ghostty_surface_draw` drains — and that draw runs on this
+    /// same main thread. Handing the engine a whole backlog in one turn is
+    /// therefore a self-deadlock waiting to happen: once the mailbox is full
+    /// the push parks in a futex wait for a drain that cannot run until the
+    /// push returns. That is the hang, five times across 2026-08-01/02, always
+    /// on reopening from background — where up to 8 MB of tmux output banked
+    /// during the SSH keep-alive window met a display link that had not
+    /// started ticking yet. iOS ended each one with a scene-update watchdog
+    /// kill (0x8BADF00D at 0% CPU: blocked, not spinning).
+    ///
+    /// One slice per frame at 60 Hz drains the 8 MB ceiling in well under a
+    /// second, which is faster than the replay can be read anyway.
+    private static let drainBudgetPerTurn = 256 << 10
+
+    /// Bytes handed to the engine since the last draw.
+    ///
+    /// The budget has to be enforced against the DRAW, not against any one
+    /// caller: the mailbox empties only in `ghostty_surface_draw`, so what
+    /// matters is how much accumulates between two draws regardless of who
+    /// pushed it. `TerminalContainerVC.feedProgressively` is the reason this
+    /// is a counter rather than a per-call check — it slices a history replay
+    /// into 32 KB pieces and drains them one per runloop turn, and the main
+    /// queue turns over many times per frame, so the whole ~512 KB replay can
+    /// still land between two display-link ticks.
+    private var bytesPushedSinceDraw = 0
+
+    /// Push at most the remaining per-draw budget of backlog, oldest first.
+    ///
+    /// Only `renderTick` calls this, and only right after a draw — that
+    /// ordering IS the fix: every push is preceded by the drain that makes
+    /// room for it.
+    private func drainPendingBytes() {
+        guard surface != nil, !isBackgrounded, !isTornDown, !pendingBytes.isEmpty else { return }
+        var budget = Self.drainBudgetPerTurn - bytesPushedSinceDraw
+        guard budget > 0 else { needsDraw = true; return }
+        while budget > 0, let chunk = pendingBytes.first {
+            if chunk.count > budget {
+                // A single chunk can exceed a whole turn's budget on its own
+                // (a reattach replays scrollback as one blob). Split it and
+                // leave the tail at the head of the queue: the point is to
+                // bound what one push hands the mailbox, not to count chunks.
+                pendingBytes[0] = Data(chunk.dropFirst(budget))
+                pendingByteCount -= budget
+                pushToEngine(Data(chunk.prefix(budget)))
+                budget = 0
+            } else {
+                pendingBytes.removeFirst()
+                pendingByteCount -= chunk.count
+                budget -= chunk.count
+                pushToEngine(chunk)
+            }
+        }
+        // Still behind — guarantee another tick, since the dirty gate is what
+        // decides whether this method runs again.
+        if !pendingBytes.isEmpty { needsDraw = true }
     }
 
     public override func layoutSubviews() {
@@ -296,9 +383,12 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         syncColorScheme()
         ghostty_surface_refresh(created)
         ghostty_surface_draw(created)
+        bytesPushedSinceDraw = 0   // this draw emptied the new surface's mailbox
         updateRenderActive()
-
-        flushPendingBytes()
+        // Output that arrived before this surface existed is NOT pushed here:
+        // `updateRenderActive` has started the render link, and `renderTick`
+        // feeds the backlog a bounded slice at a time with a draw between
+        // slices. See `drainBudgetPerTurn`.
     }
 
     private var currentScale: CGFloat {
@@ -399,11 +489,16 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         // pattern the macOS surface ships.
         let now = DispatchTime.now().uptimeNanoseconds
         let idleDue = now &- lastDrawNs >= Self.idleRedrawIntervalNs
-        if !needsDraw && !idleDue && gridSettled { return }
+        if !needsDraw && !idleDue && gridSettled && pendingBytes.isEmpty { return }
         needsDraw = false
         lastDrawNs = now
         ghostty_surface_draw(surface)
         if !gridSettled { reportSizeIfNeeded() }
+        // The draw just emptied ghostty's mailbox, so this is the one moment
+        // in the frame where handing it more output cannot block: reset the
+        // budget, then push a slice of backlog against it.
+        bytesPushedSinceDraw = 0
+        drainPendingBytes()
     }
 
     // MARK: - TerminalSurface
@@ -651,6 +746,30 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         // seconds", at 0% CPU — blocked, not spinning). Buffer instead and flush
         // when the draw loop is running again.
         guard !isBackgrounded else { buffer(data); return }
+        // Two reasons to queue instead of pushing:
+        //   * a backlog is already draining — pushing past it would put newer
+        //     bytes ahead of older ones and repaint from out-of-order output;
+        //   * this frame's push budget is spent, and more would risk the
+        //     mailbox-full block that no draw can rescue (`drainBudgetPerTurn`).
+        guard pendingBytes.isEmpty,
+              bytesPushedSinceDraw + data.count <= Self.drainBudgetPerTurn else {
+            buffer(data)
+            setNeedsDraw()   // guarantee a tick that will drain what was just queued
+            return
+        }
+        pushToEngine(data)
+    }
+
+    /// The one place bytes actually enter ghostty.
+    ///
+    /// Callers own the preconditions: a live surface, a foreground app, and
+    /// FIFO order with respect to `pendingBytes`. Kept separate from
+    /// `feedOnMainActor` precisely so `drainPendingBytes` can push the queue's
+    /// own chunks without that method's "queue behind the backlog" guard
+    /// sending them back into the queue they just came from.
+    private func pushToEngine(_ data: Data) {
+        guard let surface else { return }
+        bytesPushedSinceDraw += data.count
         data.withUnsafeBytes { raw in
             guard let ptr = raw.bindMemory(to: CChar.self).baseAddress else { return }
             ghostty_surface_process_output(surface, ptr, UInt(data.count))
@@ -707,6 +826,12 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         // (feed() buffers while surface is nil) and flushes on create.
         renderLink?.invalidate()
         renderLink = nil
+        // The layer the old surface rendered into must leave the tree before
+        // the surface that owns it is freed, or the next CoreAnimation commit
+        // reads a dead object — and the replacement surface would otherwise
+        // stack a second layer on top of the corpse. See
+        // `detachGhosttySublayers`.
+        detachGhosttySublayers()
         if let surface { ghostty_surface_free(surface) }
         surface = nil
         currentSize = nil
