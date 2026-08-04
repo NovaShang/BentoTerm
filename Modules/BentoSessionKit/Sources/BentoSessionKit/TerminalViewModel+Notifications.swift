@@ -83,6 +83,9 @@ extension TerminalViewModel {
         case .clientDetached(let client):
             handleClientDetached(client)
 
+        case .pasteBufferChanged(let name):
+            adoptPasteBuffer(named: name)
+
         case .exit:
             usingTmux = false
             isTmuxReady = false
@@ -90,4 +93,40 @@ extension TerminalViewModel {
         }
     }
 
+    /// Mirror a tmux paste buffer onto this device's system pasteboard.
+    ///
+    /// A program that copies while running under tmux writes the text into a
+    /// paste buffer (`tmux load-buffer -w -`, which is what Claude Code does the
+    /// moment it detects tmux). For a normal terminal tmux would then also emit
+    /// the OSC 52 that puts it on the real clipboard — but a control-mode client
+    /// has no tty to receive that, so the copy used to land in a buffer nobody
+    /// ever read. `%paste-buffer-changed` is the only signal we get, and
+    /// `show-buffer` is the only way to collect the text.
+    ///
+    /// This is also what makes copy work ACROSS the link: the buffer lives on
+    /// the remote host, the pasteboard is local, and this is the hop between.
+    func adoptPasteBuffer(named name: String) {
+        // Only while tmux is actually driving — a buffer notification arriving
+        // during teardown has no owner worth serving.
+        guard usingTmux else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let resp = await self.tmuxService.send(.showBuffer(name: name), timeout: .seconds(5))
+            guard !resp.isError else {
+                dlog("[clipboard] show-buffer \(name) failed")
+                return
+            }
+            // A buffer can hold a whole file. Refuse the absurd rather than
+            // hand the pasteboard something that came from a runaway `cat`.
+            guard !resp.output.isEmpty, resp.output.utf8.count <= Self.maxAdoptedBufferBytes else {
+                dlog("[clipboard] buffer \(name) skipped (\(resp.output.utf8.count)B)")
+                return
+            }
+            TerminalClipboard.write(resp.output)
+            dlog("[clipboard] adopted tmux buffer \(name) (\(resp.output.utf8.count)B)")
+        }
+    }
+
+    /// 4 MB — far above any real copy, far below "the agent dumped a log".
+    static let maxAdoptedBufferBytes = 4 * 1024 * 1024
 }

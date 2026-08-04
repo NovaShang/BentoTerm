@@ -137,6 +137,11 @@ public enum TmuxCommand: Sendable {
     /// frozen rectangle — it can still be scrolled and dismissed.
     case copyModeCommand(pane: TmuxPaneID, command: String, count: Int? = nil)
 
+    /// Read a paste buffer's contents. The bridge behind `%paste-buffer-changed`:
+    /// a program that copied via tmux (`load-buffer -w`) put its text HERE, and
+    /// a control-mode client can only get it by asking.
+    case showBuffer(name: String)
+
     // Info
     case displayMessage(format: String, target: TmuxPaneID? = nil)
     case listClients
@@ -320,6 +325,9 @@ public enum TmuxCommand: Sendable {
             if let count, count > 1 { cmd += " -N \(count)" }
             cmd += " \(escapeArg(command))"
             return cmd
+
+        case .showBuffer(let name):
+            return "show-buffer -b \(escapeArg(name))"
 
         case .displayMessage(let format, let target):
             var cmd = "display-message -p"

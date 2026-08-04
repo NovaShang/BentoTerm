@@ -58,6 +58,13 @@ public enum TmuxNotification: Sendable {
     /// use — which is how a session learns that the device owning its size
     /// went away, with no polling and no state of our own to keep in sync.
     case clientDetached(client: String)
+    /// A paste buffer was created or replaced on the server (tmux ≥ 3.4).
+    /// This is the ONLY signal a control-mode client gets when a program in a
+    /// pane copies something: a control client has no tty, so tmux cannot write
+    /// it the OSC 52 that `load-buffer -w` would send a normal terminal. Claude
+    /// Code copies exactly this way (`tmux load-buffer -w -`) once it detects
+    /// tmux, so without acting on this notification its "copy" reaches nothing.
+    case pasteBufferChanged(name: String)
     case exit(reason: String?)
 }
 

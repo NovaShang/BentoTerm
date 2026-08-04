@@ -504,17 +504,41 @@ public final class TmuxControlMode: @unchecked Sendable {
         "%unlinked-window-close", "%session-changed ", "%session-renamed ",
         "%sessions-changed", "%pane-mode-changed ", "%client-session-changed",
         "%client-detached ", "%config-error", "%exit",
+        "%paste-buffer-changed ", "%paste-buffer-deleted ",
     ]
 
     /// Recognised `%` markers used to realign a line that arrives with
     /// leading junk (stray DCS / shell echo) outside a block.
     private static let realignPrefixes = ["%begin ", "%output ", "%end ", "%error ",
                                           "%session", "%layout-change ", "%window-", "%pane-",
-                                          "%exit", "%unlinked-", "%client-", "%config-"]
+                                          "%exit", "%unlinked-", "%client-", "%config-",
+                                          "%paste-buffer-"]
 
     private func isOutOfBandNotification(_ line: String) -> Bool {
         for prefix in Self.notificationPrefixes where line.hasPrefix(prefix) { return true }
         return false
+    }
+
+    /// Whether `line` is the `%end`/`%error` that closes the block numbered
+    /// `commandNumber` — matched on the NUMBER tmux echoes back
+    /// (`%end <timestamp> <number> <flags>`), not merely on the prefix.
+    ///
+    /// The prefix alone is not enough, because a command's own output can
+    /// legitimately contain a line that starts with `%end `: `show-buffer` of a
+    /// pasted transcript, or `capture-pane` of a pane that has tmux protocol on
+    /// screen. Closing on that truncates the response AND leaves the real `%end`
+    /// to arrive with no block open — which then consumes the NEXT command's
+    /// pending queue entry and shifts every later response by one. That FIFO
+    /// skew is the ancestor of a whole family of "impossible" bugs (a
+    /// display-message caller receiving another command's text), so the frame is
+    /// matched exactly rather than guessed.
+    private static func closesBlock(_ line: String, commandNumber: Int) -> Bool {
+        guard line.hasPrefix("%end ") || line.hasPrefix("%error ") else { return false }
+        let parts = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
+        // Malformed framing (no number) still closes: an unclosed block would
+        // hang every caller behind it, which is worse than a truncated one.
+        guard parts.count >= 3, let num = Int(parts[2]) else { return true }
+        return num == commandNumber
     }
 
     /// Markers used to realign a notification that arrived INSIDE a block behind a
@@ -529,6 +553,7 @@ public final class TmuxControlMode: @unchecked Sendable {
         "%session-changed $", "%session-renamed $", "%sessions-changed",
         "%pane-mode-changed %", "%client-session-changed ", "%client-detached ",
         "%config-error ", "%exit",
+        "%paste-buffer-changed ", "%paste-buffer-deleted ",
     ]
 
     /// If `line` begins with a NON-PRINTABLE escape/control byte — stray DCS/CSI
@@ -621,8 +646,8 @@ public final class TmuxControlMode: @unchecked Sendable {
         // leading-junk realignment below must not run inside a block, or a
         // captured line that merely CONTAINS "%end " as a substring would
         // truncate the response early.
-        if responseLock.withLock({ $0.currentBlock != nil }) {
-            if line.hasPrefix("%end ") || line.hasPrefix("%error ") {
+        if let open = responseLock.withLock({ $0.currentBlock?.commandNumber }) {
+            if Self.closesBlock(line, commandNumber: open) {
                 finishBlock(line: line, isError: line.hasPrefix("%error"))
             } else if isOutOfBandNotification(line) {
                 parseLine(line)
@@ -633,7 +658,7 @@ public final class TmuxControlMode: @unchecked Sendable {
                 // into the response (BUG-007). A stray framing marker we can't
                 // re-inject (e.g. a bare %begin from a lost %end) is dropped rather
                 // than painted; the eventual %end still closes this block.
-                if realigned.hasPrefix("%end ") || realigned.hasPrefix("%error ") {
+                if Self.closesBlock(realigned, commandNumber: open) {
                     finishBlock(line: realigned, isError: realigned.hasPrefix("%error"))
                 } else if isOutOfBandNotification(realigned) {
                     parseLine(realigned)
@@ -767,6 +792,10 @@ public final class TmuxControlMode: @unchecked Sendable {
             parseSessionRenamed(line)
         } else if line.hasPrefix("%pane-mode-changed ") {
             parsePaneModeChanged(line)
+        } else if line.hasPrefix("%paste-buffer-changed ") {
+            let name = String(line.dropFirst("%paste-buffer-changed ".count))
+                .trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty { onNotification?(.pasteBufferChanged(name: name)) }
         } else if line.hasPrefix("%client-detached ") {
             let client = String(line.dropFirst("%client-detached ".count))
                 .trimmingCharacters(in: .whitespaces)
@@ -774,7 +803,8 @@ public final class TmuxControlMode: @unchecked Sendable {
         } else if line.hasPrefix("%exit") {
             let reason = line.count > 5 ? String(line.dropFirst(6)) : nil
             onNotification?(.exit(reason: reason))
-        } else if line.hasPrefix("%sessions-changed") ||
+        } else if line.hasPrefix("%paste-buffer-deleted") ||
+                  line.hasPrefix("%sessions-changed") ||
                   line.hasPrefix("%unlinked-window-add") ||
                   line.hasPrefix("%unlinked-window-close") ||
                   line.hasPrefix("%window-pane-changed") ||

@@ -387,6 +387,80 @@ struct ResponseQueueTests {
         #expect(response.output == "done 50%end of run")
     }
 
+    /// Content that STARTS with `%end ` but names a different command number is
+    /// still content. Real case: `show-buffer` of a copied transcript (Claude
+    /// Code copies through tmux, so buffers hold arbitrary terminal text), and
+    /// `capture-pane` of a pane with tmux protocol on screen.
+    ///
+    /// Closing on the prefix alone truncated the response AND left the genuine
+    /// `%end` to arrive with no block open, where it consumed the NEXT command's
+    /// queue entry — shifting every later response by one.
+    @Test func foreignEndMarkerInBlockStaysContent() async {
+        let (service, _) = makeAttachedService()
+        service.sendToSSH = { _ in }
+
+        let task = Task { await service.send(.showBuffer(name: "buffer0")) }
+        try? await Task.sleep(for: .milliseconds(50))
+
+        service.feedData(Data(
+            "%begin 1 100 1\nline one\n%end 12345 1 0\nline three\n%end 1 100 1\n".utf8))
+
+        let response = await task.value
+        #expect(response.output == "line one\n%end 12345 1 0\nline three")
+    }
+
+    /// …and the response AFTER one of those still matches its own command —
+    /// the FIFO must not have shifted.
+    @Test func foreignEndMarkerDoesNotShiftTheQueue() async {
+        let (service, _) = makeAttachedService()
+        service.sendToSSH = { _ in }
+
+        let first = Task { await service.send(.showBuffer(name: "buffer0")) }
+        try? await Task.sleep(for: .milliseconds(50))
+        service.feedData(Data("%begin 1 100 1\n%end 999 42 0\n%end 1 100 1\n".utf8))
+        #expect(await first.value.output == "%end 999 42 0")
+
+        let second = Task { await service.send(.listPanes()) }
+        try? await Task.sleep(for: .milliseconds(50))
+        service.feedData(Data("%begin 1 101 1\nreal panes\n%end 1 101 1\n".utf8))
+        #expect(await second.value.output == "real panes")
+    }
+
+    /// The only signal a control-mode client gets when a program in a pane
+    /// copies something (`tmux load-buffer -w`): there is no tty for tmux to
+    /// write OSC 52 to, so this notification is the whole clipboard bridge.
+    @Test func pasteBufferChangedIsDispatched() async {
+        let (service, collector) = makeAttachedService()
+        service.sendToSSH = { _ in }
+
+        service.feedData(Data("%paste-buffer-changed buffer0\n".utf8))
+
+        #expect(collector.notifications.contains {
+            if case .pasteBufferChanged(let name) = $0 { return name == "buffer0" }
+            return false
+        })
+    }
+
+    /// …and it still routes when it lands mid-block, like every other
+    /// out-of-band notification. tmux emits it whenever a copy happens, which
+    /// is not synchronised with whatever command Bento has in flight.
+    @Test func pasteBufferChangedRoutesOutOfBlock() async {
+        let (service, collector) = makeAttachedService()
+        service.sendToSSH = { _ in }
+
+        let task = Task { await service.send(.listPanes()) }
+        try? await Task.sleep(for: .milliseconds(50))
+
+        service.feedData(Data(
+            "%begin 1 100 1\nline1\n%paste-buffer-changed buffer0\nline2\n%end 1 100 1\n".utf8))
+
+        let response = await task.value
+        #expect(response.output == "line1\nline2")
+        #expect(collector.notifications.contains {
+            if case .pasteBufferChanged = $0 { return true }; return false
+        })
+    }
+
     /// BUG-007: a notification interleaved in a block can arrive behind a stray
     /// escape/DCS junk prefix (transport framing), so the strict hasPrefix checks
     /// miss it and it would be folded into the response as raw protocol text.
