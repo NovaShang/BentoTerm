@@ -699,8 +699,29 @@ public struct PathHitTester {
                                     fastPath: false,
                                     spans: rowSpans(lineIdx: li, range: anchorRange)))
         }
+        // A URL is never a file path. Without this the aggressive over-generation
+        // turns "https://novashang.github.io/CodingKeyboard/" into a search for
+        // the basename and cheerfully opens a LOCAL directory that happens to be
+        // called CodingKeyboard — the stat oracle can't referee a candidate that
+        // was never a path to begin with. Link handling owns these tokens.
+        out.removeAll { $0.path.contains("://") }
         pathPreviewLog.log("tap chain pieces=\(pieces.count) anchor=\(anchorIdx) candidates=\(out.map { "\($0.path)\($0.fastPath ? "⚡" : "")" }.description, privacy: .public)")
         return out
+    }
+
+    /// The soft-wrap-joined LOGICAL line under `absRow`, plus the tapped cell's
+    /// offset within it.
+    ///
+    /// Exists so link detection can hit-test the exact text path detection sees.
+    /// The two used to read the screen by different means — links by driving
+    /// transient ghostty selections row by row, paths via `read_text(SCREEN)` —
+    /// so one click was tested against two different pictures of the screen, and
+    /// a URL the path scanner could read whole was invisible to the link
+    /// scanner. It also makes link hit-testing free of side effects: the old
+    /// reader mutated the live selection to do its reading.
+    public func logicalLine(absRow: Int, col: Int) -> (line: String, cell: Int)? {
+        guard absRow >= 0, col >= 0, col < cols, let li = lineIndex(forRow: absRow) else { return nil }
+        return (lines[li], (absRow - starts[li]) * cols + col)
     }
 
     /// Candidate roots for relative fragments, gleaned from absolute / `~`

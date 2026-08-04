@@ -63,6 +63,7 @@ public final class SurfacePathHitEngine {
     ///   - readText: whole-scrollback snapshot (`read_text(SCREEN)`).
     public func hit(point: CGPoint, cellSize: CGSize, viewportRows: Int, cols: Int,
                     scrollTop: Int?, readText: () -> String?) -> Hit? {
+        guard PathPreviewSettings.isEnabled else { return nil }
         guard let (tester, top, row, col) = prepare(point: point, cellSize: cellSize,
                                                     viewportRows: viewportRows, cols: cols,
                                                     scrollTop: scrollTop, readText: readText)
@@ -78,6 +79,7 @@ public final class SurfacePathHitEngine {
     /// `SmartPathResolver.resolveFirst` unless `hits[0].fastPath`.
     public func tapHits(point: CGPoint, cellSize: CGSize, viewportRows: Int, cols: Int,
                         scrollTop: Int?, readText: () -> String?) -> TapScan {
+        guard PathPreviewSettings.isEnabled else { return .empty }
         guard let (tester, top, row, col) = prepare(point: point, cellSize: cellSize,
                                                     viewportRows: viewportRows, cols: cols,
                                                     scrollTop: scrollTop, readText: readText)
@@ -94,13 +96,25 @@ public final class SurfacePathHitEngine {
         return TapScan(hits: hits, rootHints: hints)
     }
 
+    /// The logical line under `point` and the tapped cell within it — the
+    /// text-level view of a click, for link hit-testing. Deliberately NOT gated
+    /// on `PathPreviewSettings.isEnabled`: turning file preview off must not
+    /// also stop URLs from opening.
+    public func logicalLine(point: CGPoint, cellSize: CGSize, viewportRows: Int, cols: Int,
+                            scrollTop: Int?, readText: () -> String?) -> (line: String, cell: Int)? {
+        guard let (tester, top, row, col) = prepare(point: point, cellSize: cellSize,
+                                                    viewportRows: viewportRows, cols: cols,
+                                                    scrollTop: scrollTop, readText: readText)
+        else { return nil }
+        return tester.logicalLine(absRow: top + row, col: col)
+    }
+
     /// Shared entry: guards, tap→cell math, snapshot cache. Returns the
     /// tester plus the viewport-top row and the tapped (row, col).
     private func prepare(point: CGPoint, cellSize: CGSize, viewportRows: Int, cols: Int,
                          scrollTop: Int?, readText: () -> String?)
         -> (tester: PathHitTester, top: Int, row: Int, col: Int)? {
-        guard PathPreviewSettings.isEnabled,
-              cellSize.width > 0, cellSize.height > 0,
+        guard cellSize.width > 0, cellSize.height > 0,
               viewportRows > 0, cols > 0 else { return nil }
         let col = Int(point.x / cellSize.width)
         let row = Int(point.y / cellSize.height)

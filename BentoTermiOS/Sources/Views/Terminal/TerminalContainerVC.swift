@@ -967,7 +967,7 @@ extension TerminalContainerVC {
         // what the user means). Load-bearing for onboarding: a remote agent's
         // sign-in prints an OAuth URL that must open on THIS device.
         // A URL miss falls through to the file-path chip (disjoint detectors).
-        if surface.openLinkIfPresent(at: p) {
+        if surface.openLinkIfPresent(at: p, wrapCols: paneVM?.pane.width) {
             return
         }
         maybeShowPathChip(at: p)
@@ -980,7 +980,7 @@ extension TerminalContainerVC {
     @objc private func handleLocalTap(_ gesture: UITapGestureRecognizer) {
         onSelectPaneTapped?()
         let p = gesture.location(in: surface)
-        if surface.openLinkIfPresent(at: p) { return }
+        if surface.openLinkIfPresent(at: p, wrapCols: paneVM?.pane.width) { return }
         maybeShowPathChip(at: p)
     }
 

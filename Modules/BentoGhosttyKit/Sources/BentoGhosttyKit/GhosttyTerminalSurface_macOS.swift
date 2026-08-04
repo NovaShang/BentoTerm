@@ -935,8 +935,26 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
 
     private func updateMousePosition(_ event: NSEvent) {
         guard let surface else { return }
+        // Remember WHERE we told the engine the pointer is, so a MOUSE_OVER_LINK
+        // that comes back can be attributed to a cell. Without that anchor a
+        // stale hover from three cells ago would answer the next ⌘click.
+        lastEngineMouseCell = cellCoord(event)
         let p = pxPoint(event)
         ghostty_surface_mouse_pos(surface, p.x, p.y, modsFromFlags(event.modifierFlags))
+    }
+
+    /// The cell the engine was last told the pointer is over.
+    private var lastEngineMouseCell: (col: Int, row: Int)?
+    /// The engine's own answer for that cell: an OSC 8 hyperlink's target.
+    private var engineLink: (url: String, col: Int, row: Int)?
+
+    /// 1-based cell under a view point (the `cellCoord(_ event:)` twin).
+    private func cellCoord(atPoint p: NSPoint) -> (col: Int, row: Int) {
+        guard let cs = currentSize, cs.cellWidthPx > 0, cs.cellHeightPx > 0 else { return (1, 1) }
+        let scale = Double(currentScale)
+        let col = max(1, Int(Double(p.x) / (Double(cs.cellWidthPx) / scale)) + 1)
+        let row = max(1, Int(Double(p.y) / (Double(cs.cellHeightPx) / scale)) + 1)
+        return (col, row)
     }
 
     // MARK: - Mouse selection
@@ -1034,18 +1052,49 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
         // The gate lives here so every entry point (click, drag, middle, right,
         // wheel) honors the ⇧ bypass and the sticky suppression identically.
         guard shouldReportMouse(event) else { return false }
+        sendMouseReport(event, button: button, press: press, motion: motion)
+        return true
+    }
+
+    /// Ungated encode-and-send. Only for completing a gesture whose PRESS was
+    /// already forwarded: the release and the drags in between must go out even
+    /// if the gate has since flipped (the user pressed ⇧ mid-drag, or the pane
+    /// stopped reporting), or the program is left believing a button is still
+    /// down and every later click reads as a drag.
+    private func sendMouseReport(_ event: NSEvent, button: Int, press: Bool, motion: Bool = false) {
         let (col, row) = cellCoord(event)
         // Encoding is shared with the iOS surface (`MouseReport`) — same bytes,
         // one place, so a touch click and a mouse click can't disagree.
         onInput?(MouseReport.encode(button: button, press: press, col: col, row: row,
                                     mods: mouseModBits(event.modifierFlags),
                                     motion: motion, sgr: mouseReporting.sgr))
-        return true
     }
+
+    /// Whether the CURRENT left/middle button press was forwarded to the
+    /// program. Release and drag follow the press's decision rather than
+    /// re-deciding, so a report can never arrive unpaired.
+    ///
+    /// Load-bearing for ⌘click: that path consumes the press for Bento (a path
+    /// preview) and returns, so re-deciding at `mouseUp` sent the program a
+    /// release with no press. Claude Code's fullscreen mode accepts a bare
+    /// release as a click — so every ⌘click on a file path also fired whatever
+    /// CC had under the cursor (in practice: copy-to-tmux-buffer), on top of
+    /// the preview not opening.
+    private var leftButtonForwarded = false
+    private var middleButtonForwarded = false
+
+    /// Bento itself took this press (⌘click on a link or a path). Neither the
+    /// program nor the selection engine gets to see the rest of the gesture:
+    /// `GhosttySel.end`/`extend` on a press that never called `begin` leaves a
+    /// stray selection behind, and a live selection is exactly what the link
+    /// reader used to refuse to run on.
+    private var bentoConsumedPress = false
 
     public override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         onSelect?()
+        leftButtonForwarded = false
+        bentoConsumedPress = false
         guard let surface else { return }
         // ⌘-click declares link intent (standard terminal convention), checked
         // before TUI forwarding and instead of starting a selection: a URL
@@ -1056,18 +1105,26 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
             let p = convert(event.locationInWindow, from: nil)
             if let url = linkURL(at: p) {
                 pendingLinkClick = url
+                bentoConsumedPress = true
                 return
             }
             let scan = pathTapHits(at: p)
             if !scan.hits.isEmpty {
                 handlePathClick(scan)
+                bentoConsumedPress = true
                 return
             }
         }
         // Mouse-reporting pane → forward the click to the program (not selection),
         // unless the user is holding ⇧ to take the mouse back.
         if forwardMouse(event, button: 0, press: true) {
-            reportedDragOrigin = convert(event.locationInWindow, from: nil)
+            leftButtonForwarded = true
+            let p = convert(event.locationInWindow, from: nil)
+            reportedDragOrigin = p
+            // Not when ⌘ is already down — that click reached here because the
+            // path scan found nothing, and telling someone to do what they just
+            // did is worse than saying nothing.
+            if !event.modifierFlags.contains(.command) { notePathClickForwarded(at: p) }
             return
         }
         reportedDragOrigin = nil
@@ -1082,7 +1139,9 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     public override func mouseDragged(with event: NSEvent) {
         guard let surface else { return }
         pendingLinkClick = nil   // a drag is never a link click
-        if forwardMouse(event, button: 0, press: true, motion: true) {
+        if bentoConsumedPress { return }
+        if leftButtonForwarded {
+            sendMouseReport(event, button: 0, press: true, motion: true)
             noteReportedDrag(event)
             return
         }
@@ -1091,20 +1150,32 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     }
 
     public override func mouseUp(with event: NSEvent) {
+        let wasForwarded = leftButtonForwarded
+        let wasConsumed = bentoConsumedPress
+        leftButtonForwarded = false
+        bentoConsumedPress = false
         guard let surface else { return }
         if let url = pendingLinkClick {
             pendingLinkClick = nil
             GhosttyRuntime.openExternalURL(url)
             return
         }
-        if forwardMouse(event, button: 0, press: false) { return }
+        if wasForwarded {
+            sendMouseReport(event, button: 0, press: false)
+            return
+        }
+        if wasConsumed { return }
         GhosttySel.end(surface, mods: modsFromFlags(event.modifierFlags))
     }
 
     // Middle button → forward (mouse-report pane, or X11-style middle paste).
     public override func otherMouseDown(with event: NSEvent) {
         guard event.buttonNumber == 2 else { return super.otherMouseDown(with: event) }
-        if forwardMouse(event, button: 1, press: true) { return }
+        middleButtonForwarded = false
+        if forwardMouse(event, button: 1, press: true) {
+            middleButtonForwarded = true
+            return
+        }
         guard let surface else { return }
         updateMousePosition(event)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_MIDDLE,
@@ -1113,7 +1184,11 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
 
     public override func otherMouseUp(with event: NSEvent) {
         guard event.buttonNumber == 2 else { return super.otherMouseUp(with: event) }
-        if forwardMouse(event, button: 1, press: false) { return }
+        if middleButtonForwarded {
+            middleButtonForwarded = false
+            sendMouseReport(event, button: 1, press: false)
+            return
+        }
         guard let surface else { return }
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_MIDDLE,
                                          modsFromFlags(event.modifierFlags))
@@ -1567,45 +1642,67 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// mouseUp — standard button semantics.
     private var pendingLinkClick: String?
 
+    /// The engine re-reports the hovered link on EVERY mouse-position update
+    /// (not just when it changes), so a slow drag across one link fires this
+    /// dozens of times a second. Everything below the cell update is gated on
+    /// an actual change — an unchanged `toolTip` assignment still churns
+    /// AppKit's tooltip machinery, and an unchanged log line is pure noise in
+    /// the one stream that has to stay readable while debugging a click.
     public func handleMouseOverLink(_ url: String?) {
-        // This prebuilt libghostty never emits MOUSE_OVER_LINK (its link
-        // pipeline expects the desktop apprt's hover plumbing) — kept wired
-        // for a future build. Link hit-testing is ours: linkURL(at:) below.
-        toolTip = (url?.isEmpty == false) ? url : nil
+        let clean = (url?.isEmpty == false) ? url : nil
+        if let clean, let c = lastEngineMouseCell {
+            engineLink = (clean, c.col, c.row)
+        } else {
+            engineLink = nil
+        }
+        guard clean != lastReportedLinkURL else { return }
+        lastReportedLinkURL = clean
+        toolTip = clean
+        linkLog.log("MOUSE_OVER_LINK url=⟨\(clean ?? "nil", privacy: .public)⟩ cell=\(self.lastEngineMouseCell.map { "\($0.col),\($0.row)" } ?? "?", privacy: .public)")
     }
+
+    private var lastReportedLinkURL: String?
 
     /// The URL rendered under `point`, or nil — shared TerminalLinkDetector
     /// over the visual rows read via a transient selection (cleared before
     /// returning). Only called with no live selection (⌘-click guard).
-    private func linkURL(at point: NSPoint) -> String? {
-        guard let surface, let size = currentSize else { return nil }
-        guard !GhosttySel.hasSelection(surface) else { return nil }
-        let scale = window?.backingScaleFactor ?? 2
-        let cellW = CGFloat(size.cellWidthPx) / scale
-        let cellH = CGFloat(size.cellHeightPx) / scale
-        guard cellW > 0, cellH > 0, size.columns > 0 else { return nil }
-        // View is flipped? NSView default is bottom-left origin; ghostty input
-        // uses top-left points (pxPoint passes through) — mirror that here.
-        let topY = isFlipped ? point.y : bounds.height - point.y
-        let tapRow = Int(topY / cellH)
-        let tapCol = Int(point.x / cellW)
-        guard tapRow >= 0, tapCol >= 0, tapCol < size.columns else { return nil }
+    /// The logical line + tapped cell under `point`, from the same screen
+    /// snapshot path detection uses. Not gated on `pathPreviewContext` — links
+    /// must open in a pane that has no preview context at all.
+    private func logicalLine(at point: NSPoint) -> (line: String, cell: Int)? {
+        guard !isTornDown, let cell = cellSizePoints(), let cs = currentSize else { return nil }
+        return pathHitEngine.logicalLine(
+            point: point, cellSize: cell, viewportRows: cs.rows,
+            cols: pathWrapCols?() ?? cs.columns,
+            scrollTop: lastScrollTop,
+            readText: { [weak self] in self?.readScrollback() })
+    }
 
-        let radius = 3
-        let lo = max(0, tapRow - radius)
-        var rows: [String] = []
-        for r in lo...(tapRow + radius) {
-            let y = (Double(r) + 0.5) * Double(cellH)
-            guard y < Double(bounds.height) else { break }
-            _ = GhosttySel.begin(surface, px: (1.0, y))
-            GhosttySel.extend(surface, px: (Double(bounds.width) - 1.0, y))
-            GhosttySel.end(surface)
-            rows.append(GhosttySel.selectedText(surface) ?? "")
+    /// The URL under `point`, or nil.
+    ///
+    /// This used to read the screen by driving a transient ghostty SELECTION
+    /// across each nearby row and reading it back — which both mutated live
+    /// state to answer a question and gave link detection a different picture of
+    /// the screen than path detection had. A URL the path scanner read whole
+    /// could be invisible here, and then the path scanner would happily
+    /// fuzzy-match the URL's last segment to a local directory and open a file
+    /// viewer for a link. One snapshot, one answer.
+    private func linkURL(at point: NSPoint) -> String? {
+        // Ask the ENGINE first. An OSC 8 hyperlink's target lives in the cell
+        // attributes, not on screen — Claude Code emits
+        // `ESC]8;;URL ESC\ anchor ESC]8;; ESC\` and its anchor is often prose in
+        // another language. No amount of scraping can recover a URL that was
+        // never rendered; only ghostty, which parsed the sequence, has it.
+        // Anchored to the cell so a stale hover can't answer for a later click.
+        let c = cellCoord(atPoint: point)
+        if let e = engineLink, e.col == c.col, e.row == c.row {
+            linkLog.log("link via engine (OSC 8) ⟨\(e.url, privacy: .public)⟩")
+            return e.url
         }
-        GhosttySel.clear(surface, px: nil)
-        setNeedsDraw()
-        return TerminalLinkDetector.urlHit(rows: rows, tapRow: tapRow - lo,
-                                           tapCol: tapCol, columns: size.columns)
+        guard let (line, cell) = logicalLine(at: point) else { return nil }
+        let hit = TerminalLinkDetector.urlHit(inLine: line, atCell: cell)
+        linkLog.log("link via scrape cell=\(c.col, privacy: .public),\(c.row, privacy: .public) engine=\(self.engineLink.map(\.url) ?? "nil", privacy: .public) hit=⟨\(hit ?? "nil", privacy: .public)⟩")
+        return hit
     }
 
     /// OSC 7 working-directory report (shell integration). Lets path-preview
@@ -1666,12 +1763,42 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
         pathClickSeq += 1
         let seq = pathClickSeq
         Task { @MainActor [weak self] in
-            guard let res = try? await SmartPathResolver.resolveFirst(
+            let res = try? await SmartPathResolver.resolveFirst(
                 paths: hits.map(\.path), rootHints: scan.rootHints,
-                context: context) else { return }
+                context: context)
             guard let self, self.pathClickSeq == seq, !self.isTornDown else { return }
-            onOpenPreview?(res.resolvedPath, hits[res.index].line, context)
+            if let res {
+                onOpenPreview?(res.resolvedPath, hits[res.index].line, context)
+            } else if let url = hits.lazy.compactMap({ TerminalLinkDetector.schemelessURL($0.path) }).first {
+                // Nothing exists by that name and it's host-shaped
+                // ("github.com/NovaShang/…"): it was a link all along. Checked
+                // AFTER resolution so a real file of that name still wins.
+                GhosttyRuntime.openExternalURL(url)
+            } else {
+                // Nothing stat'd. Open the best guess anyway so the panel says
+                // "not found" — a ⌘click that resolves to silence is
+                // indistinguishable from a ⌘click that never fired, and sends
+                // the user looking for a broken build instead of a wrong path.
+                onOpenPreview?(hits[0].path, hits[0].line, context)
+            }
         }
+    }
+
+    /// Rate limit for the "⌘click to preview" nudge.
+    private var lastPathHintAt: Date?
+
+    /// A plain click that landed on a file path in a pane whose program owns
+    /// the mouse. Forwarding it is correct — the program asked for clicks — but
+    /// the user near-certainly wanted the preview, and nothing on screen says
+    /// the gesture moved. Claude Code's fullscreen mode made this the common
+    /// case: it grabs the mouse for a UI whose most clickable-looking things are
+    /// the file paths it prints, which are Bento's, not its.
+    private func notePathClickForwarded(at p: NSPoint) {
+        guard pathPreviewContext != nil else { return }
+        if let last = lastPathHintAt, Date().timeIntervalSince(last) < 300 { return }
+        guard pathHit(at: p) != nil else { return }
+        lastPathHintAt = Date()
+        PaneHintChip.show("⌘-click to preview this path", in: self)
     }
 
     /// ⌘hover: highlight the path token under the cursor. Recomputed only when

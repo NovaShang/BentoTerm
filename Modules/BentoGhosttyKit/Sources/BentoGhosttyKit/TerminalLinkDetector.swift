@@ -1,48 +1,82 @@
 import Foundation
+import os
 
-/// Pure link hit-testing over rendered terminal rows — shared by the iOS
-/// tap-to-open and macOS ⌘-click paths. Exists because the prebuilt
-/// libghostty's own link pipeline (hover → MOUSE_OVER_LINK → click-activate)
-/// is inert in embedded mode, so the apps read the visual rows around the
-/// pointer themselves (via transient selections) and hit-test here.
+/// Link resolution, both routes: the engine's OSC 8 answer and this file's
+/// scrape. Logged on every ⌘click/tap so which route fired is observable —
+/// the two disagree exactly when the anchor text isn't the URL.
+/// Watch with: log stream --predicate 'category == "Link"'
+public let linkLog = Logger(subsystem: "com.novashang.bento", category: "Link")
+
+/// Pure link hit-testing over a terminal line — the FALLBACK route, shared by
+/// the iOS tap-to-open and macOS ⌘-click paths.
+///
+/// The primary route is the engine: ghostty parses OSC 8 and reports the
+/// hyperlink under the pointer via `GHOSTTY_ACTION_MOUSE_OVER_LINK`. This file
+/// used to carry a comment claiming that action never fires in embedded mode
+/// ("verified"); it was wrong, and the cost of believing it was that a link
+/// whose anchor text ISN'T a URL — Claude Code emits
+/// `ESC]8;;URL ESC\ anchor ESC]8;; ESC\`, anchors often prose in another
+/// language — could not be opened at all, because the URL is never rendered
+/// and there is nothing on screen to scrape.
+///
+/// What remains for this scraper is everything that ISN'T an OSC 8 hyperlink:
+/// a bare URL printed by `git`, `ls`, a log line, a stack trace.
 public enum TerminalLinkDetector {
 
-    /// Given consecutive VISUAL rows, the pointer's (row, col) within them and
-    /// the grid width, return the URL under the pointer or nil. Rows whose
-    /// glyphs fill every column are joined with their successor (soft-wrap
-    /// heuristic) before matching, so a long OAuth URL wrapped across rows
-    /// resolves whole.
-    public static func urlHit(rows: [String], tapRow: Int, tapCol: Int, columns: Int) -> String? {
-        guard tapRow >= 0, tapRow < rows.count, columns > 0 else { return nil }
-        // Bounds of the wrap-chain containing the tapped row.
-        var start = tapRow
-        while start > 0, displayWidth(rows[start - 1]) >= columns { start -= 1 }
-        var end = tapRow
-        while end + 1 < rows.count, displayWidth(rows[end]) >= columns { end += 1 }
-
-        var merged = ""
-        var tapOffset = tapCol
-        for (i, row) in rows[start...end].enumerated() {
-            if start + i < tapRow { tapOffset += displayWidth(row) }
-            merged += row
-        }
-
-        let pattern = "(https?://|ftp://|mailto:)[^\\s\"'<>]+"
-        guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }
-        let ns = merged as NSString
-        for m in re.matches(in: merged, range: NSRange(location: 0, length: ns.length)) {
-            guard let range = Range(m.range, in: merged) else { continue }
-            let before = displayWidth(String(merged[..<range.lowerBound]))
-            var url = String(merged[range])
+    /// The URL under `cell` in one LOGICAL line, or nil.
+    ///
+    /// Callers pass the line the path engine already assembled
+    /// (`PathHitTester.logicalLine`), so link and path detection hit-test the
+    /// same text — they used to read the screen by different means and disagree
+    /// about what was on it. Soft-wrap joining therefore happens upstream, and
+    /// `cell` is a COLUMN offset (display width) into the joined line, which is
+    /// what the span math below compares.
+    public static func urlHit(inLine line: String, atCell cell: Int) -> String? {
+        guard let re = try? NSRegularExpression(pattern: schemePattern, options: .caseInsensitive) else { return nil }
+        let ns = line as NSString
+        for m in re.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
+            guard let range = Range(m.range, in: line) else { continue }
+            let before = displayWidth(String(line[..<range.lowerBound]))
+            var url = String(line[range])
             let width = displayWidth(url)
-            guard tapOffset >= before, tapOffset < before + width else { continue }
-            // Trailing prose punctuation ("visit https://x.com.") isn't part
-            // of the URL; closing brackets usually pair with an opener before
-            // the scheme, which the char class already excluded.
+            guard cell >= before, cell < before + width else { continue }
+            // Trailing prose punctuation ("visit https://x.com.") isn't part of
+            // the URL; closing brackets usually pair with an opener before the
+            // scheme, which the char class already excluded.
             while let last = url.last, ".,;:!".contains(last) { url.removeLast() }
             return url
         }
         return nil
+    }
+
+    private static let schemePattern = "(https?://|ftp://|mailto:)[^\\s\"'<>]+"
+
+    /// TLDs common enough in terminal output that `host.tld/path` with no
+    /// scheme is far more likely a link than a file. Deliberately short: this
+    /// list is the entire licence to treat a slash-bearing token as a URL, and
+    /// every entry is a chance to mistake a real directory for a host.
+    private static let knownTLDs: Set<String> = [
+        "com", "org", "net", "io", "dev", "app", "ai", "sh", "co", "me",
+        "gov", "edu", "info", "xyz", "cloud", "page", "so",
+    ]
+
+    /// `github.com/NovaShang/CodingKeyboard` → `https://github.com/…`, or nil
+    /// when the token isn't host-shaped.
+    ///
+    /// Agents print bare hosts constantly and no terminal user reads them as
+    /// paths. This is checked only AFTER path resolution has failed, so a real
+    /// file or directory of the same name still wins — the stat oracle keeps
+    /// its casting vote, and the browser is what's left when nothing exists.
+    public static func schemelessURL(_ token: String) -> String? {
+        guard !token.contains("://"), !token.hasPrefix("/"), !token.hasPrefix("~") else { return nil }
+        let head = token.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)[0]
+        let labels = head.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2, let tld = labels.last,
+              knownTLDs.contains(tld.lowercased()),
+              labels.allSatisfy({ !$0.isEmpty }),
+              head.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" })
+        else { return nil }
+        return "https://" + token
     }
 
     /// Terminal display width of a string: CJK/full-width scalars occupy two
