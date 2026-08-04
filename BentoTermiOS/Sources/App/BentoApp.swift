@@ -22,12 +22,17 @@ struct BentoApp: App {
     init() {
         BentoAppearance.install()
         Self.logBundledFonts()
+#if DEBUG
         // Mirror the core package's dlog (reconnect loop, tmux protocol, voice
         // session — os_log only by default) into Documents/debug.log, so a
         // real-device incident is fully diagnosable from one file pull:
         //   xcrun devicectl device copy from --domain-type appDataContainer
         //     --domain-identifier com.bento.term.app --source Documents/debug.log …
+        //
+        // Debug only: those lines quote terminal output and voice transcripts
+        // verbatim, which a shipped app must not leave on disk. See DebugLogger.
         coreDlogFileSink = { DebugLogger.shared.log($0) }
+#endif
         Self.purgePairingLeftovers()
     }
 

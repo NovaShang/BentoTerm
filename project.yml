@@ -18,9 +18,11 @@ settings:
     DEVELOPMENT_TEAM: 7M23245ZBD
 
 packages:
-  SwiftTerm:
-    url: https://github.com/migueldeicaza/SwiftTerm.git
-    from: "1.2.0"
+  # SwiftTerm was the renderer before libghostty and was dropped when
+  # BentoGhosttyKit took over, but the dependency stayed — nothing has
+  # imported it in a long time, and its resource bundle (with no privacy
+  # manifest of its own) was still shipping inside the App Store binary.
+  # Only comments mention it now.
   Citadel:
     url: https://github.com/orlandos-nl/Citadel.git
     from: "0.7.0"
@@ -60,7 +62,6 @@ targets:
       - BentoTermiOS/Resources
       - BentoTermiOS/Assets.xcassets
     dependencies:
-      - package: SwiftTerm
       - package: Citadel
       - package: BentoTmuxKit
       - package: BentoAgentKit

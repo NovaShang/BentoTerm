@@ -60,6 +60,17 @@ struct SettingsView: View {
                 SettingsAboutSection(
                     icon: appIcon,
                     tagline: "A tmux-native terminal for iPhone & iPad.")
+
+                Section {
+                    NavigationLink {
+                        AcknowledgementsView()
+                    } label: {
+                        Label("Acknowledgements", systemImage: "doc.text")
+                    }
+                } footer: {
+                    Text("BentoTerm redistributes MIT, Apache and SIL-licensed components — the terminal engine, the SSH stack, the bundled font — and each of those licenses requires its text to travel with the binary.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .bentoForm()
             .navigationTitle("Settings")
@@ -295,6 +306,36 @@ struct ProfileEditView: View {
                 }
                 .disabled(profile.name.isEmpty || profile.outputPatterns.isEmpty)
             }
+        }
+    }
+}
+
+/// The open-source notices, read from the `Acknowledgements.txt` generated
+/// against the resolved package graph.
+///
+/// Kept as a bundled text file rather than a Swift literal so regenerating it
+/// after a dependency bump is a file write, not a source edit — and so the
+/// notices are verbatim upstream text, which is what MIT, Apache-2.0 and the
+/// SIL OFL actually require to accompany a redistributed binary.
+struct AcknowledgementsView: View {
+    @State private var text: String?
+
+    var body: some View {
+        ScrollView {
+            Text(text ?? "Acknowledgements are unavailable in this build.")
+                .font(.system(size: 11, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+        }
+        .navigationTitle("Acknowledgements")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard text == nil,
+                  let url = Bundle.main.url(forResource: "Acknowledgements", withExtension: "txt")
+            else { return }
+            // ~110 KB off the main thread — the view is pushed before it lands.
+            text = await Task.detached { try? String(contentsOf: url, encoding: .utf8) }.value
         }
     }
 }
