@@ -10,6 +10,9 @@ public actor DirectoryListCache {
     public static let shared = DirectoryListCache()
 
     private struct Key: Hashable {
+        /// The source's ADDRESS, which is only unique among LIVE objects — see
+        /// `Entry.source` for why every hit is confirmed against the object
+        /// itself before it is served.
         let source: ObjectIdentifier
         let path: String
         // Part of the key so a "show more" re-fetch with a bigger cap is not
@@ -20,6 +23,25 @@ public actor DirectoryListCache {
     private struct Entry {
         let result: DirectoryListResult
         let builtAt: CFAbsoluteTime
+        /// The source these listings came from, held WEAKLY.
+        ///
+        /// `ObjectIdentifier` is an address, and the cache keeps no strong
+        /// reference — so once a source is deallocated, the next source
+        /// allocated can land on the same address and inherit the dead one's
+        /// entries wholesale. That is not hypothetical: sources are per
+        /// connection, and a reconnect frees one and builds another in the same
+        /// breath, which is exactly the allocation pattern that reuses an
+        /// address. The visible bug is path preview listing the PREVIOUS host's
+        /// directories for the TTL after a reconnect.
+        ///
+        /// Confirming identity here makes the reuse harmless: a dead source
+        /// leaves a nil, which reads as a miss.
+        weak var source: (any FilePreviewSource)?
+    }
+
+    private struct FailedEntry {
+        let at: CFAbsoluteTime
+        weak var source: (any FilePreviewSource)?
     }
 
     /// Injectable for tests.
@@ -29,7 +51,7 @@ public actor DirectoryListCache {
 
     private var hits: [Key: Entry] = [:]
     private var order: [Key] = []            // LRU, front = oldest
-    private var failed: [Key: CFAbsoluteTime] = [:]
+    private var failed: [Key: FailedEntry] = [:]
     private var inFlight: [Key: Task<DirectoryListResult, Error>] = [:]
 
     public init() {
@@ -50,14 +72,16 @@ public actor DirectoryListCache {
         let key = Key(source: ObjectIdentifier(source), path: path, maxChildren: request.maxChildren)
         let now = CFAbsoluteTimeGetCurrent()
         if !refresh {
-            if let e = hits[key], now - e.builtAt < ttl {
+            if let e = hits[key], now - e.builtAt < ttl, e.source === source {
                 touch(key)
                 return e.result
             }
-            if let f = failed[key], now - f < failedTTL {
+            if let f = failed[key], now - f.at < failedTTL, f.source === source {
                 throw FilePreviewError.unavailable("Directory listing unavailable.")
             }
         }
+        // In-flight needs no identity check: a task can only be in flight while
+        // its source is alive, and a live object's address is not reusable.
         if let task = inFlight[key] {
             return try await task.value
         }
@@ -66,12 +90,12 @@ public actor DirectoryListCache {
         defer { inFlight[key] = nil }
         do {
             let result = try await task.value
-            hits[key] = Entry(result: result, builtAt: CFAbsoluteTimeGetCurrent())
+            hits[key] = Entry(result: result, builtAt: CFAbsoluteTimeGetCurrent(), source: source)
             failed[key] = nil
             touch(key)
             return result
         } catch {
-            failed[key] = CFAbsoluteTimeGetCurrent()
+            failed[key] = FailedEntry(at: CFAbsoluteTimeGetCurrent(), source: source)
             touch(key)          // failed entries are LRU-tracked too (eviction)
             throw error
         }
