@@ -66,6 +66,19 @@ extension TerminalViewModel {
 
         guard case .connected = transport.state else {
             dlog("SSH connection failed: \(String(describing: self.transport.state))")
+            // Surface the diagnosis here instead of waiting for the transport's
+            // `onStateChanged` hop. That callback reaches the MainActor through
+            // a `Task`, while callers of `connect()` read `errorMessage` the
+            // moment it returns — so whichever got enqueued first decided
+            // whether the user saw what actually went wrong or the caller's
+            // generic "check the host and your SSH credentials". `state` is
+            // written synchronously before the callback fires, so reading it
+            // here is exact, and `handleUnexpectedFailure` is the same policy
+            // the callback would have applied (it no-ops mid-reconnect and
+            // while backgrounded, and only reports once).
+            if case .failed(let msg) = transport.state {
+                handleUnexpectedFailure(message: msg)
+            }
             return nil
         }
 

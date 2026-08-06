@@ -365,7 +365,19 @@ final class TmuxLister: ObservableObject {
 
         await sshService.connect(host: host)
         guard case .connected = sshService.state else {
-            error = "Failed to connect"
+            // Spend the transport's diagnosis rather than overwriting it. This
+            // is the picker's own short-lived SSH — no TerminalViewModel is
+            // watching it, so nothing else will ever say why it failed, and
+            // "Failed to connect" was the same four words for a wrong
+            // username, a wrong port and a host that isn't on the network.
+            // It is also the FIRST connection a host makes (the sheet lists
+            // sessions before you pick one), so for a misconfigured host it is
+            // usually the only error the user ever sees.
+            if case .failed(let msg) = sshService.state {
+                error = msg
+            } else {
+                error = "Couldn't connect to \(host.displayName)."
+            }
             return
         }
         sshService.startShell(cols: 80, rows: 24)

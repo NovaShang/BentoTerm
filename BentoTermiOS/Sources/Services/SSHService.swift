@@ -53,6 +53,10 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
     private let mutableState = OSAllocatedUnfairLock(initialState: SSHMutableState())
     private var client: SSHClient?
     private var sessionTask: Task<Void, Never>?
+    /// The host of the current (or most recent) `connect`. `startShell` needs it
+    /// to phrase its failures — it takes no `Host` of its own, and a message
+    /// naming the machine beats one that doesn't.
+    private var connectedHost: Host?
 
     var state: SSHConnectionState {
         mutableState.withLock { $0.state }
@@ -96,6 +100,7 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
 
     func connect(host: Host) async {
         transition(to: .connecting)
+        connectedHost = host
 
         let connectStart = ContinuousClock.now
         do {
@@ -150,10 +155,11 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
             // Citadel errors are enums whose localized string is the same
             // uninformative sentence for every cause, so the raw case is the
             // only thing that distinguishes a TCP timeout from the handshake's
-            // 10 s login timeout from an auth rejection.
+            // 10 s login timeout from an auth rejection. The log keeps the raw
+            // form; the user gets `sshFailureMessage`'s reading of it.
             dlog("SSH connection error after \(elapsedMs(since: connectStart))ms: "
                 + "\(String(reflecting: error))")
-            transition(to: .failed(error.localizedDescription))
+            transition(to: .failed(sshFailureMessage(for: error, host: host, during: .connecting)))
         }
     }
 
@@ -181,6 +187,7 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
         // closing channel's tail error stomps the new client's .connected
         // state and the UI surfaces "NIOError.ChannelError error 6".
         let runningClient = client
+        let shellHost = connectedHost
         sessionTask = Task { [weak self] in
             do {
                 try await client.withPTY(ptyRequest) { inbound, outbound in
@@ -205,7 +212,11 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
                 let stillCurrent = self?.client === runningClient
                 guard stillCurrent else { return }
 
-                let errorState = SSHConnectionState.failed(error.localizedDescription)
+                dlog("SSH session error: \(String(reflecting: error))")
+                let message = shellHost.map {
+                    sshFailureMessage(for: error, host: $0, during: .session)
+                } ?? error.localizedDescription
+                let errorState = SSHConnectionState.failed(message)
                 self?.mutableState.withLock {
                     $0.state = errorState
                     $0.stdinWriter = nil
