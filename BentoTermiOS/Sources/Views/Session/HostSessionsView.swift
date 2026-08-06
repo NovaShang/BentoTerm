@@ -156,7 +156,9 @@ struct HostSessionsView: View {
                     Text(lister.isLoading ? "Listing sessions…" : host.displayName)
                         .font(.body)
                         .foregroundStyle(Color.bentoInk)
-                    Text("\(host.username)@\(host.hostname):\(host.port)")
+                    // verbatim: see HostListView — Text() interpolation would
+                    // print port 2222 as "2,222".
+                    Text(verbatim: "\(host.username)@\(host.hostname):\(host.port)")
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(Color.bentoInkDim)
                 }

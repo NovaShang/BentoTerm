@@ -373,7 +373,10 @@ struct HostRow: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.bentoInk)
                     .lineLimit(1)
-                Text("\(host.username)@\(host.hostname):\(host.port)")
+                // verbatim: a plain Text() interpolation runs the port through
+                // LocalizedStringKey's number formatter, which renders 2222 as
+                // "2,222" in a grouping locale.
+                Text(verbatim: "\(host.username)@\(host.hostname):\(host.port)")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(Color.bentoInkDim)
                     .lineLimit(1)

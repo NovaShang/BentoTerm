@@ -83,21 +83,25 @@ targets:
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Bento uses speech recognition to convert voice to text and shell commands."
         # No camera / Face ID: the QR-pairing camera and key-protection Face ID
         # prompts were relay-era leftovers — no code path requests either.
-        # Export compliance. This MUST carry the INFOPLIST_KEY_ prefix: spelled
-        # as a bare build setting (as it was until 2026-08-03) Xcode never
-        # copies it into Info.plist, and the key is simply absent from the
-        # shipped app — App Store Connect then stops every upload to ask the
-        # export questions by hand.
+        # Export compliance is declared in the App Store Connect questionnaire,
+        # NOT here. `ITSAppUsesNonExemptEncryption` is deliberately absent:
         #
-        # YES, not NO: the app statically links BoringSSL via swift-crypto and
-        # speaks SSH through NIOSSH, so it plainly implements strong encryption
-        # of its own — none of Apple's exemptions (Apple-OS-only crypto,
-        # HTTPS-only, authentication-only) describe that. The algorithms are
-        # all published standards, so it qualifies for the mass-market
-        # exemption under EAR 5D002 / License Exception ENC — which is claimed
-        # in the App Store Connect questionnaire and costs one annual
-        # self-classification report to BIS each January.
-        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: true
+        #   - NO would be false. The app statically links BoringSSL through
+        #     swift-crypto and speaks SSH through NIOSSH, so it implements
+        #     strong encryption of its own; none of Apple's exemptions
+        #     (Apple-OS-only crypto, HTTPS-only, authentication-only) fit.
+        #   - YES fails validation until compliance documentation is on file:
+        #     it makes the upload demand a matching
+        #     `ITSEncryptionExportComplianceCode`, and with none issued the
+        #     App Store rejects the build ("Invalid Export Compliance Code …
+        #     the key value [] doesn't match", hit on 2026-08-06).
+        #
+        # With the key absent, App Store Connect asks the export questions once
+        # per upload instead, and the answer is recorded on the build rather
+        # than in the binary. For 0.1.1 the build was submitted with
+        # `usesNonExemptEncryption = false`. To stop being asked every upload,
+        # file the compliance documentation in App Store Connect and set the
+        # code Apple issues as INFOPLIST_KEY_ITSEncryptionExportComplianceCode.
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_FILE: BentoTermiOS/Info.plist
         CODE_SIGN_STYLE: Automatic
@@ -110,7 +114,10 @@ targets:
         # Telemetry (CFBundleShortVersionString). Keep in step with the Mac
         # target's MARKETING_VERSION — bump alongside release tags.
         MARKETING_VERSION: "0.1.1"
-        CURRENT_PROJECT_VERSION: 1
+        # Build number, distinct from MARKETING_VERSION and never reused: App
+        # Store Connect rejects an upload whose (version, build) pair it has
+        # already seen. Build 1 was uploaded on 2026-08-03 and superseded.
+        CURRENT_PROJECT_VERSION: 2
 
   BentoTermTests:
     type: bundle.unit-test
