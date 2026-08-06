@@ -1114,38 +1114,32 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
             markedTextValue = ""
             GhosttySel.setPreedit(surface, nil)
         }
-        // The soft keyboard delivers Enter as "\n" (LF), but a terminal expects
-        // CR (0x0d) to run the line — zsh/readline's line editor only accepts
-        // the line on CR.
+        // Software keyboards deliver control keys as TEXT: the system keyboard's
+        // Return arrives as "\n", and a third-party terminal keyboard (the only
+        // way to get arrows/ESC on iPhone — an extension can't send key events)
+        // inserts the escape sequence itself, "\u{1b}[A" for Up.
         //
-        // We CANNOT just rewrite "\n" -> "\r" and feed it through
-        // ghostty_surface_text: that channel is for printable text, and ghostty
-        // drops the bare CR control byte instead of emitting it to the host, so
-        // Enter appears to do nothing (the line never runs). Instead, split the
-        // input — printable runs still go through ghostty (so per-mode encoding
-        // and IME keep working) while each newline is written to the host
-        // directly as CR, the same proven path deleteBackward() and the
-        // accessory Enter key (sendString("\r")) already use.
-        var run = ""
-        func flushRun() {
-            guard !run.isEmpty else { return }
-            let bytes = Array(run.utf8)
-            bytes.withUnsafeBufferPointer { buf in
-                buf.baseAddress?.withMemoryRebound(to: CChar.self, capacity: buf.count) { ptr in
-                    ghostty_surface_text(surface, ptr, UInt(buf.count))
+        // We CANNOT feed those through ghostty_surface_text: that channel is for
+        // printable text and drops control bytes instead of emitting them to the
+        // host — which is why Enter appeared to do nothing and why an inserted
+        // ESC vanished, leaving the shell to print the bare "[A". So the string
+        // is split: printable runs still go through ghostty (per-mode encoding
+        // and IME keep working) while control bytes are written to the host
+        // directly, the same proven path deleteBackward() and the accessory bar's
+        // own arrow keys (sendString("\u{1b}[A")) already use.
+        for segment in SoftKeyboardText.segments(for: text) {
+            switch segment {
+            case .raw(let data):
+                onInput?(data)
+            case .text(let run):
+                let bytes = Array(run.utf8)
+                bytes.withUnsafeBufferPointer { buf in
+                    buf.baseAddress?.withMemoryRebound(to: CChar.self, capacity: buf.count) { ptr in
+                        ghostty_surface_text(surface, ptr, UInt(buf.count))
+                    }
                 }
             }
-            run = ""
         }
-        for ch in text {
-            if ch == "\n" || ch == "\r" {
-                flushRun()
-                onInput?(Data([0x0d]))
-            } else {
-                run.append(ch)
-            }
-        }
-        flushRun()
         setNeedsDraw()
     }
 
