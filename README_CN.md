@@ -17,7 +17,6 @@
 - **每个 pane 都知道自己 agent 的状态**——工作中、等你输入、已完成、空闲——用统一的颜色 + 图标语言显示在 pane 标题栏和侧栏里。不用再轮流巡逻自己的终端。
 - **开箱识别十家 agent：**Claude Code、Codex、Gemini CLI、OpenCode、Cursor Agent、Copilot CLI、Amp、OpenClaw、Hermes、Antigravity——普通 shell 和自定义命令当然也行。
 - **同一个工作区，两种读法：**Parallel（全部平铺，状态尽收眼底）和 Focus（一个全屏，其余列表）。切换是无损的——只重排结构，绝不破坏。
-- **在 agent 回合之间跳转**：标题栏箭头直达上一轮/下一轮输出，不用手搓滚动条。
 
 ## 说话，代替打字
 
@@ -42,9 +41,18 @@
 
 **要求：**macOS 14+，Apple Silicon。
 
-1. 从[最新 release](https://github.com/NovaShang/bento/releases/latest) 下载 `BentoTerm-macos-arm64.zip`。
+用 Homebrew：
+
+```sh
+brew install --cask NovaShang/BentoTerm/bento-term
+```
+
+或者手动装：
+
+1. 从[最新 release](https://github.com/NovaShang/BentoTerm/releases/latest) 下载 `BentoTerm-macos-arm64.zip`。
 2. 解压，把 `BentoTerm.app` 拖进 `/Applications`。应用已签名并经过公证——打开不会有任何警告。
-3. 首次启动会引导你创建第一个 agent 会话，没装的 agent 也提供一键安装命令。
+
+两种方式都一样，首次启动会引导你创建第一个 agent 会话，没装的 agent 也提供一键安装命令。
 
 Mac 应用完全自包含——tmux 已内置，不需要额外装任何东西。
 
@@ -87,7 +95,7 @@ Mac 应用完全自包含——tmux 已内置，不需要额外装任何东西�
 需要 Xcode 26+。GhosttyKit——打包成 xcframework 的 libghostty——会作为 Swift Package 二进制依赖自动拉取。构建阶段脚本会跑 `scripts/fetch-bundled-tmux.sh`，拉取 `scripts/bundled-tmux.version` 里钉住的预编译 tmux，内嵌到 `BentoTerm.app/Contents/MacOS/helpers/tmux`；该脚本需要 `gh` CLI，没有的话应用会退回系统 tmux。
 
 ```sh
-git clone https://github.com/NovaShang/bento.git && cd bento
+git clone https://github.com/NovaShang/BentoTerm.git && cd BentoTerm
 xcodebuild -project BentoTerm.xcodeproj -scheme BentoTermMac -configuration Release build
 ```
 

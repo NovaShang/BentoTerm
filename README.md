@@ -17,7 +17,6 @@ Modern coding is several agents working in parallel while you review, unblock, a
 - **Every pane knows its agent's state** — working, waiting for you, done, or idle — shown as a consistent color-and-glyph language on pane title bars and in the sidebar. No more polling your own terminal.
 - **Ten agents understood out of the box:** Claude Code, Codex, Gemini CLI, OpenCode, Cursor Agent, Copilot CLI, Amp, OpenClaw, Hermes, and Antigravity — plus plain shells and custom commands.
 - **Two readings of the same workspace:** Parallel (every pane tiled, states everywhere) and Focus (one thing full-size, the rest listed). Toggling is lossless — it restructures, never destroys.
-- **Jump between agent turns** with title-bar chevrons instead of scrubbing scrollback.
 
 ## Speak instead of type
 
@@ -42,9 +41,18 @@ Modern coding is several agents working in parallel while you review, unblock, a
 
 **Requirements:** macOS 14+ on Apple Silicon.
 
-1. Download `BentoTerm-macos-arm64.zip` from the [latest release](https://github.com/NovaShang/bento/releases/latest).
+With Homebrew:
+
+```sh
+brew install --cask NovaShang/BentoTerm/bento-term
+```
+
+Or by hand:
+
+1. Download `BentoTerm-macos-arm64.zip` from the [latest release](https://github.com/NovaShang/BentoTerm/releases/latest).
 2. Unzip and drag `BentoTerm.app` into `/Applications`. The app is signed and notarized — it opens without warnings.
-3. First run walks you through creating your first agent session, including one-command installers for any agent you don't have yet.
+
+Either way, first run walks you through creating your first agent session, including one-command installers for any agent you don't have yet.
 
 The Mac app is fully self-contained — tmux is bundled, and there is nothing to install alongside it.
 
@@ -87,7 +95,7 @@ Two design rules shape everything:
 You need Xcode 26+. GhosttyKit — libghostty packaged as an xcframework — is fetched automatically as a Swift Package binary target. A build-phase script runs `scripts/fetch-bundled-tmux.sh` to pull the prebuilt tmux pinned in `scripts/bundled-tmux.version` and embeds it at `BentoTerm.app/Contents/MacOS/helpers/tmux`; it needs the `gh` CLI, and without it the app falls back to a system tmux.
 
 ```sh
-git clone https://github.com/NovaShang/bento.git && cd bento
+git clone https://github.com/NovaShang/BentoTerm.git && cd BentoTerm
 xcodebuild -project BentoTerm.xcodeproj -scheme BentoTermMac -configuration Release build
 ```
 

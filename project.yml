@@ -113,6 +113,12 @@ targets:
         # App version surfaced in the Settings About block and reported by
         # Telemetry (CFBundleShortVersionString). Keep in step with the Mac
         # target's MARKETING_VERSION — bump alongside release tags.
+        #
+        # Deliberately still 0.1.1 while the Mac target is on 0.2.0: build 2
+        # is in App Store review as 0.1.1, and a build whose version string
+        # has moved on cannot attach to that version in App Store Connect.
+        # Bump to 0.2.0 (and CURRENT_PROJECT_VERSION to 3) with the next
+        # iOS upload, once 0.1.1 has cleared review.
         MARKETING_VERSION: "0.1.1"
         # Build number, distinct from MARKETING_VERSION and never reused: App
         # Store Connect rejects an upload whose (version, build) pair it has
@@ -174,7 +180,7 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         # App version surfaced in Finder/About and reported by Telemetry
         # (CFBundleShortVersionString). Bump alongside release tags.
-        MARKETING_VERSION: "0.1.1"
+        MARKETING_VERSION: "0.2.0"
         CURRENT_PROJECT_VERSION: 1
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: BentoTermMac/Resources/BentoTermMac.entitlements

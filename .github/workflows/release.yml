@@ -275,3 +275,51 @@ jobs:
               --generate-notes
           fi
           gh release upload "$tag" artifacts/* --clobber
+
+      # Point the tap at the release we just published. The cask lives in
+      # this repo (Casks/ makes it a single-repo tap), so the default
+      # GITHUB_TOKEN suffices — a cross-repo tap would need a PAT.
+      #
+      # This commits to main, not to the tag: the checkout above is detached
+      # at the tag, and a tag is a frozen point. The cask is not versioned
+      # history, it is a pointer at the newest release, so main is where it
+      # belongs regardless of which ref the tag was cut from.
+      - name: Update cask
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.resolve-tag.outputs.tag }}"
+          version="${tag#v}"
+
+          # Sidecar written by the Package step as "<sha>  <filename>".
+          sha="$(awk '{print $1}' artifacts/BentoTerm-macos-arm64.zip.sha256)"
+          case "$sha" in
+            [0-9a-f]*) [ "${#sha}" -eq 64 ] ;;
+            *) false ;;
+          esac || { echo "::error::bad sha256 '$sha'" >&2; exit 1; }
+
+          git fetch --depth=1 origin main
+          git checkout -B main origin/main
+
+          # Anchored to column 0 + two spaces so only the cask's own
+          # top-level stanzas match — a sha256 appearing anywhere else in
+          # the file is left alone, and the placeholder digest cannot
+          # survive a release.
+          sed -i -E \
+            -e "s|^  version \".*\"$|  version \"${version}\"|" \
+            -e "s|^  sha256 \"[0-9a-f]{64}\"$|  sha256 \"${sha}\"|" \
+            Casks/bento-term.rb
+
+          grep -q "  sha256 \"${sha}\"" Casks/bento-term.rb \
+            || { echo "::error::cask sha256 not rewritten" >&2; exit 1; }
+
+          if git diff --quiet Casks/bento-term.rb; then
+            echo "cask already describes ${version}"
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(cask): bento-term ${version}" Casks/bento-term.rb
+          git push origin main
