@@ -68,6 +68,9 @@ final class TreeWalkerTests: XCTestCase {
     /// A match's ancestors can be ANY name — "src/main.rs" must find
     /// pkg/src/main.rs, so the walk descends pkg even though no query
     /// component mentions it (no name-based pruning, ever).
+    ///
+    /// Both matches are expected, in the source's sort order ("other" before
+    /// "pkg") rather than the order they are written below.
     func testSearchFindsSuffixMatchAcrossArbitraryAncestors() async throws {
         let source = MockDirectorySource(dirs: [
             "/repo": .with([("pkg", true), ("other", true)]),
@@ -78,7 +81,7 @@ final class TreeWalkerTests: XCTestCase {
         ])
         let out = try await TreeWalker.search(source: source, root: "/repo", query: "src/main.rs",
                                               request: .init(maxDirs: 32, timeBudget: 30))
-        XCTAssertEqual(out.entries.map(\.relPath), ["pkg/src/main.rs", "other/src/main.rs"])
+        XCTAssertEqual(out.entries.map(\.relPath), ["other/src/main.rs", "pkg/src/main.rs"])
     }
 
     /// Fragment query (a wrap-eaten name half) still finds via the engine's

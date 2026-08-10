@@ -30,9 +30,27 @@ actor MockDirectorySource: FilePreviewSource {
     func listDirectory(path: String, request: DirectoryListRequest) async throws -> DirectoryListResult {
         listDirCalls += 1
         if failDirs.contains(path) { throw FilePreviewError.unavailable("mock failure: \(path)") }
-        if let handler, let r = handler(path, request.maxChildren) { return r }
+        // Sort and cap exactly as the real source does (FilePreviewCore's
+        // listDirectory): TreeWalker documents that children arrive
+        // source-sorted, and callers re-fetch with a bigger cap when
+        // `truncated` is set. Returning canned listings whole made this mock
+        // silently stronger than any real source, so the three tests that
+        // assert the per-directory cap could never pass. Handler results are
+        // capped too — a handler exists to vary the response by cap, not to
+        // opt out of honouring it.
+        if let handler, let r = handler(path, request.maxChildren) {
+            return Self.capped(r, to: request.maxChildren)
+        }
         guard let r = dirs[path] else { throw FilePreviewError.notFound(path) }
-        return r
+        return Self.capped(r, to: request.maxChildren)
+    }
+
+    /// Source-side sort + cap. `truncated` is computed before prefixing, so a
+    /// directory with exactly `maxChildren` children is not truncated.
+    static func capped(_ result: DirectoryListResult, to maxChildren: Int) -> DirectoryListResult {
+        let sorted = result.entries.sorted { $0.name < $1.name }
+        return DirectoryListResult(entries: Array(sorted.prefix(maxChildren)),
+                                   truncated: result.truncated || sorted.count > maxChildren)
     }
 
     /// Stop failing `path` — lets a retry test recover.
