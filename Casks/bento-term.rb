@@ -28,8 +28,10 @@ cask "bento-term" do
   # arm64-only by construction: release.yml builds a single-arch app because
   # GitHub's Intel Mac runners are queue-starved post-deprecation.
   depends_on arch: :arm64
-  # Matches MACOSX_DEPLOYMENT_TARGET in project.yml.
-  depends_on macos: ">= :sonoma"
+  # Sonoma is macOS 14, matching MACOSX_DEPLOYMENT_TARGET in project.yml.
+  # A bare symbol is "that version or newer" — the ">= :sonoma" string form
+  # means the same thing but is deprecated.
+  depends_on macos: :sonoma
 
   app "BentoTerm.app"
 
