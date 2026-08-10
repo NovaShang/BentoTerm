@@ -276,21 +276,29 @@ jobs:
           fi
           gh release upload "$tag" artifacts/* --clobber
 
-      # Point the tap at the release we just published. The cask lives in
-      # this repo (Casks/ makes it a single-repo tap), so the default
-      # GITHUB_TOKEN suffices — a cross-repo tap would need a PAT.
+      # Point the Homebrew tap at the release we just published.
       #
-      # This commits to main, not to the tag: the checkout above is detached
-      # at the tag, and a tag is a frozen point. The cask is not versioned
-      # history, it is a pointer at the newest release, so main is where it
-      # belongs regardless of which ref the tag was cut from.
-      - name: Update cask
+      # The cask lives in NovaShang/homebrew-tap, not here: Homebrew resolves
+      # a tap name by prepending "homebrew-" with no fallback to a bare repo
+      # name, so a tap has to be its own repository. That makes this a
+      # cross-repo push, which GITHUB_TOKEN cannot do — hence the PAT.
+      #
+      # Failing loudly rather than warning: the release is already published
+      # by this point, so a silent skip would leave the tap pointing at the
+      # previous version with nothing to indicate it.
+      - name: Update cask in the Homebrew tap
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT, contents:write on NovaShang/homebrew-tap only.
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
           tag="${{ needs.resolve-tag.outputs.tag }}"
           version="${tag#v}"
+
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set — ${tag} is published but the cask still points at the previous release" >&2
+            exit 1
+          fi
 
           # Sidecar written by the Package step as "<sha>  <filename>".
           sha="$(awk '{print $1}' artifacts/BentoTerm-macos-arm64.zip.sha256)"
@@ -299,8 +307,9 @@ jobs:
             *) false ;;
           esac || { echo "::error::bad sha256 '$sha'" >&2; exit 1; }
 
-          git fetch --depth=1 origin main
-          git checkout -B main origin/main
+          git clone --depth=1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/NovaShang/homebrew-tap.git" tap
+          cd tap
 
           # Anchored to column 0 + two spaces so only the cask's own
           # top-level stanzas match — a sha256 appearing anywhere else in
@@ -321,5 +330,5 @@ jobs:
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore(cask): bento-term ${version}" Casks/bento-term.rb
-          git push origin main
+          git commit -m "bento-term ${version}" Casks/bento-term.rb
+          git push origin HEAD:main

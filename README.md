@@ -44,7 +44,7 @@ Modern coding is several agents working in parallel while you review, unblock, a
 With Homebrew:
 
 ```sh
-brew install --cask NovaShang/BentoTerm/bento-term
+brew install --cask NovaShang/tap/bento-term
 ```
 
 Or by hand:
@@ -69,8 +69,8 @@ To use a remote machine, it needs `sshd` running and `tmux` installed. Getting t
 | Layer | Choice |
 |---|---|
 | Terminal rendering | [libghostty](https://ghostty.org) — every pane is a real GPU-accelerated terminal surface (GhosttyKit xcframework), not a webview or a from-scratch emulator |
-| Multiplexing | tmux control mode (`-CC`), with tmux bundled and [`swift-tmux`](swift-tmux/) as our own strict, heavily-tested protocol client |
-| Apps | Native Swift end to end — AppKit/SwiftUI on macOS, UIKit/SwiftUI on iOS — as thin shells over the shared [`bento-terminal-core`](bento-terminal-core/) |
+| Multiplexing | tmux control mode (`-CC`), with tmux bundled and [`BentoTmuxKit`](Modules/BentoTmuxKit/) as our own strict, heavily-tested protocol client |
+| Apps | Native Swift end to end — AppKit/SwiftUI on macOS, UIKit/SwiftUI on iOS — as thin shells over the shared [`Modules/`](Modules/) packages |
 | Agent state detection | Client-side heuristics over pane output, titles, and process info — per-agent profiles, no SDK hooks, no cooperation from the agent required |
 | SSH | macOS rides your system OpenSSH, so `~/.ssh/config`, ControlMaster, and jump hosts all just work; a remote host needs only `sshd` + `tmux` |
 | Voice | A `SpeechEngine` abstraction over Apple on-device, OpenAI, and Qwen realtime ASR, with on-screen-context vocabulary biasing |
@@ -84,10 +84,17 @@ Two design rules shape everything:
 
 | Directory | What it is |
 |---|---|
-| `BentoTermiOS/` | iOS / iPadOS app |
-| `BentoTermMac/` | macOS app |
-| `bento-terminal-core/` | Shared Swift core: rendering (libghostty), agent state detection, voice, session logic |
-| `swift-tmux/` | tmux control-mode (`-CC`) protocol client |
+| `BentoTermMac/` | macOS app — AppKit/SwiftUI shell |
+| `BentoTermiOS/` | iOS / iPadOS app — UIKit/SwiftUI shell |
+| `Modules/BentoTmuxKit/` | tmux control-mode (`-CC`) protocol client |
+| `Modules/BentoGhosttyKit/` | Terminal surfaces over libghostty |
+| `Modules/BentoAgentKit/` | Agent detection rules and pane state |
+| `Modules/BentoSessionKit/` | Session, window and pane logic |
+| `Modules/BentoVoiceKit/` | Speech engines and the voice controller |
+| `Modules/BentoFilePreviewKit/` | Path resolution and rich file preview |
+| `Modules/BentoUISharedKit/` | UI shared across both platforms |
+| `Modules/BentoFoundationKit/` | Logging and low-level shared utilities |
+| `Modules/GhosttyKit/` | libghostty as a binary xcframework target |
 | `docs/` | PRD, design docs, bug tracker |
 
 ## Building from source

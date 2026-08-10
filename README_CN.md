@@ -44,7 +44,7 @@
 用 Homebrew：
 
 ```sh
-brew install --cask NovaShang/BentoTerm/bento-term
+brew install --cask NovaShang/tap/bento-term
 ```
 
 或者手动装：
@@ -69,8 +69,8 @@ Mac 应用完全自包含——tmux 已内置，不需要额外装任何东西�
 | 层 | 选型 |
 |---|---|
 | 终端渲染 | [libghostty](https://ghostty.org)——每个 pane 都是真正的 GPU 加速终端 surface（GhosttyKit xcframework），不是 webview，也不是自己造的模拟器 |
-| 多路复用 | tmux control mode（`-CC`），tmux 已内置，协议客户端是我们自己写的、测试覆盖严密的 [`swift-tmux`](swift-tmux/) |
-| 应用层 | 端到端原生 Swift——macOS 用 AppKit/SwiftUI，iOS 用 UIKit/SwiftUI——都是共享核心 [`bento-terminal-core`](bento-terminal-core/) 之上的薄壳 |
+| 多路复用 | tmux control mode（`-CC`），tmux 已内置，协议客户端是我们自己写的、测试覆盖严密的 [`BentoTmuxKit`](Modules/BentoTmuxKit/) |
+| 应用层 | 端到端原生 Swift——macOS 用 AppKit/SwiftUI，iOS 用 UIKit/SwiftUI——都是 [`Modules/`](Modules/) 各包之上的薄壳 |
 | Agent 状态检测 | 纯客户端启发式：基于 pane 输出、标题、进程信息的逐 agent 画像——不需要 SDK 钩子，不需要 agent 配合 |
 | SSH | macOS 直接用系统 OpenSSH，所以 `~/.ssh/config`、ControlMaster、跳板机开箱即用；远程主机只需要 `sshd` + `tmux` |
 | 语音 | `SpeechEngine` 抽象层，下接 Apple 本地、OpenAI、Qwen 实时 ASR，带屏幕上下文词表偏置 |
@@ -84,10 +84,17 @@ Mac 应用完全自包含——tmux 已内置，不需要额外装任何东西�
 
 | 目录 | 内容 |
 |---|---|
-| `BentoTermiOS/` | iOS / iPadOS 应用 |
-| `BentoTermMac/` | macOS 应用 |
-| `bento-terminal-core/` | 共享 Swift 核心：渲染（libghostty）、agent 状态检测、语音、会话逻辑 |
-| `swift-tmux/` | tmux control mode（`-CC`）协议客户端 |
+| `BentoTermMac/` | macOS 应用——AppKit/SwiftUI 外壳 |
+| `BentoTermiOS/` | iOS / iPadOS 应用——UIKit/SwiftUI 外壳 |
+| `Modules/BentoTmuxKit/` | tmux control mode（`-CC`）协议客户端 |
+| `Modules/BentoGhosttyKit/` | 基于 libghostty 的终端 surface |
+| `Modules/BentoAgentKit/` | Agent 检测规则与 pane 状态 |
+| `Modules/BentoSessionKit/` | 会话、窗口、pane 逻辑 |
+| `Modules/BentoVoiceKit/` | 语音引擎与语音控制器 |
+| `Modules/BentoFilePreviewKit/` | 路径解析与富文件预览 |
+| `Modules/BentoUISharedKit/` | 两端共用的 UI |
+| `Modules/BentoFoundationKit/` | 日志与底层公共工具 |
+| `Modules/GhosttyKit/` | libghostty 的二进制 xcframework 目标 |
 | `docs/` | PRD、设计文档、bug tracker |
 
 ## 从源码构建
