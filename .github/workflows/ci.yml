@@ -43,11 +43,34 @@ jobs:
       - name: Terminology check
         run: scripts/check-terminology.sh
 
-      - name: swift test swift-tmux
-        run: swift test --package-path Modules/BentoTmuxKit
-
-      - name: swift test bento-terminal-core
-        run: swift test --package-path bento-terminal-core
+      # Every Modules/* package that ships a Tests/ directory, discovered
+      # rather than listed: the module split renamed bento-terminal-core out
+      # of existence and this job kept pointing at the old path, so from
+      # 2026-08-03 CI was red while also testing exactly one of the eight
+      # packages that had tests. A list would have rotted the same way.
+      #
+      # Packages without Tests/ are skipped on purpose — Modules/GhosttyKit
+      # is a binary-target wrapper with no buildable target, and `swift test`
+      # errors out on it.
+      #
+      # The floor is a ratchet against silent shrinkage: if a package stops
+      # being discovered, this fails instead of quietly covering less.
+      - name: swift test (every Modules package with tests)
+        run: |
+          set -euo pipefail
+          tested=0
+          for pkg in Modules/*/; do
+            [ -d "${pkg}Tests" ] || continue
+            echo "::group::swift test ${pkg}"
+            swift test --package-path "$pkg"
+            echo "::endgroup::"
+            tested=$((tested + 1))
+          done
+          echo "tested ${tested} package(s)"
+          if [ "$tested" -lt 7 ]; then
+            echo "::error::only ${tested} package(s) tested, expected at least 7" >&2
+            exit 1
+          fi
 
   apps:
     name: apps (xcodebuild build + test)
