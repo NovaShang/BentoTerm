@@ -172,8 +172,12 @@ public final class TmuxControlMode: @unchecked Sendable {
     /// a second, empty command.
     ///
     /// One builder for both so the two can never drift: `tmux` stays a bare
-    /// word resolved by whatever PATH ends up running it, which is exactly what
-    /// makes the same string work locally and on the far side of an ssh hop.
+    /// word, resolved by the PATH of whatever shell runs the line.
+    ///
+    /// That bare word is NOT sufficient on its own over ssh. This line reaching
+    /// a shell with the user's PATH in it is the caller's job, and an ssh
+    /// argument does not get one for free — see `remoteLaunchCommandLine`,
+    /// which is what an ssh caller should be using.
     public static func launchCommandLine(
         sessionName: String? = nil,
         groupWith: String? = nil,
@@ -197,6 +201,25 @@ public final class TmuxControlMode: @unchecked Sendable {
         } else {
             return "tmux -CC new-session\(dir)\(prog)"
         }
+    }
+
+    /// The launch line as an argument for `ssh -t <host> "<line>"`: the same
+    /// line, wrapped so the remote runs it through a login shell.
+    ///
+    /// Composed here rather than at the call site so an ssh caller cannot get
+    /// the launch right and the shell wrong — which is exactly what happened,
+    /// and presented as `command not found: tmux` on a Mac with tmux installed
+    /// (Homebrew's `tmux` is on the PATH that `~/.zprofile` builds, and an ssh
+    /// command never reads it). See `TmuxShellQuote.loginShell`.
+    public static func remoteLaunchCommandLine(
+        sessionName: String? = nil,
+        groupWith: String? = nil,
+        path: String? = nil,
+        command: String? = nil
+    ) -> String {
+        TmuxShellQuote.loginShell(running: launchCommandLine(
+            sessionName: sessionName, groupWith: groupWith,
+            path: path, command: command))
     }
 
     /// Feed raw bytes from the SSH channel into the parser.

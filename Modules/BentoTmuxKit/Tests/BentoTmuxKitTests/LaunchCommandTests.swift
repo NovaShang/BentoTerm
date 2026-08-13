@@ -122,11 +122,87 @@ struct LaunchCommandLineTests {
         }
     }
 
-    /// `tmux` stays a BARE WORD. It is resolved by the PATH of whatever shell
-    /// ends up running the line — the login shell here, or the remote user's
-    /// shell on the far side of an ssh hop — which is the entire reason one
-    /// string works on both.
+    /// `tmux` stays a BARE WORD, resolved by the PATH of whatever shell ends up
+    /// running the line. Making it absolute here would only move the guess.
     @Test func tmuxIsNotAnAbsolutePath() {
         #expect(TmuxControlMode.launchCommandLine(sessionName: "work").hasPrefix("tmux "))
+    }
+}
+
+/// The ssh-argument line's login-shell wrapper.
+///
+/// The bug: `ssh -t <host> "tmux -CC …"` runs the remote shell NON-login, so
+/// zsh reads only `~/.zshenv`. Homebrew's `brew shellenv` lives in
+/// `~/.zprofile`, so `/opt/homebrew/bin` is not on PATH and the bare word
+/// `tmux` does not resolve — on a Mac with tmux installed, while iOS connected
+/// to the same host fine (it types the line into a real interactive shell).
+///
+/// The nesting is the sharp edge: the launch line already contains single
+/// quotes from `TmuxShellQuote`, and it goes inside single quotes again.
+@Suite("login-shell wrapper for the ssh-argument launch line")
+struct RemoteLaunchCommandLineTests {
+
+    @Test func wrapsThePlainLineInALoginShell() {
+        #expect(TmuxControlMode.remoteLaunchCommandLine(sessionName: "work")
+                == "exec $SHELL -l -c 'tmux -CC new-session -A -s '\\''work'\\'''")
+    }
+
+    /// `-l` is the entire fix; `$SHELL` is what makes it the user's own PATH.
+    @Test func usesTheUsersLoginShellNotAFixedOne() {
+        let line = TmuxControlMode.remoteLaunchCommandLine(sessionName: "work")
+        #expect(line.contains("$SHELL -l -c "))
+        #expect(!line.contains("/bin/sh"))
+        #expect(!line.contains("/bin/zsh"))
+    }
+
+    /// The wrapper must not smuggle in a newline — inside an ssh argument that
+    /// would be a second, empty command.
+    @Test func staysASingleLine() {
+        #expect(!TmuxControlMode.remoteLaunchCommandLine(
+            sessionName: "work", path: "~/code", command: "claude").contains("\n"))
+    }
+
+    /// Every single quote the inner line carries has to survive the outer
+    /// quoting, or the shell sees a truncated command (or an unterminated
+    /// string, which hangs waiting for the close quote).
+    @Test func innerQuotingSurvivesTheOuterQuoting() {
+        for (name, path, command) in [
+            ("work", "~/code", "claude") as (String, String?, String?),
+            ("my session", "/tmp/my proj's dir", "claude --resume"),
+            ("it's mine", nil, nil),
+        ] {
+            let inner = TmuxControlMode.launchCommandLine(
+                sessionName: name, path: path, command: command)
+            let wrapped = TmuxControlMode.remoteLaunchCommandLine(
+                sessionName: name, path: path, command: command)
+            #expect(wrapped == "exec $SHELL -l -c " + TmuxShellQuote.arg(inner))
+            // Round-trip: unwrapping the sh single-quoting gives the line back.
+            #expect(Self.unquoteShellSingle(
+                String(wrapped.dropFirst("exec $SHELL -l -c ".count))) == inner)
+        }
+    }
+
+    @Test func groupedAndSeededFormsAreWrappedToo() {
+        #expect(TmuxControlMode.remoteLaunchCommandLine(
+            sessionName: "work-mobile", groupWith: "work").hasPrefix("exec $SHELL -l -c '"))
+        #expect(TmuxControlMode.remoteLaunchCommandLine(
+            sessionName: "work", path: "~/code").hasPrefix("exec $SHELL -l -c '"))
+    }
+
+    /// The `'\''` idiom, undone the way `/bin/sh` reads it: quoted spans yield
+    /// their contents, and a backslash-escaped quote outside them is literal.
+    private static func unquoteShellSingle(_ s: String) -> String {
+        var out = ""
+        var inQuotes = false
+        var it = s.makeIterator()
+        while let c = it.next() {
+            switch c {
+            case "'": inQuotes.toggle()
+            case "\\" where !inQuotes:
+                if let escaped = it.next() { out.append(escaped) }
+            default: out.append(c)
+            }
+        }
+        return out
     }
 }
