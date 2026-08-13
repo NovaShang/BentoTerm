@@ -159,7 +159,12 @@ extension TerminalViewModel {
         // ghostty. Each pane already exists (geometry-only change), so the host
         // just re-runs layoutCells; added / removed panes are handled by the
         // debounced refreshPanes.
-        if changed { onGeometryApplied?() }
+        if changed {
+            onGeometryApplied?()
+            // The window's rendered grid is the bounding box of these panes, so
+            // this is the other half of the banner's comparison moving.
+            noteSizingInputsChanged()
+        }
     }
 
     func updatePaneViewModels(_ panes: [Pane]) {

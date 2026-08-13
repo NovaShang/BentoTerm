@@ -70,6 +70,9 @@ extension TerminalViewModel {
     public func resizeTmuxClient(cols: Int, rows: Int) {
         guard cols > 0, rows > 0 else { return }
         lastTmuxClientSize = (cols, rows)
+        // Half of the banner's comparison just moved (this device's grid),
+        // whether or not the policy lets us declare it.
+        defer { noteSizingInputsChanged() }
         guard usingTmux else { return }
         switch sizingMode {
         case .tracking, .smallest:
@@ -90,6 +93,7 @@ extension TerminalViewModel {
         if let session = activeTmuxSessionName {
             TerminalSizingMode.store(mode, for: session)
         }
+        noteSizingInputsChanged()
         Task { [weak self] in
             guard let self else { return }
             await self.applySizingMode(mode)

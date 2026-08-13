@@ -738,6 +738,7 @@ public extension TerminalViewModel {
         sizingMode = mode
         sizingOwner = owner
         if let session = activeTmuxSessionName { TerminalSizingMode.store(mode, for: session) }
+        noteSizingInputsChanged()
         // The owner re-asserts its grid on attach: it may have rotated or
         // changed font size while detached, and under `manual` nothing else
         // would ever correct the window.
@@ -777,6 +778,7 @@ public extension TerminalViewModel {
                 .setSessionOption(name: Self.sizeOwnerOption, value: claim.encoded))
             await pushOwnedWindowSize()
         }
+        noteSizingInputsChanged()
         return true
     }
 
@@ -826,6 +828,9 @@ public extension TerminalViewModel {
         sizingOwner = nil
         claimedSizeOwnership = false
         sizingMode = .tracking
+        // Ownership auto-releases server-side, so the banner has nothing of its
+        // own to expire: it follows `sizingOwner` and clears from here.
+        noteSizingInputsChanged()
         if let session = activeTmuxSessionName {
             TerminalSizingMode.store(.tracking, for: session)
         }
@@ -869,6 +874,78 @@ public extension TerminalViewModel {
         }
         await refreshPanes()
         return true
+    }
+
+    // MARK: - Reordering windows (Focus mode's drag-to-rearrange)
+
+    /// Move the window to position `destination` in `windows` — the order the
+    /// Focus sidebar rows and the phone's tabs are in, which is tmux's own
+    /// window order. `destination` is the FINAL resting position (post-removal),
+    /// i.e. what `Array.move(fromOffsets:toOffset:)` settles on, not SwiftUI's
+    /// raw `onMove` offset.
+    ///
+    /// Expressed to tmux as "insert before/after this neighbour" rather than
+    /// "go to index N": `move-window -t <index>` refuses an occupied index, and
+    /// the neighbour is addressed by window ID so nothing can drift under us.
+    /// Dragging left = land before the window now at `destination`; dragging
+    /// right = land after it.
+    ///
+    /// Index gaps: an insert renumbers only what it has to shift, so dragging
+    /// can leave 1,2,4 behind — and the index IS the address the row shows and
+    /// ⌘N takes. So gaps get closed, but ONLY when the session was gapless to
+    /// begin with; a user who deliberately parked windows at 1,5,9 keeps them.
+    @discardableResult
+    func reorderWindow(_ windowID: TmuxWindowID, toIndex destination: Int) async -> Bool {
+        guard usingTmux,
+              let from = windows.firstIndex(where: { $0.id == windowID }),
+              let command = TmuxCommand.reorder(windows.map(\.id), from: from,
+                                                to: destination, current: activeWindowID)
+        else { return false }
+
+        let wasGapless = indicesAreGapless
+
+        // Reflect the drop before the round trip: a row that springs back to
+        // where it was and only then settles reads as a rejected drag.
+        // `refreshWindows` reconciles authoritatively below (it is also what
+        // repairs the `index` fields this leaves stale); a refused command
+        // restores the old order the same way.
+        var reordered = windows
+        let moved = reordered.remove(at: from)
+        reordered.insert(moved, at: destination)
+        windows = reordered
+
+        let resp = await tmuxService.send(command)
+        if resp.isError {
+            dlog("reorderWindow \(windowID) → \(destination) failed: \(resp.output)")
+            await refreshWindows()
+            return false
+        }
+
+        // Named session only — `renumberWindows` explains why an implicit
+        // target is not safe here.
+        if wasGapless, let session = activeTmuxSessionName {
+            let renumber = await tmuxService.send(.renumberWindows(session: session))
+            if renumber.isError { dlog("renumberWindows failed: \(renumber.output)") }
+        }
+        await refreshWindows()
+        return true
+    }
+
+    /// Whether the session's window indices run 1,2,3… with nothing skipped
+    /// (from whatever `base-index` starts them).
+    private var indicesAreGapless: Bool {
+        let indices = windows.compactMap(\.index)
+        guard indices.count == windows.count, let first = indices.first else { return false }
+        return indices.enumerated().allSatisfy { $1 == first + $0 }
+    }
+
+    /// Move the window one step earlier/later in the order — the keyboard and
+    /// menu equivalent of the drag, and what makes reordering reachable
+    /// without a pointer at all.
+    @discardableResult
+    func shiftWindow(_ windowID: TmuxWindowID, earlier: Bool) async -> Bool {
+        guard let from = windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        return await reorderWindow(windowID, toIndex: earlier ? from - 1 : from + 1)
     }
 
     /// Move a pane out of this session into `target`. The pane's process and

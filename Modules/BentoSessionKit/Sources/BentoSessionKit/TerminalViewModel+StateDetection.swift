@@ -22,6 +22,12 @@ extension TerminalViewModel {
                 // polling list-panes is how the GUI learns to forward the mouse.
                 await self.refreshPanes()
                 await self.updatePaneStates()
+                // Cheap re-derive of the take-over banner. The event hooks
+                // (resize, layout change, policy change) cover every way the
+                // answer normally moves; this tick is the backstop for the ones
+                // that arrive as a same-shaped pane list — a `resize-window`
+                // from another client changes nothing but the numbers.
+                self.noteSizingInputsChanged()
                 // Every third tick (~6s), re-read the session list from THIS
                 // connection's server. One extra `list-sessions` per window is
                 // cheap even over ssh, and it is what lets a window notice that
