@@ -87,29 +87,9 @@ enum STTheme {
     // reported background (initial resolution / config reload / OSC 11), so the
     // band is always harmonious with whatever theme or program is running.
 
-    /// A title band derived from `bg` blended toward the state `accent`
-    /// (working/awaiting/done); idle nudges the bg's luminance for a faint
-    /// neutral band so the bento grid stays legible without a foreign grey.
-    /// Stronger on the active pane so focus reads.
-    static func fusedBand(bg: UIColor, accent: UIColor?, active: Bool) -> UIColor {
-        if let accent {
-            return bg.mixed(with: accent, active ? 0.22 : 0.14)
-        }
-        // Idle: lift a dark bg / lower a light bg just enough to mark the seam
-        // between panes — a band cut from the terminal's own color.
-        let dark = bg.luminance < 0.5
-        return bg.mixed(with: dark ? UIColor.white : UIColor.black, dark ? 0.07 : 0.05)
-    }
-
-    /// Title ink that stays legible over a `fusedBand` built from `bg`. Keys off
-    /// the bg's luminance (not the trait) so it's still right when a TUI repaints
-    /// the background. Neutral light/dark, like the band it sits on.
-    static func fusedInk(bg: UIColor, active: Bool) -> UIColor {
-        if bg.luminance < 0.5 {
-            return UIColor(white: active ? 0.95 : 0.62, alpha: 1)
-        }
-        return UIColor(white: active ? 0.16 : 0.42, alpha: 1)
-    }
+    // (The title BAND used to be fused from `bg` here too. 2026-08-07 it moved to
+    // the shared `PaneChromeColors`, which is the macOS treatment: an
+    // appearance-driven strip, not one cut from the terminal's own color.)
 
     /// The pane surround / reserved-band color: the terminal bg FUSED with the
     /// pane's running state — the old per-state pane background (bgWorking /
@@ -169,14 +149,22 @@ enum STTheme {
         return 10
     }
 
-    /// User-selected terminal font, falling back to Maple Mono NF CN (bundled,
-    /// registered via UIAppFonts). Unknown/legacy tokens fall through to the
-    /// system monospace font.
+    /// User-selected terminal font for the CHROME beside the terminal, matching
+    /// what the surface renders inside it.
+    ///
+    /// The stored value is a real family name now (the picker enumerates every
+    /// monospaced family on the device); the legacy token cases stay because an
+    /// install that hasn't opened the Appearance panel since the change still
+    /// holds one, and they resolve to the same faces they always did. Anything
+    /// else is passed to `UIFont(name:)` as a family, with the system monospace
+    /// as the last resort — the same shape as
+    /// `ThemeStore.ghosttyFontFamily`, so the chrome and the terminal can't
+    /// disagree about which font was picked.
     static var terminalFont: UIFont {
         let size = terminalFontSize
-        let family = UserDefaults.standard.string(forKey: "terminal_font_family") ?? "maple-nf-cn"
+        let family = UserDefaults.standard.string(forKey: "terminal_font_family") ?? "Maple Mono NF CN"
         switch family {
-        case "maple-nf-cn":
+        case "maple-nf-cn", "Maple Mono NF CN":
             return UIFont(name: "MapleMono-NF-CN-Regular", size: size)
                 ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
         case "menlo":
@@ -186,11 +174,29 @@ enum STTheme {
             return UIFont(name: "CourierNewPSMT", size: size)
                 ?? UIFont(name: "Courier", size: size)
                 ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        case "system-medium":
-            return UIFont.monospacedSystemFont(ofSize: size, weight: .medium)
+        case "sf-mono", "system", "system-medium":
+            return UIFont.monospacedSystemFont(
+                ofSize: size, weight: family == "system-medium" ? .medium : .regular)
         default:
-            return UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            return namedFont(family: family, size: size)
         }
+    }
+
+    /// Resolve a FAMILY name (what the picker stores) to a face.
+    ///
+    /// `UIFont(name:)` wants a PostScript name, so it only answers for families
+    /// whose regular face shares the family name. `UIFont(descriptor:size:)`
+    /// always returns something — it silently substitutes the system font for a
+    /// family that isn't installed — so the result is checked before it is
+    /// trusted, and an uninstalled font falls back to the system monospace
+    /// rather than to a proportional one.
+    private static func namedFont(family: String, size: CGFloat) -> UIFont {
+        if let exact = UIFont(name: family, size: size) { return exact }
+        let candidate = UIFont(
+            descriptor: UIFontDescriptor(fontAttributes: [.family: family]), size: size)
+        return candidate.familyName == family
+            ? candidate
+            : .monospacedSystemFont(ofSize: size, weight: .regular)
     }
 }
 
@@ -243,28 +249,37 @@ extension UIColor {
 // where monospace is literally true (host strings, terminal contents).
 
 enum BentoBrand {
-    // Frame — cold IDE shell in dark; warm rice-paper in light. The bento icon's
-    // warm-content / cool-frame contrast inverts gracefully: light mode reads as
-    // a paper lunchbox, dark mode as the recessed IDE shell.
-    static let shell      = UIColor.bentoDynamic(light: UIColor(hex: 0xF4F2EC), dark: UIColor(hex: 0x16181D))  // app bg
-    static let surface    = UIColor.bentoDynamic(light: .white,                dark: UIColor(hex: 0x1E222B))  // elevated card
-    static let surfaceHi  = UIColor.bentoDynamic(light: UIColor(hex: 0xEBE8DF), dark: UIColor(hex: 0x262B36))  // pressed / inner chip
-    static let inset      = UIColor.bentoDynamic(light: UIColor(hex: 0xEAE7DE), dark: UIColor(hex: 0x0D0F13))  // recessed prompt cell
-    static let border     = UIColor.bentoDynamic(light: UIColor(hex: 0xDBD6CA), dark: UIColor(hex: 0x2A2E38))
-    static let borderHi   = UIColor.bentoDynamic(light: UIColor(hex: 0xC8C2B4), dark: UIColor(hex: 0x363B47))
+    // 2026-08-11: these used to be a warm "bento box" palette — rice-paper
+    // light mode, emerald tint, hand-picked greys. That was right for the
+    // earlier, friendlier product; Term is a tool now, so the chrome resolves
+    // to the system's own semantic colours and the app looks like iOS instead
+    // of like a brand. The NAMES stay (they have ~125 call sites); what changed
+    // is what they resolve to, so light/dark, contrast settings and future OS
+    // revisions come for free.
+    static let shell      = UIColor.systemGroupedBackground            // app bg
+    static let surface    = UIColor.secondarySystemGroupedBackground   // rows / cards
+    static let surfaceHi  = UIColor.tertiarySystemGroupedBackground    // pressed / chip
+    static let inset      = UIColor.secondarySystemBackground          // recessed
+    static let border     = UIColor.separator
+    static let borderHi   = UIColor.opaqueSeparator
 
-    // Ink — rice-white-leaning warm in dark; warm near-black in light.
-    static let inkPrimary   = UIColor.bentoDynamic(light: UIColor(hex: 0x26231E), dark: UIColor(hex: 0xF0EAD8))
-    static let inkSecondary = UIColor.bentoDynamic(light: UIColor(hex: 0x6B6B70), dark: UIColor(hex: 0x9CA0AB))
-    static let inkMuted     = UIColor.bentoDynamic(light: UIColor(hex: 0x9A958C), dark: UIColor(hex: 0x5A5F6B))
+    static let inkPrimary   = UIColor.label
+    static let inkSecondary = UIColor.secondaryLabel
+    static let inkMuted     = UIColor.tertiaryLabel
 
-    // Brand cells — straight from the icon, constant across appearances.
-    static let emerald = UIColor(hex: 0x4ADE80)  // prompt / connected / cursor
-    static let salmon  = UIColor(hex: 0xE89B7C)  // warm / awaiting / voice
-    static let rice    = UIColor(hex: 0xF0EAD8)
-    static let veg     = UIColor(hex: 0x6FA254)  // category / mark cell
-    static let vegDeep = UIColor(hex: 0x4D7C3F)
-    static let red     = UIColor(hex: 0xFF5A52)
+    // Meaning, not decoration: green reads "running / connected", orange
+    // "waiting on you", red "failed" — the same vocabulary the pane state
+    // colours use. System colours so they track accessibility settings.
+    static let emerald = UIColor.systemGreen
+    static let salmon  = UIColor.systemOrange
+    static let red     = UIColor.systemRed
+
+    // The app mark keeps the brand palette: a logo is the one place a product
+    // is allowed to have its own colours, and it should not shift with the OS.
+    static let markEmerald = UIColor(hex: 0x4ADE80)
+    static let rice        = UIColor(hex: 0xF0EAD8)
+    static let veg         = UIColor(hex: 0x6FA254)
+    static let vegDeep     = UIColor(hex: 0x4D7C3F)
 }
 
 /// Call once at app launch to harmonize UIKit-backed surfaces (nav bars,
@@ -273,44 +288,38 @@ enum BentoBrand {
 /// drive them through UIAppearance.
 @MainActor
 enum BentoAppearance {
+    /// Nearly nothing now. This used to repaint nav bars, toolbars, table
+    /// backgrounds and cells with the bento palette; all of that is gone, so
+    /// UIKit draws its own chrome. What remains is a correctness fix, not a
+    /// look: the keyboard follows the active interface style instead of being
+    /// pinned dark.
     static func install() {
-        let shell = BentoBrand.shell
-        let surface = BentoBrand.surface
-        let ink = BentoBrand.inkPrimary
-
-        let nav = UINavigationBarAppearance()
-        nav.configureWithOpaqueBackground()
-        nav.backgroundColor = shell
-        nav.titleTextAttributes = [.foregroundColor: ink]
-        nav.largeTitleTextAttributes = [.foregroundColor: ink]
-        nav.shadowColor = .clear
-        UINavigationBar.appearance().standardAppearance = nav
-        UINavigationBar.appearance().scrollEdgeAppearance = nav
-        UINavigationBar.appearance().compactAppearance = nav
-        UINavigationBar.appearance().tintColor = BentoBrand.emerald
-
-        UITableView.appearance().backgroundColor = shell
-        UITableView.appearance().separatorColor = BentoBrand.border
-        UITableView.appearance().sectionHeaderTopPadding = 12
-        UITableViewCell.appearance().backgroundColor = surface
-        UITextField.appearance().textColor = ink
-        // `.default` follows the active interface style (dark keyboard in dark,
-        // light in light) — unlike the old hardcoded `.dark`.
         UITextField.appearance().keyboardAppearance = .default
-
-        let toolbar = UIToolbarAppearance()
-        toolbar.configureWithOpaqueBackground()
-        toolbar.backgroundColor = shell
-        UIToolbar.appearance().standardAppearance = toolbar
-        UIToolbar.appearance().scrollEdgeAppearance = toolbar
+        // UIKit's own tint, which SwiftUI's `.tint(...)` does not set.
+        //
+        // A sheet is a UIKit presentation: SwiftUI draws its content with the
+        // environment tint, then UIKit re-tints the hosting view with the
+        // WINDOW's tint once the presentation settles — system blue unless
+        // told otherwise. That is exactly the symptom: Settings icons came up
+        // green and turned blue a moment later. The old code happened to avoid
+        // it by forcing `UINavigationBar.appearance().tintColor`; that went
+        // with the rest of the palette overrides, so set the window's tint
+        // instead — one place, and both layers now agree.
+        UIWindow.appearance().tintColor = BentoBrand.emerald
     }
 }
 
 // MARK: - Reusable view modifiers
 
 extension View {
-    /// Apply to a `Form` or sheet content to drop the system grouped-list
-    /// chrome and use bento tokens instead.
+    /// One background across a whole sheet — including the parts of it that
+    /// are not a `Form`, which would otherwise fall back to a different system
+    /// colour and show as a slab behind the top of the page.
+    ///
+    /// The tint is restated here rather than relied on from the root: sheets
+    /// are their own presentation, and this modifier is what every sheet in the
+    /// app wears — so the green accent can't be one `.sheet` away from being
+    /// system blue again.
     func bentoForm() -> some View {
         self
             .scrollContentBackground(.hidden)
@@ -393,6 +402,7 @@ extension Color {
     static let bentoEmerald    = Color(BentoBrand.emerald)
     static let bentoSalmon     = Color(BentoBrand.salmon)
     static let bentoRice       = Color(BentoBrand.rice)
+    static let bentoMarkGreen  = Color(BentoBrand.markEmerald)
     static let bentoVeg        = Color(BentoBrand.veg)
     static let bentoVegDeep    = Color(BentoBrand.vegDeep)
     static let bentoRed        = Color(BentoBrand.red)

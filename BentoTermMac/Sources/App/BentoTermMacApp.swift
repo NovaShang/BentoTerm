@@ -43,6 +43,14 @@ struct TerminalCommands: Commands {
                 .keyboardShortcut("n", modifiers: .command)
         }
 
+        // Setup is five pages of settings with their explanation attached, so
+        // it has to stay reachable: someone who pressed "Later", or who wants
+        // the tmux page again, shouldn't have to clear a UserDefaults key to
+        // see it. Next to Settings… because it opens the same five panels.
+        CommandGroup(after: .appSettings) {
+            Button("Run Setup Again…") { Windows.show(.firstRun) }
+        }
+
         CommandMenu("Shell") {
             Button("Command Palette…") { BentoTerminalWindow.presentCommandPalette() }
                 .keyboardShortcut("p", modifiers: .command)
@@ -88,9 +96,12 @@ struct TerminalCommands: Commands {
                 .keyboardShortcut("]", modifiers: .command)
             Button("Select Previous Pane") { BentoPaneAction.dispatch(BentoPaneAction.previousPane) }
                 .keyboardShortcut("[", modifiers: .command)
-            Button("Swap Pane Up") { BentoPaneAction.dispatch(BentoPaneAction.swapPaneUp) }
+            // Mode-dispatched (see `swapActivePaneUp`): moves the pane within
+            // the Parallel layout, or the window within the Focus order — so
+            // the title names neither.
+            Button("Move Up") { BentoPaneAction.dispatch(BentoPaneAction.swapPaneUp) }
                 .keyboardShortcut(.upArrow, modifiers: [.command, .option])
-            Button("Swap Pane Down") { BentoPaneAction.dispatch(BentoPaneAction.swapPaneDown) }
+            Button("Move Down") { BentoPaneAction.dispatch(BentoPaneAction.swapPaneDown) }
                 .keyboardShortcut(.downArrow, modifiers: [.command, .option])
             Button("Toggle Zoom") { BentoPaneAction.dispatch(BentoPaneAction.toggleZoom) }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
@@ -140,7 +151,7 @@ enum Windows {
             title = "New agent session"
             content = AnyView(AgentWizardWindow())
         case .firstRun:
-            title = "Welcome to BentoTerm"
+            title = "Set up BentoTerm"
             content = AnyView(FirstRunWindow())
         }
         let host = NSHostingController(rootView: content)

@@ -1,323 +1,462 @@
-# Bento Onboarding 体验设计 v1.1
+# Bento Term Onboarding 设计 v2
 
-> 2026-07-07 · 基于 main(c931fa8)代码现状。相关:`docs/prd.md` §6.3、`docs/prd-mac-client.md` §5/§9。
-> v1.1 修订:① 环境准备提为 onboarding 的首要职责(显式清单);② 从「零术语」改为「概念分层教学」——该懂的概念教到懂,只藏实现细节;③ Mac 与移动端改为**两条独立完整的流程**,在各自末端交叉引导对方端(Mac→装 App+远程;App→装 Mac 端或 Linux/WSL 主机端)。
-
----
-
-## 0. 一句话
-
-Onboarding 的两个职责,缺一不可:
-
-1. **把环境准备好**——主机、agent、账号、配对、权限,每一项要么替用户做掉,要么手把手带完,全程有清单可见;
-2. **把必要概念教懂**——用户离开引导时,应当真正理解「主机与遥控」「agent」「持久工作区」「状态色」这些他日后每天要用的心智模型,而不是靠猜。
-
-在此之上编排三次 aha:语音驱动一个 agent → 并行一群 agent → 移动端随时随地指挥。
-
----
-
-## 1. 用户画像与设计原则
-
-### 1.1 目标画像:「会用 AI,不会用终端」
-
-- 用过 ChatGPT/Claude 网页版,听说过 Claude Code 但被终端吓退;
-- 不知道 shell / tmux / SSH / PATH 是什么;**能学会**新概念,前提是用他的语言、在用到的时刻教;
-- 设备组合不定:可能只有 Mac,可能 Mac+iPhone/iPad,也可能是 Windows(WSL)/Linux 服务器 + 手机;
-- 心智模型(我们要主动建立的):「我雇了几个 AI 员工;**主机是他们的工位,手机是我的对讲机**」。
-
-### 1.2 设计原则
-
-| # | 原则 | 含义 |
-|---|------|------|
-| P1 | **环境准备显式化** | 首启就展示「需要什么才能跑起来」的检查清单(主机/agent/账号/配对/权限),逐项打勾。每一项:能自动做的自动做,不能的手把手带,绝不假设已就绪。 |
-| P2 | **概念分层:教心智,藏实现** | 必教概念(§2 概念地图):主机、agent、工作区(持久)、配对、状态色、两种视图、语音手势。隐藏实现:tmux、SSH 协议、relay 内部、"daemon"一词(UI 称「后台服务」/「主机端」)。判断标准:这个概念影响用户日后的决策吗?影响→教;不影响→藏。 |
-| P3 | **用默认值代替提问** | 能推断就不问(手机→Focus、尺寸→Fit),「换一种」放进事后菜单。提问只保留影响巨大且二选一无成本的(如中文用户切 Qwen 引擎)。 |
-| P4 | **在使用时刻教,不在开头教** | 概念和手势都挂在第一次用到的场景上(coach mark / 图例卡),出现一次即止,可在帮助里重放。 |
-| P5 | **每一步都有活的反馈** | 配对成功要双端可见;agent 启动要看到它干活;不允许任何一步以「什么都没发生」结束。每个死胡同必须有一个按钮。 |
-| P6 | **权限弹窗前先解释** | 麦克风/相机/通知,先一句人话,再系统弹窗。 |
-| P7 | **两端各自独立完整,末端交叉引导** | Mac 流程不依赖手机存在,手机流程不依赖 Mac 已就绪;各自在合适的节点引导对方端的安装。 |
-| P8 | **界面是现代 GUI,不是终端 cosplay** | 便当盒隐喻 + emerald 品牌色(`docs/bento-icon.svg`),圆角卡片与真实动画;等宽字体只出现在它字面为真的地方。 |
-
-### 1.3 北极星指标
-
-| 指标 | 定义 | 目标 |
-|------|------|------|
-| TTFA (time-to-first-agent) | 任一端安装 → 第一个 agent 回复第一句话 | Mac < 3 min;移动端(含装主机端)< 15 min |
-| TTFV (time-to-first-voice) | 安装 → 第一条语音指令发出 | Mac < 5 min |
-| 环境完备率 | 首启 7 日内清单全绿(主机+agent+账号) | > 70% |
-| 配对转化 | 单端用户 7 日内完成双端配对 | > 60% |
-| 并行激活 | 首周内同时开过 ≥2 个 agent | > 40% |
-| 概念理解(代理指标) | 首周内主动使用过状态色导航(点琥珀窗口)/模式切换 | 跟踪 |
-
----
-
-## 2. 概念地图:用户必须理解的一切
-
-这是整个 onboarding 的教学大纲。每个概念 = 一句话隐喻 + 教学时机 + 界面锚点。引导结束后,全部沉淀在「Settings → 帮助 → Bento 是怎么工作的」可随时重看。
-
-| 概念 | 用户语言的一句话 | 教学时机 | 锚点 |
-|------|------------------|----------|------|
-| **主机 (Host)** | 「agent 干活的电脑——你的 Mac 或服务器。手机只是遥控器,手机关了活不停。」 | 双端首启第一屏(架构图,见下) | 欢迎页 |
-| **Agent** | 「装在主机上的 AI 员工(比如 Claude Code),需要登录它自己的账号。」 | 环境清单「安装 agent」一项 | 清单页 |
-| **工作区 (Session)** | 「一个持续存在的项目现场。断开、锁屏、换设备,回来时一切还在。」 | 第一次断开重连 / 第一次从手机打开 Mac 建的工作区 | 重连 toast:「你离开的这段时间它一直在干活」 |
-| **窗口与格子** | 「一格一个 agent,像便当盒。」 | 第一次开第二个 agent | Split/＋入口 tip |
-| **状态色** | 「🔵干活中 🟡等你拍板 🟢干完没看 ⚪空闲。盯颜色,不用盯文字。」 | 第一次出现琥珀色 | 图例卡(§6.2) |
-| **两种视图** | 「Parallel 全都看见,Focus 一次一个。随时切,不丢东西。」 | 第一次多窗口 / 首次进入 Focus | 分段控件小蓝点 |
-| **配对** | 「让手机和主机互相认识,只做一次。之后在任何网络下都能连上。」 | 配对页顶部一句话 | 配对页 |
-| **语音手势** | 「长按说话松手发送;上滑立即发、下滑取消;右滑先过目再发、左滑把大白话变命令。」 | 首次进终端(基础)+ 第 3 次发送后(进阶) | 手势 overlay + tip |
-
-**架构图(双端首启第一屏都出现,3 秒看懂):**
-
-```
-   📱 手机/iPad  ←——— 云端接力 ———→  💻 你的主机 (Mac / Linux / WSL)
-   (遥控器)                          (agent 们在这里干活,一直在线)
-```
-
-这张图回答了新手日后所有的「为什么」:为什么要装两个端、为什么 Mac 要开着、为什么手机关了没事、为什么要配对。**值得做成动画放在两条流程的第一屏。**
-
-**明确不教的(实现细节)**:tmux、SSH 协议与密钥、relay 拓扑、"daemon" 一词(macOS UI 称「后台服务」,Linux 安装物称「Bento 主机端 / Bento Host」)、API key(除非用户主动开启 BYOK 功能)。
-
----
-
-## 3. 流程总览:两条独立流程,末端互相引导
-
-```
-┌─ Mac 流程(§4)————————————————————┐   ┌─ 移动端流程(§5)———————————————————┐
-│ 欢迎+架构图                          │   │ 欢迎+架构图                           │
-│ 环境清单:                           │   │ 环境清单:                            │
-│  ① 后台服务(自动)                  │   │  ① 准备一台主机(三选一):            │
-│  ② 安装 agent(引导装 Claude Code)  │   │     A. 我有 Mac → 引导装 Mac 版        │
-│  ③ 登录 agent 账号(带过)          │   │     B. 我有 Linux/Windows(WSL)服务器  │
-│ 第一个工作区(零输入)               │   │        → 引导装 Bento 主机端(一行命令)│
-│ aha1 语音 → aha2 并行               │   │     C. SSH 直连(高级,不新手化)      │
-│ 完成页:                             │   │  ② 配对(扫码/输码)                  │
-│  → [把 Bento 装进手机]              │   │  ③ 主机上有 agent 吗?(检测+引导)    │
-│    App Store 二维码 + 配对码         │   │ 进入工作区 → 手势/状态教学(§6)       │
-└─────────────────┬──────────────────┘   │ aha3:随时随地指挥                     │
-                  │  交叉引导              └──────────────────┬────────────────────┘
-                  └───────→ 配对 ←──────────────────────────┘
-```
-
-- 两条流程**各自自洽**:只有 Mac 的用户走完 Mac 流程已获得完整单机价值(语音+并行);只有手机+服务器的用户走完移动端流程同样获得完整价值,全程不需要 Mac。
-- 交叉引导是**末端的推荐,不是前置条件**:Mac 完成页推手机端;移动端的「准备主机」一步里,装 Mac 版只是三个选项之一。
-
----
-
-## 4. macOS 流程(现状:完全缺失)
-
-### 4.0 现状问题
-
-- Mac App 无首启流程(2026-07 前这里说的是「菜单栏 App」;菜单栏与那个下拉菜单已整体删除,Bento 现在是普通 Mac app:Dock 图标 + 常规主菜单 + 常规窗口生命周期);后台服务未运行时也没有解释;
-- Agent Wizard 假设 `claude` 在 PATH,零基础用户 100% 卡死;
-- 配对窗口成功后无确认。
-
-### 4.1 首启:欢迎窗口(居中 560×640)
-
-**Step 1 · 欢迎 + 架构图**
-- 便当盒 logo 动画 → §2 架构图动画(手机⇄云端⇄主机)。
-- 「Bento —— 你的 AI Agent 指挥台。这台 Mac 就是 agent 们的工位。」
-- [开始准备环境](主)· [我是老手,跳过](→ §4.6 快路径)。
-
-**Step 2 · 环境清单(P1 原则的具体形态)**
-
-一页三项,实时打勾,全绿才亮 [继续]:
-
-```
-准备你的工位
- ✓ Bento 后台服务         已自动启动(随 app 常驻,可在设置中关闭)
- ⭘ AI agent               未找到 → [选择 agent ▾](Claude Code recommended,共 11 家)
-                          → 官方一行安装命令(可复制)→ [Install in Bento terminal]
- ⭘ Agent 账号             安装后检测;未登录 → 「下一步启动时跟着屏幕提示登录,约 1 分钟」
-```
-
-- 后台服务:静默启动 + 注册 login item,勾直接打上;
-- agent 检测:复用 `AgentSpec.swift` 预设表逐个 `which`(登录 shell,吃用户真实 PATH);命中任一即打勾并显示「找到 X ✓」;
-- **安装(已实现,覆盖全部 11 家预设)**:选择器选 agent → 展示各家官方一行安装命令(2026-07-07 逐家核实,优先免依赖的 curl 安装;npm 系标注并预检 Node)→ [Install in Bento terminal] 在**可见的原生终端 tab** 里执行(用户看得到自己批准的命令在干什么,装完 tab 落回 shell 供 agent 自己的登录流程)→ 回向导 [Re-check] 变绿;
-- 账号一项不做强校验(登录态探测尽力而为),核心是**预告**登录流程,避免用户在 Step 3 看到 claude 的 login 界面以为出错。
-
-**Step 3 · 第一个工作区(零输入)**
-- 「给 agent 一个干活的文件夹」:默认创建 `~/Bento Projects/我的第一个项目`,[换一个文件夹…] 兜底;
-- [启动] → **原生 Bento 终端**(PRD §9 #2 必须先修:现在 wizard 丢给系统 Terminal,不可接受);单格、preset 用 Step 2 结果、session 名自动。
-
-**Step 4 · 第一句语音(aha 1)**
-- 一次性 coach mark:「🎤 按住 空格/工具栏麦克风 说出第一个指令。试试:帮我写一个贪吃蛇网页游戏,做完直接打开给我看。」
-- 按下前先弹自绘麦克风解释卡(P6)→ 系统权限弹窗;
-- 系统语言为中文 → 一次性建议:「切换到更准的中文识别(免费,无需配置)?[切换] [保持]」(Qwen 走 relay 代理);
-- agent 开始跑 → coach mark 换成「它干活时你不用盯着——注意标题栏颜色」,引出状态色教学(§6.2)。
-
-**Step 5 · 完成页 = 交叉引导页**
-- 「✓ 你的工位已就绪,第一个 agent 正在干活。」
-- 三张卡:
-  1. **[再开一个 agent 并行干活]** → §6.1 并行引导;
-  2. **[把 Bento 装进手机]** → 展开:App Store 二维码(大)+「装好后打开 App → 选“连接我的 Mac” → 回来扫下面的配对码」+ 内嵌实时配对码(PairingWindow 嵌入态);
-  3. [完成] → 关掉向导,回到原生终端窗口。**TODO**(菜单栏删除后原气泡失去锚点):要不要在这里说明「关掉最后一个窗口 app 仍留在 Dock,点 Dock 图标或 ⌘N 重开,agent 继续在后台干活」,以什么形式说,未定。
-
-### 4.2 菜单栏常态改造 — ⛔ SUPERSEDED(2026-07)
-
-> 菜单栏与其下拉菜单已删除,本节三条改造无处可落。等价能力的落点:后台服务随 daemon 一并删除,不再存在;新建 agent 工作区见 [`launcher-design.md`](launcher-design.md) §7(启动器 level 1);帮助/重看引导随 onboarding 删除。本节仍需按那份设计重写。原文:
+> 2026-08-10 · **v1.1（2026-07-07）整篇作废**。它的目标画像是「会用 AI，不会用终端」，那个受众已在
+> 2026-07-27 的分叉里搬去 Bento Agents（`~/code/bento-acp`）。本仓库的受众下限是「会用或愿意学会用 shell」。
+> 相关：`Modules/BentoUISharedKit/.../BentoSettingsSections.swift`（被本设计取代）、`docs/launcher-design.md`。
 >
-> - 后台服务未运行:第一项 **[▶ 启动后台服务]** +「配对手机与保持连接需要它」;
-> - [＋ 新建 agent 工作区] 永远可点(本机功能不依赖后台服务);
-> - 新增 [❓ 帮助 → 重看引导 / Bento 是怎么工作的]。
-
-### 4.3 权限编排
-
-| 权限 | 时机 | 预解释 |
-|------|------|--------|
-| 麦克风 | Step 4 用户主动按下前 | 自绘卡:「把你的话转成指令,音频不落盘」 |
-| 通知 | 第一次在 agent working 时切走/锁屏 | 「agent 干完时通知你?」(依赖 sentinel 推送,未落地不请求) |
-
-### 4.4 PairingWindow 改造
-
-- 文案:「用 iPhone 相机扫这个码」+ 一句概念教学:「配对 = 让手机认识这台 Mac,只做一次」;Daemon ID 收进「手动输入?」折叠区;
-- 「Expires in 45s」改进度环,过期无缝换码;
-- **成功态**:原地 ✓ 动画 +「“Nova 的 iPhone” 已连接。在手机上打开 Bento,工作区已经在等你。」3s 自动关。
-
-### 4.5 BYOK(语音→shell LLM)
-
-维持「不配就不出现」;Settings 中加人话:「需要一个 OpenAI 兼容的 API key(什么是 API key?)」链帮助页。主线不触碰。
-
-### 4.6 老手快路径
-
-命中 `~/.ssh/config` / `claude` 已装 / 已有 tmux 会话 → 单页速览(语音键位、并行入口、配对入口)+ [开始]。
+> 文档里的界面文案一律用英文写（app 目前无本地化，所有既有 string 都是英文）；中文是设计注解。
 
 ---
 
-## 5. 移动端流程(iOS / iPadOS)
+## 0. 判据
 
-### 5.0 现状问题
+**Onboarding = 把这个用户本来就一定会进设置改的东西，提前到第一分钟摆在他面前；每一页同时讲清这一块他必须理解的事。**
 
-- 旧版 5 卡 OnboardingView(v0.2)与 GestureOnboardingOverlay(v0.3)叠床架屋 → 删旧版;
-- EmptyHomeView 两个 CTA(Pair Your Mac / Add SSH Host)对没装主机端的用户是死路;
-- 首次进终端连弹「Window size」+「Focus Mode?」两个模态(`TerminalWrapperView.swift:100-142`)。
+一页该不该存在，只问两句，满足其一即可：
 
-### 5.1 欢迎 + 架构图
+1. 一个专业用户装完一个新终端，第一件事会不会去改这个？（配色、字体、语音引擎、会话名）
+2. 不讲清楚的话，他会不会**用错、看错、或者根本不知道有这个能力**？（tmux 的持久性、状态色的含义、⌘P、语音的触发方式）
 
-- 同 §2 架构图动画;文案:「Bento 把你的 AI agent 装进口袋。agent 住在你的 Mac 或服务器上——先给它们一个工位。」
-- [准备我的主机](主)· [先看看 Bento 能干什么](→ §5.5 演示)。
+第 2 条是 v1 缺的那半边，也是这一版的重头：**说明不是配菜。**在 tmux 那一页，说明就是全部——那一页几乎没有设置可调，它存在的唯一理由是布道。
 
-### 5.2 环境清单·第①项:准备一台主机(三选一)
+---
 
-```
-你的 agent 需要一台一直在线的电脑:
- A. 💻 我有 Mac                    (推荐,最简单)
- B. 🖥  我有 Linux 服务器 / Windows 电脑(WSL)
- C. 🔧 直接用 SSH 连服务器          (高级)
+## 1. 五个 panel，两个宿主
+
+**一份 SwiftUI 实现，同时长在 onboarding 和设置里。** 每个 panel 是 `BentoUISharedKit` 里的一个 View，Mac 和 iOS 共用：
+
+```swift
+public enum PanelContext { case onboarding, settings }
+
+public struct AppearancePanel: View { public init(context: PanelContext) }
+public struct SpeechPanel:     View { public init(context: PanelContext) }
+public struct TmuxPanel:       View { public init(context: PanelContext) }
+public struct AgentsPanel:     View { public init(context: PanelContext) }
+public struct FinishPanel:     View { public init(context: PanelContext) }
 ```
 
-**路径 A · Mac**
-- 「在 Mac 上打开 `bento.novashang.com/mac` 下载安装(短链大字)。Mac 端会带你完成安装 agent 等步骤,最后显示一个配对码——回到这里扫它。」
-- 页面停在**扫码待命态**(相机权限在此时请求);Mac 侧走完 §4 即接上。
-- 检测型辅助:若 App 与某台运行 Bento 的 Mac 在同一局域网(Bonjour,P2),直接提示「发现“Nova 的 MacBook”→ [去 Mac 上按确认]」。
+每个 panel 内部固定三种块，`context` 只影响**展开状态**，不影响内容：
 
-**路径 B · Linux / WSL(新增,一等公民)**
-- Step 1 安装:展示一行命令(可复制,带二维码方便在电脑上打开文档页):
-  `curl -fsSL https://bento.novashang.com/install.sh | sh`
-  Windows 用户附注:「Windows 上需先启用 WSL(Windows 自带的 Linux 环境)→ [30 秒教程]」。
-- Step 2 配对:「装好后在服务器上运行 `bento pair`——它会显示二维码和 6 位码」→ App 停在扫码待命态。**依赖:主机端 CLI 需实现 `bento pair` 输出 ASCII 二维码 + 大字配对码(P1 工程项)**。
-- Step 3 agent:配对成功后 App 检测主机上有无 claude(daemon 探测,P1 先做文案版:「在服务器上运行 `npm i -g @anthropic-ai/claude-code`」;P2 做 App 内一键远程安装)。
-- 全程每步都有「卡住了?」链接 → 分步排错页。
+| 块 | onboarding | settings |
+|---|---|---|
+| **说明** `ExplainBlock` | 展开 | 收进 `How this works` 折叠区，文案一字不改 |
+| **暴露选项** | 展开 | 展开 |
+| **隐藏选项** `AdvancedBlock` | 折叠（标题 `Advanced`） | 折叠（同一个标题） |
 
-**路径 C · SSH 直连(高级)**
-- 保留现 HostEditView,不做新手化投入;入口加一句:「需要服务器地址与密钥。不确定这些是什么?选 A 或 B。」
+**由此设置页的分区 = onboarding 的五页，同名、同图标、同顺序。** 用户在引导里改过的东西，回头去设置里找，在同一个盒子里；引导本身就是设置页的第一次走查。Mac 设置窗改成五个 tab，iOS 设置列表改成五行下钻。`BentoSettingsForm` 的六段扁平结构被这五个 panel 取代。
 
-### 5.3 环境清单·第②③项:配对 + agent
-
-- 配对页顶部一句概念教学(同 §4.4);
-- **配对成功页(新增,替代干巴巴回列表)**:✓ 动画 +「已连接到“Nova 的 MacBook”」+ 列出主机上活着的工作区,有则首项高亮「我的第一个项目 · 1 个 agent 正在干活」→ 点进即 aha 3;无则 [开一个新工作区](走移动端 Agent Wizard 简化版,同 §4.1 Step 3 的零输入原则);
-- 主机无 agent → 引导(路径 B Step 3)。
-
-### 5.4 首次进入终端:零模态 + 手势教学
-
-- **删两连弹**:尺寸一律 Fit(「保持原尺寸」入窗口标题菜单);iPhone 多窗口默认 Focus,iPad 默认 Parallel;分段控件挂一次性小蓝点「两种视图,随时切换,不丢任何东西」;
-- 保留 GestureOnboardingOverlay(长按说话/双击键盘),pane 就绪 1s 后出现,加第三行「松手发送 · 上滑立即发 · 下滑取消」;左右滑进阶留给 §6.4;
-- 每台设备独立教学(MVP 无账号体系,不跨设备同步已学状态)。
-
-### 5.5 演示工作区(P2)
-
-本地脚本回放「三 agent 并行 + 语音发令」的只读工作区,片尾 CTA → 「准备我的主机」。V1 可先用 30 秒视频。解决纯逛用户与 App Review 展示。
-
-### 5.6 权限编排
-
-| 权限 | 时机 | 预解释 |
-|------|------|--------|
-| 相机 | 进入扫码待命态时 | 系统文案已够 |
-| 麦克风+语音识别 | 第一次长按说话按下瞬间 | overlay 已教为什么;拒绝 → pane 顶浮条「语音已关闭 → 去设置开启」 |
-| 通知 | 第一次「agent working 时退后台」 | 「agent 干完叫你?」(依赖 sentinel,未落地不请求) |
+平台差异用 panel 内部的 `#if` 处理（触发手势、⌘P 的等价入口、本机 vs 远端 tmux），**不允许分叉出两套 panel**。
 
 ---
 
-## 6. 场景化教学(两端共用 TipCenter)
+## 2. 五页
 
-统一 `TipCenter`(UserDefaults 记账,一生一次,Settings→帮助 可重置),替代散落的 `gestureOnboardingShown_v1` 等散 key。每条 tip = 锚点 + 一句话 + 可选[试试]。
+```
+⓪ Welcome      产品主张             三条断言，一种工作方式；不配置任何东西
+① Appearance   看着舒服             设置：配色 / 明暗 / 字体 / 字号
+② Speech       说话给 agent         设置：引擎 / 语言 · 说明：怎么触发
+③ tmux         关了还在 / 两种摆法   ★ 纯说明页，引导态下没有任何设置
+④ Agents       我们替你看着它们      说明：状态色 · 只读列表
+⑤ Finish       出口                 说明：⌘P / 手机 · 设置：遥测
+```
 
-### 6.1 并行(aha 2)
-- 触发:第一个 agent 首次 working ≥10s → tip「它干活的时候,你可以再开一个」锚在 ＋/Split;
-- 两 agent 同时 working → tip「这就是并行——谁需要你,谁的颜色会变」;
-- iPad/Mac 首现 ≥2 窗口 → sidebar 首次展开 +「所有工作区都在这里」。
+## ⓪ Welcome
 
-### 6.2 状态色图例
-- 触发:任一 pane 第一次 awaitingInput(琥珀)——用户第一次「被需要」;
-- 非模态图例卡:🔵干活中 · 🟡**等你拍板(现在!)** · 🟢干完没看 · ⚪空闲,「盯颜色,不用盯文字」。这是产品心智的钥匙,必须挂在第一次琥珀的瞬间。
+**它不配置任何东西，这正是它的职责。**后面五页都在请用户做选择；刚装完一个终端的人，有权在被问「选什么字体」之前先知道这个产品在主张什么。
 
-### 6.3 移动端首开
-- iPad:① sidebar「每窗口一个 agent,点击切换」;② 首次上滑 → ScrollMarkPager tip「按 agent 回合跳转,不用手搓滚动」;
-- iPhone:「一屏一个 agent,底部换人。tab 上的小圆点 = 那边的状态」;通知落地后,通知即入口(琥珀优先)。
+**一个论点的三个部分，不是三个功能。**论点：慢的早已不是 agent，是人还会停下的三个地方——切换、打字、离开。三条断言各拆掉一个：
 
-### 6.4 语音进阶
-- 第 3 次成功语音发送后:「按住说话时——**→ 右滑**:先转成文字过目再发(还能修);**← 左滑**:大白话变命令。」右滑 AI-correct 是中文用户杀手锏,等肌肉记忆形成后单独教。
+> *Agents are fast. Your terminal isn't. This one is built to keep up.*
+>
+> **A whole team, one screen** — While one agent writes code, you're reviewing another's. All of your attention goes to planning and judging — none of it to switching windows.
+>
+> **Say it, don't type it** — Hold to talk to any pane — you speak about three times faster than you type. Bento reads the screen, so names and jargon come out right.
+>
+> **Leave the desk, not the work** — The work lives on the machine, not in a window. From the sofa or the train, your phone shows the same panes — still running.
+>
+> *Not three features — one way of working. And it compounds.*
 
-### 6.5 工作区持久性(概念補强)
-- 触发:第一次断开后重连,或第一次在 B 端打开 A 端建的工作区 → toast:「你离开的这段时间,agent 一直在干活。工作区会一直保留,直到你关掉它。」
+**打动人靠具体，不靠倍数。**这个受众见到自造的乘数（10×）会当场折价，所以向往感全部压在「之后是什么样」的具体画面上：一个 agent 在写码、你在审另一个的；说话比打字快三倍；沙发上手机里还是同一批格子。tagline 直接点破论点——慢的早就不是 agent，是终端。收尾那句用 **compounds** 承载规模感：三条各自成立且互相放大，这个词工程师可以对着上面三条自己验证，比任何数字都可信。
 
----
+页面结构：app 图标 + 名字 + tagline，三条断言各配一个着色图标，整块垂直居中，底下一句收尾。主按钮是 `Get Started` 而不是 `Next`——它说的是按下去开始什么，不只是后面还有一页。
 
-## 7. 空状态与错误态
+实现在 `WelcomeManifestoView`（两端共用），**图标由 app 传进来**（macOS 是 NSImage、iOS 是 UIImage，都不该进这个包）。
 
-| 场景 | 现状 | 设计 |
-|------|------|------|
-| Mac 后台服务未运行 | 无解释 | [▶ 启动后台服务] 一键修复(**TODO**:原设计挂在菜单栏下拉里,菜单栏删除后落点未定) |
-| 配对码过期 | 需重生成 | 进度环 + 自动无缝换码 |
-| 配对失败 | error 浮层 | 分类:「码不对或过期,看主机屏幕上的新码」/「网络不通,两端都要联网」+ [重试] |
-| 手机打开时主机离线 | — | host 行置灰 +「主机不在线。它需要开机联网(Mac:Bento 开着;服务器:Bento 主机端在运行)」+ [怎么检查?] |
-| 主机上没有 agent | shell 报 command not found | 启动前预检,人话报错 + 对应平台的安装引导(§5.2 B-Step 3) |
-| 语音权限被拒 | 静默失败 | pane 顶浮条 + 深链系统设置 |
-| shell 死了 | 已有检测 | 人话浮条「这个工作区结束了 → [重开一个]」 |
+## ⓪′ Connect（仅 iOS）
 
----
+**iOS 独有的一页，排在 Welcome 之后、五页之前。**Mac 上 setup 是可选的锦上添花——app 一打开就能用；iOS 上**没有主机就什么都做不了**，所以新用户看到的流程必须包含这一步。
 
-## 8. 落地清单
+排第二而不是最后，两个理由：① 后面每一页（会话活着、agent 在主机上）讲的都是他此刻已经能看见的东西；② **挡路的那一步必须排在「Later」变得诱人之前**——放最后的话，中途退出的人会得到一个装了等于没装的 app。
 
-### P0 —— 修断点
-1. 删旧 OnboardingView(v0.2),统一 GestureOnboardingOverlay + TipCenter(`BentoTermiOS/Sources/App/BentoApp.swift:68-74`);
-2. Agent Wizard → 原生 Bento 终端(PRD §9 #2);
-3. 首连零模态:删两连弹,改默认值(`TerminalWrapperView.swift:100-142`);
-4. [▶ 启动后台服务] 态(原计划落在菜单栏下拉的 `MenuContent.swift`,该文件已随菜单栏一并删除 —— 落点待定,见 §4.2);
-5. 配对成功双端确认页(PairingWindow + RelayPairView)。
+> **Your agents need a machine to run on.**
+> They run there, not on this phone — anything you can `ssh` into works: your Mac, a Linux box, a VM in a rack.
+> Nothing to install on it. It needs `sshd` and `tmux`, which it almost certainly already has.
+> If reaching it means a VPN, Tailscale or a jump host, set that up first — Bento connects the same way `ssh` does.
+>
+> `[+ Add a Host]`
 
-### P1 —— 建两条流程
-6. macOS 首启向导(§4.1 Step 1–5),含环境清单、claude 检测+引导安装、完成页交叉引导(App Store 二维码+内嵌配对码);
-7. 移动端欢迎+主机三选一(§5.1–5.3),含 Linux/WSL 路径页面与排错页;
-8. **主机端工程配套**:Linux/WSL 安装脚本(`install.sh`)+ `bento pair` CLI(ASCII 二维码+大字码)+ daemon 侧 agent 探测接口;
-9. TipCenter + §6 全部时机化教学(并行、状态色图例、移动端首开、语音进阶、持久性 toast);
-10. 架构图动画(两端复用)+「Bento 是怎么工作的」帮助页(概念地图沉淀);
-11. 权限预解释卡(麦克风,两端);中文系统→Qwen 一次性建议;
-12. 埋点:TTFA/TTFV/环境完备率/配对转化/并行激活。
+**它不拦着 Next。**用户可能想先看完再加，或者手边没有凭据。困在一个填不出来的表单上，比让他走过去更糟。加完的主机在下面列出来打勾。
 
-### P2 —— 锦上添花
-13. 演示工作区(脚本回放;V1 先用视频);
-14. 通知权限+「agent 干完叫你」(依赖 remote sentinel);
-15. ~~一键安装 Claude Code 完整版~~ **已完成并超额**(2026-07-07:全部 11 家 agent 的官方一键安装,在原生终端 tab 可见执行);剩余:App 内一键给远程主机装 agent;
-16. 局域网发现 Mac(Bonjour)直连配对;
-17. Settings→帮助:引导重放 + 手势速查 + 概念地图页。
+实现：`HostSetupPage`（iOS app 内，不进共享包——SSH 主机存储本来就只有 iOS 有），复用现成的 `HostEditView(mode: .add)`。首启触发挂在 `HostListView`：`firstRunCompleted_v1` 未置位且一台主机都没有时自动弹，`BENTO_FORCE_FIRST_RUN=1` 强制。
 
 ---
 
-## 9. 未决问题
+导航：`Later` / `Back` / `Next`（第一页是 `Get Started`），最后一页 `Done`。任何一页可直接关窗，**改过的设置立即生效并保留**（全部是 `@AppStorage` / store，本来就即时写入）。帮助菜单 → `Run Setup Again`。没有 "skip the tour"——没有 tour 可跳。
 
-1. 短链与分发页:`bento.novashang.com/mac`、`/install.sh` 域名与托管方式待定;
-2. 「帮我安装 Claude Code」执行官方脚本的同意措辞与失败兜底;需预告 Anthropic 账号/订阅;
-3. Linux 主机端目前的安装/配对 CLI 现状与差距(`bento pair` 是否已存在、能否输出 ASCII QR)需要对 daemon 仓库做一次盘点;
-4. 演示工作区:真录像回放 vs asciinema 式脚本,待估工作量;
-5. 首任务文案 A/B:贪吃蛇(炫)vs 整理下载文件夹(实用),中英各一条;
-6. WSL 教程页(30 秒启用 WSL)由我们写还是链微软官方文档。
+---
+
+## ① Appearance
+
+### 暴露的选项
+
+| 选项 | 控件 | 默认 | 备注 |
+|---|---|---|---|
+| **Appearance** | 三段控件 `Follow System / Light / Dark` | Follow System | 决定下面出现几个主题槽 |
+| **Color theme** | 下拉 | System | **Follow System 时出现两个下拉**（Dark theme / Light theme），钉死明暗时只出现对应那一个 |
+| **Font** | 下拉，列出**这台机器上全部等宽字体** | Maple Mono NF CN | 数量不确定（用户随时会装新字体） |
+| **Size** | 步进器 8–24 | Mac 12 · iOS 10 | 松手才提交（现有代码已经这么做，原因是拖动中重建 surface 在 iOS 上崩过） |
+
+**这一页三个都用下拉，语音那页三个引擎却用卡片——同一条判断，结论相反：**主题和字体的数量都是不确定的（导入主题、装字体），而且旁边就杵着一块实时预览；**预览已经把「一眼看全」这件事做掉了，再画一套色板缩略等于做第二个预览。**语音那三个是固定的、代价截然不同的三选一，且没有任何东西能替它做预览。
+
+字体列表的实现（真实工程量，不是换个控件）：
+
+- macOS `NSFontManager.availableFontFamilies` 过滤 `.fixedPitch`；iOS `UIFont.familyNames` 过滤 `traitMonoSpace`。
+- 存**真实 family name**，不再存 `maple-nf-cn` 这类 token。`ThemeStore.ghosttyFontFamily` 的 `default: return fontFamilyToken` 分支已经支持直接透传，老 token 的 `case` 全部保留即完成迁移，不需要写迁移代码。
+- iOS chrome 侧 `BentoTheme.swift` 另有一份自己的 token switch，同步改，否则终端换了字体而周边 UI 没换。
+- 打包的 Maple Mono NF CN 已注册进 CoreText，本身就会出现在枚举结果里；置顶为默认，其余按字母序。
+
+### 隐藏的选项（`Advanced`）
+
+- `Import iTerm2 Theme…`（`.itermcolors`，已实现）
+- 已导入的自定义主题列表（可删）
+
+### 预览
+
+**一块真的 ghostty surface**，不是 SwiftUI 画的假终端。理由是你说的那条，而且是决定性的：假预览要自己再实现一套主题解析与上色，而**真 surface 的换主题/换字体路径已经写好了**（`applyTheme` + `.terminalThemeChanged` / `.terminalFontChanged`，所有活着的 pane 都靠它），预览白拿。
+
+实现约束（写进代码注释，否则会踩）：
+
+- **没有 pty、没有 shell。**`TerminalSurface.feed(_:)` 直接把一段写死的字节喂进去即可（`GhosttyTerminalSurface` 两个平台都实现了这个协议）。预览不需要进程。
+- **换字号会重建 surface**（`applyTheme` 里字号变化走 recreate 分支）。所以预览必须**自己持有那段 canned 字节，在重建后重新喂一遍**——否则调字号时预览会变空白。
+- 一个宿主窗口只创建一个预览 surface，随窗口销毁 teardown 一次，绝不因为改设置而反复建/拆（`project_terminal_surface_findings` 里的 teardown 崩溃就出在反复拆上）。
+- **只做一个预览框**，显示当前生效的那套。Follow System 下想看另一套，用户自己去系统里切明暗——为了预览另一半而在页面上并排两个终端，不值。
+
+预览内容用 **agent 输出**，不用 `git status`：这是我们的气质所在，顺带把第 ④ 页的状态色提前露一次。
+
+```
+┌──────────────────────────────────────────────┐
+│ ● claude · ~/code/bento-term            2m14s│ ← pane 标题栏，蓝色 = working
+│                                              │
+│ ⏺ Read src/parser.swift (412 lines)          │
+│ ⏺ Bash(swift test --filter Parser)           │
+│   ⎿ Test Suite 'ParserTests' passed          │
+│      Executed 18 tests, 0 failures           │ ← 绿
+│                                              │
+│ ⏺ I found the bug: the escape sequence is    │
+│   consumed twice when the buffer wraps.      │
+│ ▏                                            │ ← cursor 色
+└──────────────────────────────────────────────┘
+```
+
+标题栏是真画的，且必须满足那条硬不变式：**高度 = 恰好一个字符格**（`project_tiled_layout_constraint`）。
+
+### 说明的内容
+
+**没有。这一页不带说明块。**
+
+两条判据一条都不满足：配色和字体是纯口味，用不着「本来就会去改吗」的论证；也没有任何看不见的能力需要点破——预览就是全部的解释。原来那句 "Changes apply immediately to every open window" 是废话，用户改一下就看见了，删掉。
+
+**`ExplainBlock` 是可选的**，有话说才有。这一页就是那个反例。
+
+**不做中英混排示例。**真正在意 CJK 对齐的人是少数，做了还得决定要不要对其他语种的人隐藏，不值。
+
+---
+
+## ② Speech
+
+### 暴露的选项
+
+| 选项 | 控件 | 默认 |
+|---|---|---|
+| **Engine** | **三行可选卡，纵向**，不是下拉 | 中文系统 → Qwen；其余 → Apple |
+| **Language** | 下拉（19 项，只能用下拉） | Auto |
+| **Microphone** | 权限按钮，三态 | — |
+
+每行 = 名字 + 一句「这个适合干什么」，Qwen 多一个 `Recommended` 徽章。**一眼看全三个，用户才会真的做选择**——这是这一页的设计核心，因为默认值在这里代价很高，而中文用户很可能一路 Next 过去。
+
+**纵向而不是横向并排**：iPhone 上三张卡横排必然要另做一套布局，而这五个 panel 的全部价值就是一份实现两端共用。纵向三行在 Mac 上一样成立，还多出横排放不下的那句说明。
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ ○  Apple                                                   │
+│    Never leaves this device. A little less accurate.       │
+├────────────────────────────────────────────────────────────┤
+│ ●  Qwen  [Recommended]                          ← selected │
+│    Best on mixed and non-English speech, and it can read   │
+│    what's on screen to get names and jargon right.         │
+├────────────────────────────────────────────────────────────┤
+│ ○  OpenAI                                                  │
+│    A solid middle ground.                                  │
+└────────────────────────────────────────────────────────────┘
+```
+
+**徽章只有一个，而且它是个推荐。**第一版给的是 `On-device` / `Realtime` / `Realtime` 三个分类标签：既没告诉人该选哪个，三个里还有两个一模一样。每行的文案也改成说**这个引擎适合干什么**——Apple 的价值是不出这台设备（代价是准确率略低），Qwen 的价值是混说/非英语，外加能读屏幕上的文字来认人名和术语（`asr_auto_context`，本来就只有它有），OpenAI 是中性的中间项。
+
+中文系统下 Qwen 仍然**预选**，但三行都在眼前——是替他推荐，不是替他决定。（这取代了 v1 那个「要不要切 Qwen」的一次性弹问。）
+
+**麦克风权限按钮**（`Try it` 已去掉，这个按钮是这一页唯一的动作，不能省——不给按钮，用户就只能等第一次按住说话时被系统弹窗打断）：
+
+| 权限状态 | 显示 |
+|---|---|
+| 未决定 | `[Allow microphone]` —— 按下前先一句人话，再弹系统窗 |
+| 已授权 | `✓ Microphone enabled`（不可点） |
+| 被拒 | `⚠ Microphone denied` + `[Open System Settings]`（iOS：`[Open Settings]`） |
+
+### 隐藏的选项（`Advanced`）
+
+- **Your own API key** —— 跟着所选引擎变（`DashScope API key` / `OpenAI API key`）。折叠区顶部一句：
+  > Leave blank to use Bento's servers (rate-limited). Fill it in to talk to your own account directly.
+- `Bias from on-screen text`（默认开）
+- `Custom vocabulary`（人名、术语，一行一个）
+- **Voice → shell command**：开关 + endpoint / model / key（现 `SettingsLLMSection` 整段收进来）
+
+### 说明的内容
+
+这一页的说明要做两件事，**先立场，后手法**——只讲手法（「按住右键说话」）会被当成一个可有可无的小功能划过去。
+
+**A · 我们推荐你主要用说的**
+
+> **Bento is built to be talked to.** Typing is still there and always will be, but voice is
+> the input we designed around — you speak about three times faster than you type, and when
+> three panes are running, dictating into the one that needs you beats switching to it first.
+>
+> （原稿写「一段指令五秒说完、打一分钟」——没人五秒能说完一段，改成可验证的三倍：语速约 150 wpm，写作性打字约 50 wpm。）
+
+**B · 怎么用**
+
+> **Hold to record. Let go to send.**
+> · Mac — hold **right-click** anywhere on a pane.
+> · iPhone / iPad — **press and hold** anywhere on a pane.
+> Before you let go: slide **up** to send immediately, slide **down** to cancel.
+> What you said goes into that pane exactly as if you had typed it.
+>
+> Audio is used for transcription only — nothing is written to disk.
+
+两端**是同一个交互**，区别只在按住的方式（Mac 右键按住 / iOS 直接按住），别的一字不差。配一张三格静态小图（按住 → 上滑 / 下滑 → 松开），两端共用，手势那格按平台换。
+
+结尾一句挂上 `Advanced` 里那个开关，否则「对着 shell 说人话」这个能力没人知道：
+
+> Talking to a shell instead of an agent? Turn on **Voice → shell command** below and Bento
+> will turn what you said into the command.
+
+---
+
+## ③ tmux ★
+
+**这一页几乎没有设置。**它存在的理由是：很多专业开发者从没用过 tmux，而 Bento 的行为都建立在它之上——不说一句，用户会把「关掉窗口 agent 还在跑」当成 bug，把 Parallel / Focus 当成两种随便切的视图皮肤。
+
+**但说一句就够，不要讲课。**这一页的文字总共三行，技术细节（server / session / window / pane 三层、`break-pane` 搬 pane、多客户端 attach）**一个都不出现在页面上**——它们搬到一个 `Learn more about tmux` 链接后面。想懂的人会点，不想懂的人不该被拦住。
+
+用户明确否掉的：tmux 路径 override。逻辑就是 `TmuxResolver` 现在做的事，**不给旋钮**——有合格的系统 tmux（≥ 3.2）就用他的，没有就用自带的。
+
+### 暴露的选项
+
+**一个都没有。**原来有一个「默认会话名」文本框——它命名的是「点 Dock 图标、且没有上次会话可恢复」时建的那个会话，一件发生一次、之后再也不产生意义的事。`default_session_name` 在代码里保留 `bento` 这个默认值，只是不再拿出来问人。
+
+这一页因此在引导态下完全没有表单（Advanced 本来就只在设置里出现），布局也随之变了：**没有控件时不渲染一个空表单**，否则说明会被顶在窗口上沿、下面空一大片。
+
+### 隐藏的选项（`Advanced`）
+
+- `New session opens in` — Tab / Window / Follow system（默认 Follow system，即跟随 macOS 的 "Prefer tabs"）（iOS 无此项）
+- **当前用的是哪个 tmux** —— `Using your tmux 3.5a (/opt/homebrew/bin/tmux).` 之类的一行事实。放这里因为它一切正常时不需要被读；出问题时它自己会跳到外面（见下）。
+
+### 说明的内容 —— 三行，一张图，一个链接
+
+> **Your agents run in tmux, so they keep working when Bento is not running.**
+> ┈ 图 ┈
+> Switching between the two moves the panes themselves — nothing restarts.
+> Drag a pane by its title bar to rearrange them.
+> Already use tmux? Bento attaches to the sessions you already have.
+>
+> `Learn more about tmux →`
+
+**一句一行，不写成段落。**这是一个 app 的头一分钟，连成一段的正文正是会被跳过的那种东西——五页的说明块都按这个改了。
+
+「关掉 Bento」改成「Bento 没在跑」：前者听起来像关个窗口，而这句话要说的是**整个 app 退出了它也还在**。最后那句是给已经在用 tmux 的人的——他们的第一个问题不是「这是什么」，是「会不会另起一套」。
+
+一张小图，只画 Parallel ⇄ Focus，因为这是三行字里唯一说不清楚的东西。**格子叫 agent 1/2/3，不叫 api/docs/web**：这一页讲的是并行跑 agent，用文件名当窗口名会把它读成一个分屏编辑器。**Focus 的切换器是左边一竖列，不是顶部标签**——那才是这个模式在 app 里真实的样子（`WindowSidebar`），画错的控件比不画更糟。
+
+```
+   Parallel                        Focus
+   ┌─────────┬─────────┐           ┌────┬──────────────┐
+   │ agent 1 │ agent 2 │     ⇄     │ a1 │              │
+   ├─────────┴─────────┤           │ a2 │   agent 1    │
+   │      agent 3      │           │ a3 │              │
+   └───────────────────┘           └────┴──────────────┘
+```
+
+**被移到链接后面的东西**（不是删掉——它们是对的，只是不该拦在第一分钟）：三层模型与 Bento UI 的对应、切换模式是真的搬 pane 因而无损可逆、一个会话可以有多个客户端、`tmux ls` / `~/.tmux.conf` / prefix 不受影响。链接指向 **tmux 官方 wiki**（`github.com/tmux/tmux/wiki`），不是我们自己写的一页：链接后面的东西就是 tmux 本身，真东西在那儿摆着还把人往我们的转述上引，是不对的所有权。
+
+### 唯一会跳出来的例外
+
+`TmuxResolver` 解析到「自带 tmux，但系统里有一个在跑的旧版 server」时，**那行状态从 Advanced 里跳出来变成页面上的告警**：
+
+> ⚠️ `Your tmux is 3.1c — too old for control mode (3.2+ required), so Bento uses its own 3.5a.`
+> `Different versions are different servers, so Bento won't see sessions your tmux started.` `[How to upgrade]`
+
+这是整个 onboarding 里**唯一会静默毁掉第一印象**的情况：用户只会看到「Bento 打不开我的会话」而毫无线索。除它之外，tmux 的一切都不该出现在这一页的正文里。
+
+### iOS
+
+三行字一字不改（**布道跟平台无关**）。差别只有：那行「用的是哪个 tmux」变成连上主机后才有，`New session opens in` 不存在。
+
+---
+
+## ④ Agents
+
+### 暴露的选项
+
+**一个都没有。**这一页只有一份只读列表和一段说明——和第 ③ 页一样，它靠判据第 2 条立住，不靠设置。
+
+**没有「默认 agent」这个概念。**新建会话时那个命令框永远可编辑、永远预填上次用过的（§3 第 3 条），这已经覆盖了「默认 agent」想解决的一切；再加一个设置项就是替用户先选一次，而他每次开会话本来就要选。这条同时删掉了本设计原本唯一的新增 `UserDefaults` key——**现在一个新 key 都不加。**
+
+```
+Found on this Mac
+  Claude Code     claude          /opt/homebrew/bin/claude
+  Codex           codex           ~/.local/bin/codex
+  Cursor Agent    cursor-agent    ~/.local/bin/cursor-agent
+```
+
+**我们不装 agent。**一个都没检测到时不报警、不推荐安装，只写：
+
+> No known agents found. You can still type any command when you start a session.
+
+### 隐藏的选项（`Advanced`）
+
+- `Re-scan` —— 只有这一个。
+
+原来还列了一条 `Add a command…`（把自定义 agent 命令存进新建会话的下拉），跟着「默认 agent」一起删：它存在的理由就是喂那个选择器，而现在新建会话时直接打命令即可，不需要先去设置里登记一遍。
+
+### 说明的内容
+
+> Bento watches what each pane prints and tints the whole pane to match:
+>
+> 🔵 **Working** · 🟡 **Waiting for you** · 🟢 **Done, unread** · ⚪ **Idle**
+>
+> You watch colors, not text. Nothing is installed into your shell and the agent doesn't
+> need to cooperate — which also means it's pattern matching, and it will occasionally be
+> wrong. The color is a hint, not a guarantee.
+
+四个色块用 `PaneState+Colors` 那一份颜色，和第 ① 页预览里的标题栏是同一个来源。
+
+**说的是「整个 pane」不是「标题栏」**：状态色确实是一层铺满整个 pane 的半透明 wash（`PaneState.tintAlpha`，idle = 0 所以只有需要注意的状态才染），标题栏的色带只是它最浓的那一条边。写成「给标题栏上色」会把这个功能说小——它的意义正是隔着一段距离一眼扫到。
+
+**最后半句必须留着。**这个产品已经因为「给没验证的事打绿勾」被否过一次（v1 checklist 里那条注释就是当时留下的），同理。
+
+### 前提：检测必须先修
+
+不修的话这一页在新机器上是空的，见 §3。
+
+---
+
+## ⑤ Finish
+
+### 暴露的选项
+
+| 选项 | 控件 | 默认 |
+|---|---|---|
+| **Share anonymous usage statistics** | 开关 | 关 |
+
+### 隐藏的选项（`Advanced`）
+
+- `What gets counted` —— 事件名全表（现 `SettingsPrivacySection` 已有）
+
+### 说明的内容
+
+**⌘P（用户明确要求，也是以后所有功能的落点）**
+
+> **⌘P opens the command palette.** New session, jump to a pane, connect to an SSH host,
+> open settings — it's all in there, and it's where new features will show up.
+
+配一张两三行的实拍窄图，不要用文字描述界面。iOS 上换成对应入口。
+
+**从手机连过来**
+
+> Install Bento Term on your phone and connect over **SSH**. Same session, same agents,
+> still running — your Mac doesn't have to be doing anything but staying awake.
+> This Mac needs Remote Login on (System Settings → General → Sharing), and your phone
+> needs to be able to reach it — same network, Tailscale, or a jump host.
+> `[App Store]`
+
+不要架构图，不要「主机 vs 遥控器」的比喻——给能照着做的事实。
+
+**隐私**
+
+沿用 `SettingsPrivacySection` 现有措辞（不含终端内容、命令、路径、主机名；随机 ID，关掉即删；直发自己的端点，无第三方 SDK）。
+
+---
+
+## 3. 前置修复：agent 检测（已复现根因）
+
+检测走 `zsh -lc`。zsh 只在**交互式** shell 里读 `~/.zshrc`；`-c` 是非交互，`.zshrc` 里的 `export PATH=…` 全看不见。而 pane 里的 shell 是挂在 pty 上的 `$SHELL -l`——**是交互式的**，会读 `.zshrc`。两者必然不一致：
+
+```
+zsh -lc  'command -v fakeagent'  → NOT-FOUND        ← 检测器看到的
+zsh -lic 'command -v fakeagent'  → …/bin/fakeagent  ← pane 实际看到的
+```
+
+（用 `HOME` 指向一个只在 `.zshrc` 里改 PATH 的假家目录，实测。）v1 那套向导**自己推荐的安装方式最容易撞上**：Claude Code 官方 `install.sh` 装进 `~/.local/bin` 并把 PATH 写进 shell rc，装完点 Re-check 仍然是灰的。同一个原因还会漏掉把 `claude` 包成 shell function/alias 的人。
+
+**修法**
+
+1. 用 pane 会用的那套 shell 语义探测：`$SHELL -lic 'command -v X'`，2 秒超时、丢弃输出。**检测的定义就是「pane 里跑不跑得起来」，那就必须用 pane 的 shell 问。**
+2. 已知安装位置直查兜底，不起 shell：`~/.local/bin`、`~/.claude/local`、`/opt/homebrew/bin`、`/usr/local/bin`、`~/.bun/bin`、npm global prefix。
+3. **检测结果只用于展示和预填，永远不是 gate。** 新建会话时那个 agent 命令永远是可编辑的输入框。
+
+顺带修同一条路径上的老 bug：`TerminalViewModel.startSession(.createAgent)` 在 pty 就绪前就写 `setupScript`，`-c` 目录被静默丢掉，agent 在 app 的 cwd 而不是选的文件夹里启动。**「选目录 + 选 agent」是明确保留的简化，坏的正是它。**
+
+---
+
+## 4. 落地状态（2026-08-11 实现）
+
+### 删 ✅
+1. `FirstRunWindow` 的五步内容（welcome / checklist / workspace / voice / done）；壳与 `firstRunCompleted_v1`、`BENTO_FORCE_FIRST_RUN`、`BENTO_FIRST_RUN_STEP` 保留复用。
+2. `ArchitectureDiagramView`（手机↔Mac 那张图）及 iOS 侧引用；`HowBentoWorksView`（概念页）。**`StateLegendCard` 从同一个文件里救回来**——它是第一次变琥珀时的一次性 tip，跟那张图无关，现在住在 `StateLegendCard.swift`。
+3. agent 一键安装器（`runInstall`）。`AgentPreset.install` 目录本身留着，已无调用方。
+4. 默认项目目录 `~/Bento Projects/My First Project` 与 `launchFirstWorkspace()`。
+5. `BentoSettingsForm` + 六个 `SettingsXxxSection`（`SettingsAboutSection` 除外，仍是独立 section）。`SettingsKey` 原样保留——它是 panel 写进去的那份契约，也是这次搬 UI 没动任何存量数据的原因。
+
+### 建 ✅
+6. `Modules/BentoUISharedKit/Sources/BentoUISharedKit/Panels/`：`PanelKit`（`PanelContext` / `PanelPage` / `ExplainBlock` / `AdvancedBlock` / 文案样式）+ 五个 panel。
+7. `GhosttyThemePreview`（在 **BentoGhosttyKit**，不在 UISharedKit——surface 属于引擎层，由 app 组合）：真 surface、无 pty、`feed` 写死的 agent 输出、`applyTheme` 后重喂。
+8. `ParallelFocusFigure` / `VoiceGestureFigure` / `PaneStateLegend`（`PanelFigures.swift`，SwiftUI 画，两端共用）。
+9. `MonospacedFonts`：CoreText 枚举全部等宽 family + `normalized(_:available:)` 做 token→family 迁移；iOS `BentoTheme.terminalFont` 同步认 family（新增 `namedFont(family:size:)`，因为 `UIFont(name:)` 要的是 PostScript 名而存的是 family）。
+10. 宿主：Mac `FirstRunWindow` 五页（`Later / Back / Next / Done`）+ `MacSetupPanel`；Mac 设置窗 = 五个 tab；iOS `SetupFlowView` + `IOSSetupPanel`，设置页改五行下钻。
+11. `TmuxResolver.facts()` + 「系统里有一个在跑的旧版 server」探测（`serverIsRunning(tmuxAt:)`）——原来只判版本，判不出「他真的在用」。
+12. App 菜单 Settings… 下方的 `Run Setup Again…`。
+
+### 修 ✅
+13. Agent 探测：`InstalledAgents.scan()`（`$SHELL -lic`、一次 shell 问全部命令、2 秒超时、已知路径兜底）。命名让开了 `AgentStatusRules` 里已有的 `AgentDetector`（那个判的是 pane 的运行状态）。
+
+### 还没做
+- **`startSession(.createAgent)` 的 pty 抢跑竞态**（§3 末尾那条）——同一条路径上的老 bug，这次没碰。
+- **⌘P 那张实拍图**（第 ⑤ 页现在只有文字）。
+
+### 新增的 UserDefaults key：**零**
+
+五页读写的全部是已经存在的那些：`terminal_font_size`、`terminal_font_family`、`appearance_mode`、`dark_theme_id`、`light_theme_id`、`speech_engine`、`speech_locale`、`openai_api_key`、`dashscope_api_key`、`asr_auto_context`、`asr_vocab`、`llm_*`、`telemetry_enabled`、`default_session_name`、`mac_new_session_placement`、`auto_hide_toolbar_fullscreen`、`haptics_enabled`、`path_preview_enabled`。
+
+两个一度写进设计、又被砍掉的：
+
+- ~~`tmux_path_override`~~ —— 有合格的系统 tmux 就用系统的，没有就用自带的，不给旋钮。
+- ~~`default_agent_command`~~ —— 没有「默认 agent」这个概念；新建会话时的命令框可编辑且记住上次，已经够了。
+
+**一个会看得见的行为变化**：`terminal_font_family` 没存过值时，旧代码里设置界面显示 Maple Mono NF CN 而引擎用的是 ghostty 自己的默认字体——界面在说谎。现在 panel 第一次出现时把 `Maple Mono NF CN` 写实，于是从没动过字体的老用户升级后终端字体会真的变成 Maple。iOS 的 chrome 一直就按 Maple 渲染，这次是让终端和它对齐。
+
+---
+
+## 5. 未决
+
+1. **⌘P 那张实拍图**怎么产出与维护（界面一改就过期）；要不要改成一个真的、可点的迷你 palette。第 ⑤ 页现在只有文字。
+2. ~~**iOS 的 onboarding 触发时机**~~ **已定（2026-08-11）**：**首启就弹，并且流程里包含「加第一台主机」这一步**（见 §⓪ 后面那节）。理由是 iOS 上没有主机则整个 app 无事可做，那么新用户看到的流程就必须包含这一步。
+3. **预览卡的取景**：现在是一段固定的 agent 输出。深色主题下好看，浅色主题下几种 ANSI 色的对比度还没逐个核过。

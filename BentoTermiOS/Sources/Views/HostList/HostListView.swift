@@ -19,10 +19,14 @@ struct HomeView: View {
     @ObservedObject private var recentLaunches = RecentLaunchStore.shared
 
     @State private var showAddHost = false
-    @State private var showOnboarding = false
+    /// The setup flow: welcome, add a host, then the five panels Settings also
+    /// shows. Runs automatically on a fresh install because it contains the one
+    /// step iOS cannot work without (`HostSetupPage`); afterwards it lives in
+    /// Settings.
+    @State private var showSetup = false
+    @AppStorage("firstRunCompleted_v1") private var firstRunCompleted = false
     @State private var showSettings = false
     @State private var editingHost: Host?
-    @State private var searchText = ""
     @State private var hostSheetRequest: HostSheetRequest?
 
     /// What the host sheet should be born with. `sheet(item:)` treats nil
@@ -32,14 +36,6 @@ struct HomeView: View {
         var host: Host
     }
 
-    private var filteredHosts: [Host] {
-        if searchText.isEmpty { return hostStore.hosts }
-        return hostStore.hosts.filter {
-            $0.displayName.localizedCaseInsensitiveContains(searchText) ||
-            $0.hostname.localizedCaseInsensitiveContains(searchText) ||
-            $0.username.localizedCaseInsensitiveContains(searchText)
-        }
-    }
 
     /// Recent launches whose host still exists, newest first.
     private var recentRows: [RecentLaunchStore.Launch] {
@@ -73,15 +69,11 @@ struct HomeView: View {
             ToolbarItem(placement: .principal) {
                 BentoWordmark()
             }
+            // Settings on the left, `+` on the right: the right-hand side is
+            // for the thing you came here to do. The `?` that used to sit here
+            // is gone — re-running setup is a settings row now, not a
+            // permanent piece of toolbar.
             ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    showOnboarding = true
-                } label: {
-                    Image(systemName: "questionmark.circle")
-                        .foregroundStyle(Color.bentoInkDim)
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
                 Button(action: { showSettings = true }) {
                     Image(systemName: "gearshape")
                         .foregroundStyle(Color.bentoInkDim)
@@ -114,10 +106,23 @@ struct HomeView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
+            // The setup flow is reachable from inside Settings, and its host
+            // page writes to the store — so the store has to travel with it.
             SettingsView()
+                .environmentObject(hostStore)
         }
-        .sheet(isPresented: $showOnboarding) {
-            HowBentoWorksView()
+        .sheet(isPresented: $showSetup, onDismiss: { firstRunCompleted = true }) {
+            // Sheets get their own environment; the host page writes to the
+            // store, so it has to be handed over explicitly like the session
+            // sheet below.
+            SetupFlowView()
+                .environmentObject(hostStore)
+        }
+        .task {
+            let forced = ProcessInfo.processInfo.environment["BENTO_FORCE_FIRST_RUN"] == "1"
+            if forced || (!firstRunCompleted && hostStore.hosts.isEmpty) {
+                showSetup = true
+            }
         }
         .sheet(item: $hostSheetRequest) { request in
             NavigationStack {
@@ -196,7 +201,6 @@ struct HomeView: View {
             hostsSection
         }
         .bentoForm()
-        .searchable(text: $searchText, prompt: "Search hosts")
     }
 
     /// The state surface: exactly the sessions currently open from this
@@ -261,7 +265,12 @@ struct HomeView: View {
                 .buttonStyle(.plain)
             }
         } header: {
-            BentoFormHeader("Recent")
+            // In the header, not a swipe action: this clears the whole list,
+            // and per-row deletion of a convenience list is more ceremony than
+            // the list is worth.
+            BentoFormHeader("Recent") {
+                Button("Clear") { recentLaunches.clear() }
+            }
         }
         .bentoSectionStyle()
     }
@@ -272,48 +281,40 @@ struct HomeView: View {
     @ViewBuilder
     private var hostsSection: some View {
         Section {
-            if filteredHosts.isEmpty && !hostStore.hosts.isEmpty {
-                Text("No hosts match \u{201C}\(searchText)\u{201D}")
-                    .font(.subheadline)
-                    .foregroundStyle(Color.bentoInkDim)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 8)
-            } else {
-                ForEach(filteredHosts) { host in
+            ForEach(hostStore.hosts) { host in
+                Button {
+                    hostSheetRequest = HostSheetRequest(host: host)
+                } label: {
+                    HostRow(
+                        host: host,
+                        isConnected: sessionManager.activeSessions.contains(where: { $0.key.hostID == host.id })
+                    )
+                }
+                .buttonStyle(.plain)
+                .swipeActions(edge: .leading, allowsFullSwipe: false) {
                     Button {
-                        hostSheetRequest = HostSheetRequest(host: host)
+                        editingHost = host
                     } label: {
-                        HostRow(
-                            host: host,
-                            isConnected: sessionManager.activeSessions.contains(where: { $0.key.hostID == host.id })
-                        )
+                        Label("Edit", systemImage: "pencil")
                     }
-                    .buttonStyle(.plain)
-                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                        Button {
-                            editingHost = host
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
-                        }
-                        .tint(Color.bentoSalmon)
+                    .tint(Color.bentoSalmon)
+                }
+                .contextMenu {
+                    Button {
+                        editingHost = host
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
                     }
-                    .contextMenu {
-                        Button {
-                            editingHost = host
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
-                        }
-                        Button(role: .destructive) {
-                            hostStore.delete(host)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+                    Button(role: .destructive) {
+                        hostStore.delete(host)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
                     }
                 }
-                .onDelete { indexSet in
-                    for index in indexSet {
-                        hostStore.delete(filteredHosts[index])
-                    }
+            }
+            .onDelete { indexSet in
+                for index in indexSet {
+                    hostStore.delete(hostStore.hosts[index])
                 }
             }
         } header: {

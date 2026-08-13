@@ -38,6 +38,29 @@ public enum TmuxCommand: Sendable {
     case selectWindow(id: TmuxWindowID)
     case renameWindow(id: TmuxWindowID, name: String)
     case killWindow(id: TmuxWindowID)
+    /// Reorder a window WITHIN its session — Focus mode's drag-to-rearrange.
+    /// `move-window -b/-a` (tmux ≥ 3.0) inserts before/after `target`, shifting
+    /// the windows in between to make room; without those flags an occupied
+    /// destination index is simply refused. Both ends are addressed by window
+    /// ID, not index, so a renumber racing under us can't send the window
+    /// somewhere else.
+    ///
+    /// `select` decides who is current afterwards, and the two cases are NOT
+    /// symmetric (verified against tmux 3.7b): plain `move-window` selects the
+    /// window it moved, while `-d` selects SOME OTHER window when the moved one
+    /// was current. So dragging a background window passes `select: false`
+    /// (`-d`, focus stays put) and dragging the current one passes
+    /// `select: true` (no `-d`, it stays current) — either flag on the wrong
+    /// case makes a reorder silently switch what the user is looking at.
+    case reorderWindow(id: TmuxWindowID, target: TmuxWindowID, after: Bool, select: Bool)
+    /// Close the index gaps a reorder leaves behind (`move-window -r`), so
+    /// `index:name` and ⌘N stay 1,2,3….
+    ///
+    /// The session is named explicitly because `-r` renumbers whatever `-t`
+    /// resolves to, and `-t` defaults to the CURRENT session — which is not
+    /// necessarily ours. Verified against tmux 3.7b, where `-r -s A:` (source
+    /// spelled out, destination left off) renumbered session B.
+    case renumberWindows(session: String)
     /// Kill a window addressed by a raw tmux target (e.g. `sess:^` — the
     /// session's lowest-index window, the placeholder a fresh `new-session`
     /// spawns before a moved pane lands next to it).
@@ -155,6 +178,26 @@ public enum TmuxCommand: Sendable {
     /// (tmux emits %session-changed, which re-syncs windows/panes).
     case switchClient(session: String)
 
+    /// The `.reorderWindow` that lands the window at `from` in `order` at
+    /// position `destination` — the drag-to-rearrange decision, kept next to
+    /// the flags it reasons about (and out of the two hosts that trigger it).
+    /// nil = nothing to do (out of range, or already there).
+    ///
+    /// Expressed as "insert beside this neighbour" because a bare
+    /// `move-window -t <index>` refuses an occupied index, and because a
+    /// neighbour named by window ID can't be misread if indices shift under
+    /// us. Dragging left lands BEFORE whoever holds the destination; dragging
+    /// right lands after it — either way the drop point is the slot the user
+    /// aimed at.
+    public static func reorder(_ order: [TmuxWindowID], from: Int, to destination: Int,
+                               current: TmuxWindowID?) -> TmuxCommand? {
+        guard order.indices.contains(from), order.indices.contains(destination),
+              from != destination else { return nil }
+        return .reorderWindow(id: order[from], target: order[destination],
+                              after: destination > from,
+                              select: order[from] == current)
+    }
+
     /// Build the tmux command string (without trailing newline).
     public var commandString: String {
         switch self {
@@ -197,6 +240,15 @@ public enum TmuxCommand: Sendable {
 
         case .killWindow(let id):
             return "kill-window -t \(id)"
+
+        case .reorderWindow(let id, let target, let after, let select):
+            var cmd = "move-window"
+            if !select { cmd += " -d" }
+            cmd += after ? " -a" : " -b"
+            return cmd + " -s \(id) -t \(target)"
+
+        case .renumberWindows(let session):
+            return "move-window -r -t \(escapeArg("\(session):"))"
 
         case .killWindowTarget(let target):
             return "kill-window -t \(escapeArg(target))"

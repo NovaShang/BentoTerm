@@ -3,76 +3,46 @@ import BentoAgentKit
 import BentoFoundationKit
 import BentoUISharedKit
 
-/// iOS settings page. The shared sections (appearance, font, themes, speech,
-/// LLM, privacy) come from BentoUISharedKit — the Mac rendering is the
-/// reference — while this file keeps the NavigationStack container and the
-/// iOS-only sections (haptics, tap-to-preview, state profiles, help, about).
+/// iOS settings = the setup pages, as a list you drill into.
+///
+/// Same five panels the setup flow shows, same names, same order — explanation
+/// arrives folded here and open there, and that is the only difference
+/// (`PanelContext`). See `IOSSetupPanel` for where the iOS-only rows hang.
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("haptics_enabled") private var hapticsEnabled = true
-    @AppStorage("path_preview_enabled") private var pathPreviewEnabled = true
-    @State private var showTipsResetConfirm = false
+    @EnvironmentObject private var hostStore: HostStore
+    @State private var showSetup = false
 
     var body: some View {
         NavigationStack {
-            BentoSettingsForm(defaultFontSize: 10) {
-                Section {
-                    Toggle("Haptic Feedback", isOn: $hapticsEnabled)
-                } header: {
-                    Text("Feedback")
-                }
-
-                Section {
-                    Toggle("Tap to Preview Files", isOn: $pathPreviewEnabled)
-                } footer: {
-                    Text("Tap a file path in terminal output to peek at the file without leaving the session.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                Section {
-                    NavigationLink("State Detection Profiles") {
-                        ProfileListView()
-                    }
-                } footer: {
-                    Text("Configure patterns to detect when a pane is waiting for input, and which quick keys to show.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                Section {
+            List {
+                ForEach(PanelPage.allCases) { page in
                     NavigationLink {
-                        HowBentoWorksSettingsPage()
+                        IOSSetupPanel(page: page, context: .settings)
+                            .bentoForm()
+                            .navigationTitle(page.settingsTitle)
+                            .navigationBarTitleDisplayMode(.inline)
                     } label: {
-                        Label("How BentoTerm works", systemImage: "questionmark.circle")
+                        Label(page.settingsTitle, systemImage: page.symbol)
                     }
+                }
+
+                // Same five panels as the rows above, read in order with their
+                // explanations open — worth keeping reachable for someone who
+                // tapped "Later", or who wants the tmux page again.
+                Section {
                     Button {
-                        TipCenter.shared.resetAll(extraKeys: [GestureOnboardingOverlay.storageKey])
-                        showTipsResetConfirm = true
+                        showSetup = true
                     } label: {
-                        Label("Replay tips & gesture guide", systemImage: "arrow.counterclockwise")
+                        Label("Run Setup Again", systemImage: "sparkles")
                     }
-                } header: {
-                    Text("Help")
-                } footer: {
-                    Text("Replaying brings back every one-time hint — the gesture overlay, the color legend, and the coaching toasts — at their natural moments.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                SettingsAboutSection(
-                    icon: appIcon,
-                    tagline: "A tmux-native terminal for iPhone & iPad.")
-
-                Section {
-                    NavigationLink {
-                        AcknowledgementsView()
-                    } label: {
-                        Label("Acknowledgements", systemImage: "doc.text")
-                    }
-                } footer: {
-                    Text("BentoTerm redistributes MIT, Apache and SIL-licensed components — the terminal engine, the SSH stack, the bundled font — and each of those licenses requires its text to travel with the binary.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .bentoForm()
+            .sheet(isPresented: $showSetup) {
+                SetupFlowView()
+                    .environmentObject(hostStore)
+            }
+            .tint(Color.bentoEmerald)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -80,17 +50,7 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .alert("Tips will replay", isPresented: $showTipsResetConfirm) {
-                Button("OK") {}
-            } message: {
-                Text("Every one-time hint is armed again and will appear at its natural moment.")
-            }
         }
-    }
-
-    private var appIcon: Image? {
-        if let ui = UIImage(named: "AppIcon") { return Image(uiImage: ui) }
-        return nil
     }
 }
 

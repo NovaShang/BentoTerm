@@ -105,7 +105,7 @@ private struct LayoutTile: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 32, height: 24)
-                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
             Text(layout.displayName)
                 .font(.caption2)
                 .foregroundStyle(.primary)
@@ -115,10 +115,10 @@ private struct LayoutTile: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isSelected ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: isSelected ? 2 : 1)
+                .strokeBorder(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.secondary.opacity(0.25)), lineWidth: isSelected ? 2 : 1)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+                        .fill(isSelected ? AnyShapeStyle(.tint.opacity(0.12)) : AnyShapeStyle(Color.clear))
                 )
         )
         .contentShape(Rectangle())

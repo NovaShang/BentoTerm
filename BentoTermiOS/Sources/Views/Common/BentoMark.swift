@@ -6,13 +6,16 @@ import UIKit
 /// Drop into any `Section`'s `header:` closure to get a brand-consistent
 /// section title (SF Pro 13 Semibold, sentence case, bento ink). Replaces
 /// the system grouped-form's UPPERCASE gray header style.
-struct BentoFormHeader: View {
+struct BentoFormHeader<Action: View>: View {
     let title: String
     var trailing: String? = nil
+    private let action: Action
 
-    init(_ title: String, trailing: String? = nil) {
+    init(_ title: String, trailing: String? = nil,
+         @ViewBuilder action: () -> Action = { EmptyView() }) {
         self.title = title
         self.trailing = trailing
+        self.action = action()
     }
 
     var body: some View {
@@ -28,6 +31,9 @@ struct BentoFormHeader: View {
                     .foregroundStyle(Color.bentoInkDim)
                     .textCase(nil)
             }
+            action
+                .font(.system(size: 12, weight: .medium))
+                .textCase(nil)
         }
         .padding(.bottom, 2)
     }
@@ -52,6 +58,13 @@ struct BentoFormFooter: View {
 /// compartments with the emerald prompt chevron in the top-left cell.
 /// Use anywhere we'd put a logo: toolbar wordmark, empty state, about screen.
 struct BentoMark: View {
+    /// Corner radius as a fraction of the icon's width, for the `.continuous`
+    /// (squircle) shape iOS masks home-screen icons with. The drawn mark used
+    /// 0.1406 — the radius in the source SVG's own square, which is NOT what
+    /// the user ever sees, because the system rounds the icon further. Beside a
+    /// real app icon the difference reads as "the logo is the wrong shape".
+    static let iconCornerRatio: CGFloat = 0.2237
+
     var size: CGFloat = 22
     /// If non-nil, the mark renders in this single tint (chrome usage):
     /// shell full-strength, panels at 55% so the grid stays legible, no
@@ -61,7 +74,7 @@ struct BentoMark: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             // Shell plate — visible as the grid gaps between panels
-            RoundedRectangle(cornerRadius: size * 0.1406, style: .continuous)
+            RoundedRectangle(cornerRadius: size * Self.iconCornerRatio, style: .continuous)
                 .fill(mono.map { AnyShapeStyle($0) } ?? AnyShapeStyle(shellStyle))
                 .frame(width: size, height: size)
 
@@ -142,7 +155,7 @@ struct BentoMark: View {
             p.addLine(to: CGPoint(x: size * 0.298, y: size * 0.264))
             p.addLine(to: CGPoint(x: size * 0.210, y: size * 0.347))
         }
-        .stroke(Color.bentoEmerald,
+        .stroke(Color.bentoMarkGreen,
                 style: StrokeStyle(lineWidth: max(1.5, size * 0.041), lineCap: .round, lineJoin: .round))
     }
 

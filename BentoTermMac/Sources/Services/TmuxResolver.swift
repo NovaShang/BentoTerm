@@ -1,4 +1,5 @@
 import Foundation
+import BentoUISharedKit
 
 /// TmuxResolver picks which tmux binary the Mac app (and any other Swift
 /// callers) should spawn: prefer the user's own tmux when it's recent enough,
@@ -108,6 +109,57 @@ enum TmuxResolver {
             }
         }
         return nil
+    }
+
+    // MARK: - Facts for the UI
+
+    /// The resolution, flattened for the tmux setup panel.
+    ///
+    /// The extra thing it works out beyond `resolve()`: whether a tmux server is
+    /// ALREADY RUNNING from a system tmux we rejected. That combination is the
+    /// one silent way this app disappoints a tmux user — different tmux versions
+    /// are different servers, so their `tmux ls` sessions simply won't be there,
+    /// with nothing on screen to explain why. Version alone isn't enough to
+    /// warn on: a user with an old tmux they never run has no problem to fix.
+    static func facts() -> TmuxFacts? {
+        guard let resolution = cached else { return nil }
+        let source: TmuxFacts.Source
+        switch resolution.kind {
+        case .system:   source = .system
+        case .bundled:  source = .bundled
+        case .override: source = .override
+        }
+        var conflicting: String?
+        if resolution.kind == .bundled,
+           let systemPath = defaultSystemPaths().first(where: { probe($0) != nil }),
+           let systemVersion = probe(systemPath),
+           systemVersion != resolution.version,
+           serverIsRunning(tmuxAt: systemPath) {
+            conflicting = systemVersion.description
+        }
+        return TmuxFacts(source: source,
+                         version: resolution.version.description,
+                         path: resolution.url.path,
+                         conflictingSystemVersion: conflicting)
+    }
+
+    /// Does THIS tmux binary have a server with sessions? `list-sessions` exits
+    /// non-zero with "no server running" when it doesn't, which is exactly the
+    /// question — and asking the binary means the answer accounts for the
+    /// version-keyed socket rather than guessing at socket paths.
+    private static func serverIsRunning(tmuxAt path: String) -> Bool {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: path)
+        proc.arguments = ["list-sessions"]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+        } catch {
+            return false
+        }
+        proc.waitUntilExit()
+        return proc.terminationStatus == 0
     }
 
     // MARK: - private

@@ -2,7 +2,7 @@ import Foundation
 
 /// AgentPreset is the menu of "well-known" coding agents the wizard offers.
 /// This is the canonical copy — the Mac app's TmuxCLI.swift references it.
-public enum AgentPreset: String, CaseIterable, Identifiable {
+public enum AgentPreset: String, CaseIterable, Identifiable, Sendable {
     case claudeCode = "Claude Code"
     case opencode = "OpenCode"
     case codex = "Codex"

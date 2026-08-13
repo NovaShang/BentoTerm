@@ -171,6 +171,30 @@ struct CommandTests {
         #expect(cmd.commandString == "move-window -d -s @7 -t work:")
     }
 
+    @Test func reorderWindowBackground() {
+        // Focus drag-to-rearrange: -b inserts before the target (shifting the
+        // rest along), -d leaves the current window current.
+        let cmd = TmuxCommand.reorderWindow(
+            id: TmuxWindowID(7), target: TmuxWindowID(2), after: false, select: false)
+        #expect(cmd.commandString == "move-window -d -b -s @7 -t @2")
+    }
+
+    @Test func reorderWindowDraggingCurrent() {
+        // Dragging the window you're looking at: `-d` would hand the selection
+        // to some OTHER window (verified against tmux 3.7b), so it's omitted —
+        // plain move-window keeps the moved window current.
+        let cmd = TmuxCommand.reorderWindow(
+            id: TmuxWindowID(7), target: TmuxWindowID(2), after: true, select: true)
+        #expect(cmd.commandString == "move-window -a -s @7 -t @2")
+    }
+
+    @Test func renumberWindows() {
+        // The session is spelled out on `-t`: that's the end `-r` follows, and
+        // its default is the CURRENT session, not necessarily ours.
+        let cmd = TmuxCommand.renumberWindows(session: "work")
+        #expect(cmd.commandString == "move-window -r -t work:")
+    }
+
     @Test func joinPaneIntoSessionCurrentWindow() {
         // Parallel landing: split the target session's active pane (verified
         // live; an emptied source session dies on its own).

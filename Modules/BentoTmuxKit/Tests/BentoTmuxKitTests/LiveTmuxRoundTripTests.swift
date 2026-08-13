@@ -317,6 +317,107 @@ struct LiveTmuxRoundTripTests {
         #expect(gone, "a detached client must leave list-clients, or its claim never releases")
     }
 
+    /// Dragging a window to a new place in the Focus list. Every claim here
+    /// was a surprise from the real server, not a reading of the man page:
+    /// insert flags shift the neighbours instead of refusing an occupied
+    /// index, and `-d` is NOT simply "don't steal focus".
+    @Test func draggingAWindowLandsItWhereItWasDropped() throws {
+        let tmux = try LiveTmux()
+        defer { tmux.shutdown() }
+
+        try tmux.run(["new-session", "-d", "-s", "work", "-n", "w1"])
+        for name in ["w2", "w3", "w4"] {
+            try tmux.run(["new-window", "-t", "work:", "-n", name])
+        }
+
+        func order() throws -> [String] { try tmux.windows().map(\.name) }
+        func ids() throws -> [TmuxWindowID] { try tmux.windows().map(\.id) }
+        #expect(try order() == ["w1", "w2", "w3", "w4"])
+
+        // Drag the last one to the front (destination < from → insert before).
+        let toFront = try #require(
+            TmuxCommand.reorder(try ids(), from: 3, to: 0, current: nil))
+        try tmux.runScript([toFront.commandString])
+        #expect(try order() == ["w4", "w1", "w2", "w3"])
+
+        // ...and the first one to the end (destination > from → insert after).
+        let toBack = try #require(
+            TmuxCommand.reorder(try ids(), from: 0, to: 3, current: nil))
+        try tmux.runScript([toBack.commandString])
+        #expect(try order() == ["w1", "w2", "w3", "w4"],
+                "a drag to the end must land past the last window, not before it")
+
+        // A drop on the window's own slot is not a command at all.
+        #expect(TmuxCommand.reorder(try ids(), from: 2, to: 2, current: nil) == nil)
+    }
+
+    /// Reordering must never change which window the user is looking at — and
+    /// the flag that achieves that INVERTS depending on whether the dragged
+    /// window is the current one. `-d` on the current window hands the session
+    /// to some unrelated third window, which is the bug this pins.
+    @Test func reorderingLeavesTheCurrentWindowAlone() throws {
+        let tmux = try LiveTmux()
+        defer { tmux.shutdown() }
+
+        try tmux.run(["new-session", "-d", "-s", "work", "-n", "w1"])
+        for name in ["w2", "w3", "w4"] {
+            try tmux.run(["new-window", "-t", "work:", "-n", name])
+        }
+        func current() throws -> String? { try tmux.windows().first { $0.isActive }?.name }
+        func ids() throws -> [TmuxWindowID] { try tmux.windows().map(\.id) }
+
+        // Watching w2; drag some OTHER window around it.
+        try tmux.run(["select-window", "-t", "work:w2"])
+        #expect(try current() == "w2")
+        let background = try #require(
+            TmuxCommand.reorder(try ids(), from: 3, to: 0, current: nil))
+        try tmux.runScript([background.commandString])
+        #expect(try current() == "w2", "dragging a background window must not switch windows")
+
+        // Now drag the window being watched. `current:` is what flips the flag.
+        let live = try tmux.windows()
+        let watchedID = try #require(live.first { $0.isActive }?.id)
+        let watchedAt = try #require(live.firstIndex { $0.id == watchedID })
+        let mine = try #require(
+            TmuxCommand.reorder(live.map(\.id), from: watchedAt, to: live.count - 1,
+                                current: watchedID))
+        try tmux.runScript([mine.commandString])
+        #expect(try current() == "w2", "dragging the window you're in must keep you in it")
+    }
+
+    /// Inserts leave index gaps, and the index is the address the row shows and
+    /// ⌘N takes — so gaps get closed. The renumber names its session because
+    /// `-r` follows `-t`, whose default is the current session: with `-s work:`
+    /// and no `-t`, tmux 3.7b renumbered the OTHER session.
+    @Test func renumberingClosesGapsInTheNamedSessionOnly() throws {
+        let tmux = try LiveTmux()
+        defer { tmux.shutdown() }
+
+        for session in ["work", "other"] {
+            try tmux.run(["new-session", "-d", "-s", session, "-n", "\(session)1"])
+            for n in 2...3 {
+                try tmux.run(["new-window", "-t", "\(session):", "-n", "\(session)\(n)"])
+            }
+            try tmux.run(["kill-window", "-t", "\(session):\(session)2"])
+        }
+        func indices(_ session: String) throws -> [Int] {
+            TmuxParsers.parseWindowList(try tmux.capture(
+                LiveTmux.splitTmuxArgs(TmuxCommand.listWindows(target: session).commandString)))
+                .compactMap(\.index)
+        }
+        let gappedOther = try indices("other")
+        #expect(try indices("work").count == 2)
+
+        try tmux.runScript([TmuxCommand.renumberWindows(session: "work").commandString])
+
+        let renumbered = try indices("work")
+        let base = try #require(renumbered.first)
+        #expect(renumbered == Array(base..<(base + renumbered.count)),
+                "gaps must be closed: \(renumbered)")
+        #expect(try indices("other") == gappedOther,
+                "renumbering must not reach into another session")
+    }
+
     /// The snapshot is stored in a tmux session option and read back through
     /// tmux's parser. This is where the brace hazard bit before.
     @Test func snapshotSurvivesStorageInATmuxOption() throws {

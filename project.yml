@@ -74,6 +74,13 @@ targets:
       - package: BentoUISharedKit
     settings:
       base:
+        # The app's accent colour, and the reason it has to be an ASSET rather
+        # than only a SwiftUI `.tint(...)`: without this key the system accent
+        # is blue, and every corner SwiftUI's environment tint doesn't reach —
+        # UIKit hosting views, sheet presentations re-tinting after they settle
+        # — falls back to it. That is what made Settings icons come up green and
+        # turn blue a moment later.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         # iPad multitasking (Split View / Stage Manager free-resize) requires an
         # EXPLICIT all-four-orientation declaration — an absent key leaves the

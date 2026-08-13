@@ -33,5 +33,9 @@ let package = Package(
                 "BentoFilePreviewKit",
             ]
         ),
+        .testTarget(
+            name: "BentoUISharedKitTests",
+            dependencies: ["BentoUISharedKit"]
+        ),
     ]
 )

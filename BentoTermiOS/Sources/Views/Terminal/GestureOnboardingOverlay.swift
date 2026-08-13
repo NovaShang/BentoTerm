@@ -44,7 +44,7 @@ struct GestureOnboardingOverlay: View {
                         .padding(.vertical, 12)
                         .background(
                             RoundedRectangle(cornerRadius: 12)
-                                .fill(Color.accentColor)
+                                .fill(Color.bentoEmerald)
                         )
                 }
             }
@@ -83,7 +83,7 @@ struct GestureOnboardingOverlay: View {
                 .stroke(Color.white.opacity(0.5), lineWidth: 1)
                 .frame(width: 38, height: 38)
             Circle()
-                .fill(Color.accentColor)
+                .fill(Color.bentoEmerald)
                 .frame(width: 16, height: 16)
         }
     }
@@ -91,10 +91,10 @@ struct GestureOnboardingOverlay: View {
     private var doubleTapGlyph: some View {
         HStack(spacing: 4) {
             Circle()
-                .fill(Color.accentColor)
+                .fill(Color.bentoEmerald)
                 .frame(width: 14, height: 14)
             Circle()
-                .fill(Color.accentColor)
+                .fill(Color.bentoEmerald)
                 .frame(width: 14, height: 14)
         }
         .frame(width: 38, height: 38)

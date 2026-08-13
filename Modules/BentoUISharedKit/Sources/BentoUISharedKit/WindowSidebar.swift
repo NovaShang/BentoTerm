@@ -38,6 +38,7 @@ public struct WindowSidebar: View {
                     row(window)
                         .tag(window.id)
                 }
+                .onMove(perform: moveRows)
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)   // let the vibrancy chrome show
@@ -115,6 +116,30 @@ public struct WindowSidebar: View {
         }
     }
 
+    /// Drag a row to rearrange the session's windows — the order here IS tmux's
+    /// window order, so the drop runs `move-window` (see `reorderWindow`).
+    /// `List` gives the platform gesture for free on both hosts: press-and-drag
+    /// with the pointer on macOS, long-press-then-drag on iPad.
+    ///
+    /// SwiftUI's `offset` counts positions in the PRE-removal array, so a
+    /// downward drag overshoots by one; `reorderWindow` wants the final resting
+    /// position. Read the id out here rather than inside the Task — by the time
+    /// that runs, a refresh may have reshuffled `windows` under the index.
+    private func moveRows(_ source: IndexSet, _ offset: Int) {
+        guard let from = source.first, viewModel.windows.indices.contains(from) else { return }
+        let id = viewModel.windows[from].id
+        let destination = offset > from ? offset - 1 : offset
+        Task { await viewModel.reorderWindow(id, toIndex: destination) }
+    }
+
+    private func position(of id: TmuxWindowID) -> Int? {
+        viewModel.windows.firstIndex { $0.id == id }
+    }
+
+    private func shift(_ id: TmuxWindowID, earlier: Bool) {
+        Task { await viewModel.shiftWindow(id, earlier: earlier) }
+    }
+
     /// Run the move; an unsettled target bounces back as the landing dialog.
     private func moveWindow(_ id: TmuxWindowID, to session: String,
                             landing: MoveLanding = .auto) {
@@ -170,6 +195,13 @@ public struct WindowSidebar: View {
                 renameText = viewModel.windowBodyName(window.id)
                 pendingRename = window.id
             }
+            // The drag's one-step equivalent — the reachable-without-a-drag
+            // path (VoiceOver, Switch Control, a trackpad the user would
+            // rather not fight), and on macOS the same pair ⌥⌘↑/↓ fires.
+            Button("Move Up") { shift(window.id, earlier: true) }
+                .disabled(position(of: window.id) == 0)
+            Button("Move Down") { shift(window.id, earlier: false) }
+                .disabled(position(of: window.id) == viewModel.windows.count - 1)
             WindowMoveToSessionMenu(viewModel: viewModel) { session in
                 moveWindow(window.id, to: session)
             } onNewSession: {
@@ -204,15 +236,20 @@ public struct WindowSidebar: View {
         #endif
     }
 
-    /// The canonical palette hex for a status, or nil for idle (default color).
-    /// Single source of truth shared with the pane chrome (`PaneState`).
-    private func statusHex(_ status: WindowDisplayStatus) -> UInt32? {
+    /// A window row says the same four things a pane's chrome does, so it reads
+    /// from the same table rather than keeping a parallel one.
+    private func chromeStatus(_ status: WindowDisplayStatus) -> PaneChrome.Status {
         switch status {
-        case .working:    return PaneState.workingHex
-        case .awaiting:   return PaneState.awaitingHex
-        case .doneUnseen: return PaneState.doneUnseenHex
-        case .idle:       return nil
+        case .working:    return .working
+        case .awaiting:   return .awaitingInput
+        case .doneUnseen: return .doneUnseen
+        case .idle:       return .idle
         }
+    }
+
+    /// The canonical palette hex for a status, or nil for idle (default color).
+    private func statusHex(_ status: WindowDisplayStatus) -> UInt32? {
+        chromeStatus(status).accentHex
     }
 
     /// The ⌘N shortcut hint for a row — macOS only, since ⌘0..⌘9 maps to the
@@ -235,18 +272,13 @@ public struct WindowSidebar: View {
         #endif
     }
 
-    /// Leading state glyph — same language as the Tiled pane title: working =
-    /// blue play, awaiting = amber question, done = green check, idle = a quiet
-    /// hollow gray ring (same `.circle` family, but empty = at rest). Colored
-    /// from the canonical palette.
-    @ViewBuilder
+    /// Leading state glyph — literally the Tiled pane title's language, from the
+    /// shared table: working = blue play, awaiting = amber question, done =
+    /// green check, idle = a quiet hollow gray ring (same `.circle` family, but
+    /// empty = at rest).
     private func stateIcon(_ status: WindowDisplayStatus) -> some View {
-        switch status {
-        case .working:    glyph("play.circle.fill", PaneState.workingHex)
-        case .awaiting:   glyph("questionmark.circle.fill", PaneState.awaitingHex)
-        case .doneUnseen: glyph("checkmark.circle.fill", PaneState.doneUnseenHex)
-        case .idle:       glyph("circle", PaneState.idleHex)
-        }
+        let s = chromeStatus(status)
+        return glyph(s.symbol, s.glyphHex)
     }
 
     private func glyph(_ systemName: String, _ hex: UInt32) -> some View {

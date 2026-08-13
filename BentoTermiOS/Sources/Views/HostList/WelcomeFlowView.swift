@@ -1,11 +1,15 @@
 import SwiftUI
 import BentoSessionKit
 import BentoFoundationKit
+import BentoUISharedKit
 
-/// First-run home. The job is environment preparation, not feature marketing
-/// (design doc §5): teach the one load-bearing concept — the phone is a tmux
-/// client, the host is the computer that runs the tmux server and keeps your
-/// agents alive — then get the user to a host.
+/// First-run home, and the one thing iOS genuinely cannot start without: a
+/// machine it can ssh into.
+///
+/// It used to open with a phone-and-host architecture drawing. That picture
+/// went with the relay it described, and it was answering a question this user
+/// doesn't have — what a host is for is one sentence, and how tmux keeps the
+/// work alive belongs on the setup flow's tmux page, said once.
 ///
 /// There is exactly one way in: SSH to a machine you already reach. Bento
 /// installs nothing on the host and runs no service of its own, so anything
@@ -16,14 +20,7 @@ struct WelcomeFlowView: View {
     /// Open the manual SSH host editor sheet (owned by HostListView).
     let onAddSSH: () -> Void
 
-    @State private var showHowItWorks = false
-
-    var body: some View {
-        home
-            .sheet(isPresented: $showHowItWorks) {
-                HowBentoWorksView()
-            }
-    }
+    var body: some View { home }
 
     // MARK: - Home (welcome + architecture + the way in)
 
@@ -43,9 +40,6 @@ struct WelcomeFlowView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.top, 28)
-
-                SSHArchitectureDiagram()
-                    .padding(.horizontal, 24)
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Your agents need a computer that stays on. Point Bento at one you can already ssh into.")
@@ -68,9 +62,11 @@ struct WelcomeFlowView: View {
                 }
                 .padding(.horizontal, 24)
 
-                Button {
-                    showHowItWorks = true
-                } label: {
+                // The concept page this used to open is gone. What it was
+                // really explaining is tmux, and that explanation now lives in
+                // one place — the setup flow's tmux page, with the long version
+                // a link away — instead of being retold here in its own words.
+                Link(destination: TmuxLearnMore.url) {
                     Label("How does BentoTerm work?", systemImage: "questionmark.circle")
                         .font(.system(size: 14))
                         .foregroundStyle(Color.bentoInkDim)
