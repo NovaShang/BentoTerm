@@ -15,6 +15,15 @@ public protocol FilePreviewSource: AnyObject, Sendable {
     func stat(path: String, cwd: String?) async throws -> (resolvedPath: String, stat: FilePreviewStat)
     /// Read up to `maxBytes` from the start of the file.
     func read(resolvedPath: String, maxBytes: Int) async throws -> Data
+    /// Read up to `length` bytes starting at `offset`. `FileFetch` walks a
+    /// whole file through this so progress ticks and a cancel lands between
+    /// chunks instead of after the entire transfer.
+    func read(resolvedPath: String, offset: UInt64, length: Int) async throws -> Data
+    /// True only when the ranged read above really seeks. The default below
+    /// emulates it by re-reading the head, which is correct but quadratic over
+    /// a whole file — so `FileFetch` fetches non-seeking sources in one shot
+    /// (complete, just without progress) rather than chunk them.
+    var supportsRangedRead: Bool { get }
     /// One directory's immediate children — the lazy-listing pipe behind
     /// browse expansion and `TreeWalker`'s search walks. A source that can't
     /// list keeps the default, which throws: browse shows an error row and
@@ -25,6 +34,16 @@ public protocol FilePreviewSource: AnyObject, Sendable {
 public extension FilePreviewSource {
     func listDirectory(path: String, request: DirectoryListRequest) async throws -> DirectoryListResult {
         throw FilePreviewError.unavailable("Directory listing not supported on this connection.")
+    }
+
+    var supportsRangedRead: Bool { false }
+
+    func read(resolvedPath: String, offset: UInt64, length: Int) async throws -> Data {
+        let start = Int(clamping: offset)
+        guard start <= Int.max - length else { return Data() }
+        let head = try await read(resolvedPath: resolvedPath, maxBytes: start + length)
+        guard head.count > start else { return Data() }
+        return head.subdata(in: start ..< min(head.count, start + length))
     }
 }
 
@@ -162,6 +181,13 @@ public enum PathPreviewSettings {
 public enum FilePreviewContent {
     case text(String, truncated: Bool)
     case image(Data)
+    /// A format the system renders and we don't (PDF, Office, iWork, RTF,
+    /// video, audio, archives, USDZ…) — hand it to Quick Look. The URL is the
+    /// file itself when it already lives on this machine; `nil` when the bytes
+    /// are still on the remote host, because Quick Look cannot stream and a
+    /// whole-file fetch is a size gate + progress + cancel, i.e. UI, not
+    /// something `load` may do behind the caller's back.
+    case quickLook(URL?)
     /// Not previewable inline (binary, or too large) — header info only.
     case binary
     case directory
@@ -235,6 +261,13 @@ public enum FilePreviewLoader {
                                                      maxBytes: FilePreviewLimits.imageBytes)
             if looksLikeImage(data) { return make(.image(data)) }
             return make(classify(data, size: st.size))
+        }
+
+        // Before any read: a format the system previews better than we can.
+        // Deliberately ahead of the head read — pulling 256KB off a 40MB PDF
+        // to decide it's binary is a wasted round trip on a slow link.
+        if QuickLookRouting.prefersQuickLook(fileName: name) {
+            return make(.quickLook(context.isLocal ? URL(fileURLWithPath: resolved) : nil))
         }
 
         let data = try await context.source.read(resolvedPath: resolved,
@@ -330,6 +363,20 @@ public final class LocalFileSource: FilePreviewSource, @unchecked Sendable {
         }
         defer { try? handle.close() }
         return try handle.read(upToCount: maxBytes) ?? Data()
+    }
+
+    public var supportsRangedRead: Bool { true }
+
+    /// Re-opening per chunk would be silly for a local disk — but nothing
+    /// chunks a local file: `FileFetch` hands out the real path instead of
+    /// copying it. This exists so the protocol is honestly implemented.
+    public func read(resolvedPath: String, offset: UInt64, length: Int) async throws -> Data {
+        guard let handle = FileHandle(forReadingAtPath: resolvedPath) else {
+            throw FilePreviewError.notFound(resolvedPath)
+        }
+        defer { try? handle.close() }
+        try handle.seek(toOffset: offset)
+        return try handle.read(upToCount: length) ?? Data()
     }
 
     public func listDirectory(path: String, request: DirectoryListRequest) async throws -> DirectoryListResult {

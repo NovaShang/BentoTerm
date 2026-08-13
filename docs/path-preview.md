@@ -58,13 +58,32 @@ plain panes use ghostty's grid columns.
 
 - Text preview: first 256 KB (truncation banner). Images: ≤ 20 MB. Binary
   (NUL in head) and directories: info card only.
+- **Quick Look tier** (`QuickLookRouting`): anything the system renders
+  better than we do — PDF, Office/iWork, RTF, EPUB, video, audio, RAW/PSD,
+  fonts, USDZ, archives — goes to `QLPreviewView` (macOS) /
+  `QLPreviewController` (iOS) instead of the binary card. Text, code and
+  Markdown deliberately stay on our web renderer, which has highlighting, a
+  gutter and `path:42` jump that Quick Look's plain-text view lacks; `.ts`
+  and `.bin` are pinned ours because their system UTIs are a video and an
+  archive. Routing is extension-only, decided *before* any read, so a 40 MB
+  PDF is never head-read first.
+- Quick Look needs a real file, so a **remote** file downloads first via
+  `FileFetch` (ranged/chunked over SFTP): > 25 MB asks first, 2 GB refused,
+  progress + cancel, complete-or-nothing (writes to a hidden name, renamed
+  only when the byte count matches the stat), cached 6 h per host+path+size+
+  mtime. The same path backs the **Share** button, which is offered for every
+  resolved file — including ones no preview could draw — and never exports
+  the preview's capped head read.
 - Feature flag `path_preview_enabled` (default ON), iOS Settings → "Tap to
   Preview Files". Checked in `SurfacePathHitEngine` so both platforms obey.
 
 ## Files
 
 - Core: `PathDetection.swift`, `SurfacePathHitEngine.swift`,
-  `FilePreviewCore.swift`, `FilePreviewPanel_macOS.swift`, surface edits in
+  `FilePreviewCore.swift`, `QuickLookRouting.swift` (what leaves our
+  renderer), `QuickLookPreview.swift` (the embedded system view + fetch
+  gate), `FileFetch.swift` (remote → complete local copy),
+  `FileShareButton.swift`, `FilePreviewPanel_macOS.swift`, surface edits in
   `GhosttyTerminalSurface(.swift|_macOS.swift)`, `GhosttyRuntime.swift`
   (PWD action), `PaneViewModel.currentWorkingDirectory()`.
 - iOS app: `Services/FilePreviewSources.swift`, `Views/Terminal/

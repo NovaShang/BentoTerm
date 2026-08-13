@@ -80,6 +80,19 @@ actor CitadelSFTPFileSource: FilePreviewSource {
         }
     }
 
+    nonisolated var supportsRangedRead: Bool { true }
+
+    /// SFTP reads are already offset-addressed, so a whole-file fetch walks the
+    /// file in chunks: progress moves, and a cancel between chunks doesn't wait
+    /// out the rest of a 40MB transfer.
+    func read(resolvedPath: String, offset: UInt64, length: Int) async throws -> Data {
+        let sftp = try await session()
+        return try await sftp.withFile(filePath: resolvedPath, flags: .read) { file in
+            var buf = try await file.read(from: offset, length: UInt32(clamping: length))
+            return buf.readData(length: buf.readableBytes) ?? Data()
+        }
+    }
+
     /// One directory's immediate children over SFTP — one round trip. The
     /// old bounded whole-tree BFS moved to `TreeWalker` (shared kit code);
     /// this source is now just the dumb per-directory pipe.

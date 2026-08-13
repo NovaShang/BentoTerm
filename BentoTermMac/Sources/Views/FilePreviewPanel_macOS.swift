@@ -185,6 +185,7 @@ struct FilePreviewContentView: View {
         switch data.content {
         case .directory: return "folder"
         case .image: return "photo"
+        case .quickLook: return "doc.richtext"
         case .binary: return "doc"
         case .text: return "doc.text"
         }
@@ -227,6 +228,10 @@ struct FilePreviewContentView: View {
             } else {
                 unsupported("Couldn't decode this image.")
             }
+        case .quickLook(let url):
+            // Everything the system draws better than we do. A local file has
+            // its URL already; a remote one downloads inside the panel.
+            QuickLookPanel(data: data, url: url)
         case .binary:
             unsupported("Binary file — no inline preview.")
         case .directory:
@@ -256,6 +261,11 @@ struct FilePreviewContentView: View {
                 Button("Open") {
                     NSWorkspace.shared.open(URL(fileURLWithPath: data.resolvedPath))
                 }
+            }
+            // Deliberately not gated on what the panel above managed to
+            // render: the files we can't preview are the ones worth exporting.
+            if let share = FileShareButton(data: data) {
+                share
             }
             if let onDetach {
                 Button(action: onDetach) { Label("Open in Window", systemImage: "macwindow") }

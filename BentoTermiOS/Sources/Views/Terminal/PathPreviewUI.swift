@@ -212,6 +212,11 @@ struct FilePreviewSheet: View {
             } else {
                 unsupported("Couldn't decode this image.", icon: "photo")
             }
+        case .quickLook(let url):
+            // PDF, Office, iWork, video, audio… — the system renders these; on
+            // a phone every one of them is remote, so the panel downloads
+            // (gated + cancellable) before Quick Look sees a URL.
+            QuickLookPanel(data: data, url: url)
         case .binary:
             unsupported("Binary file — no inline preview.", icon: "doc")
         case .directory:
@@ -238,6 +243,14 @@ struct FilePreviewSheet: View {
             }
             .tint(Color(BentoBrand.emerald))
             Spacer()
+            // The way a file leaves the phone: Files, AirDrop, another app.
+            // Offered for anything that resolved, including the formats the
+            // sheet above couldn't draw.
+            if let share = FileShareButton(data: data) {
+                share
+                    .font(.system(size: 15, weight: .medium))
+                    .tint(Color(BentoBrand.emerald))
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
