@@ -66,7 +66,7 @@ public struct FinishPanel:     View { public init(context: PanelContext) }
 
 **一个论点的三个部分，不是三个功能。**论点：慢的早已不是 agent，是人还会停下的三个地方——切换、打字、离开。三条断言各拆掉一个：
 
-> *Agents are fast. Your terminal isn't. This one is built to keep up.*
+> *A terminal for watching and talking to your agents.*
 >
 > **A whole team, one screen** — While one agent writes code, you're reviewing another's. All of your attention goes to planning and judging — none of it to switching windows.
 >
@@ -76,9 +76,11 @@ public struct FinishPanel:     View { public init(context: PanelContext) }
 >
 > *Not three features — one way of working. And it compounds.*
 
+**tagline 定稿的取舍**：「Agents are fast. Your terminal isn't」被否——终端不慢，这是个会被当场反驳的夸张；「a team of agents / all at once」也被否——**俗的不是 "agents" 这个词，是对数量的炫耀**（many / team / multi / parallel 都在夸规模）。`your agents` 只是个名词，不是一句主张。
+
 **打动人靠具体，不靠倍数。**这个受众见到自造的乘数（10×）会当场折价，所以向往感全部压在「之后是什么样」的具体画面上：一个 agent 在写码、你在审另一个的；说话比打字快三倍；沙发上手机里还是同一批格子。tagline 直接点破论点——慢的早就不是 agent，是终端。收尾那句用 **compounds** 承载规模感：三条各自成立且互相放大，这个词工程师可以对着上面三条自己验证，比任何数字都可信。
 
-页面结构：app 图标 + 名字 + tagline，三条断言各配一个着色图标，整块垂直居中，底下一句收尾。主按钮是 `Get Started` 而不是 `Next`——它说的是按下去开始什么，不只是后面还有一页。
+页面结构：app 图标 + 名字 + tagline（**与站点 H1 一字不差**，从官网进来的人在这里得到的是确认，不是第二遍推销），三条断言各配一个着色图标，整块垂直居中，底下一句收尾。主按钮是 `Get Started` 而不是 `Next`——它说的是按下去开始什么，不只是后面还有一页。
 
 实现在 `WelcomeManifestoView`（两端共用），**图标由 app 传进来**（macOS 是 NSImage、iOS 是 UIImage，都不该进这个包）。
 

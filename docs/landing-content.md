@@ -39,13 +39,13 @@ v1 是分叉前写的，除了域名过期，**有三条 claim 现在是假的**
 
 ```
 Nav                     logo · GitHub · Support · Privacy · [Get it]
-Hero                    H1 + 三元 sub + 双 CTA + 真实产品截图        ← 页面的重心
+Hero                    H1 + sub + 双 CTA + 产品图                  ← 页面的重心
 Trust strip             一行冷静的事实
-The shift               为什么需要一个新终端（两句话）
 ① A whole team, one screen
 ② Say it, don't type it
 ③ Leave the desk, not the work
 Compounds               一行，把三条收成一个主张
+Day to day              三个次要功能，每个带一块 shot（2026-08-13 新增）
 Under the hood          给会扒的人看的技术页（这一版最大的新增）
 Small things            六格功能网格
 Privacy                 精确版
@@ -54,7 +54,7 @@ Final CTA               下载
 Footer
 ```
 
-**为什么 hero 之后立刻是「the shift」而不是直接进三条**：三条主张是**解法**，解法必须先有问题。而这个问题恰好是这个受众正在经历但还没命名的——命名它就是这一页最有价值的一秒。
+**为什么 hero 之后直接进三节，没有问题陈述**：一度有过一段（见下），删了。工具页的读者是来看东西的，hero 和截图已经说清是什么；再插一段抽象论述只会推迟产品出场。
 
 ---
 
@@ -66,18 +66,33 @@ Footer
 
 ### Hero
 
-> **eyebrow**: Free & open source · macOS 14+ · Apple Silicon
+> **eyebrow**: Native for Mac, iPhone and iPad · Free & open source
 >
-> # A terminal for running a team of agents
+> # A terminal for *watching* and *talking to* your agents
 >
-> All at once, by voice, from anywhere. Built on tmux, so the work keeps
-> running when you're not there.
+> Every pane shows what it's doing. Hold to talk to one instead of typing it.
 >
 > **[Download for Mac]**  ·  View on GitHub →
 
-**H1 与 app 欢迎屏第一句一字不差**（`A terminal for running a team of agents — all at once, by voice, from anywhere.`，这里拆成 H1 + sub）。从官网装完打开 app，第一屏应该让他确认「就是这个」，而不是读到两套说辞。
+**H1 与 app 欢迎屏那句一字不差。**从官网装完打开 app，第一屏应该是确认「就是这个」，而不是第二遍推销。
+
+**三条定稿规矩**（推翻了好几版才落下来的）：
+
+1. **两个价值点，两个动词。**watching 和 talking 各自对应一个，H1 的结构就是产品的结构。第三件事（工作不停）是**支撑**不是主张——它解释的是「为什么关了窗口还在跑」，放副标题和 §③。
+2. **不进 H1 的两个词：`tmux` 和 `many`。**tmux 放第一句会变成筛子——受众都用终端，但不一定用过 tmux，而恰恰是这批人最需要它；所以它降到 trust strip，并且写成「bundled, and fine if you've never used it」。`many / team / multi / parallel` 则是在夸规模，**俗的从来不是 "agents" 这个词，是对数量的炫耀**。
+3. **音区是「一个开发者做的工具」，不是发布会。**这是个人非商业项目，受众是开发者，所以参照系是 ripgrep / fzf / Ghostty 的落地页：平铺直叙地说这是什么，一个承诺都不给。凡是「maximize your productivity」「in the agent era」这类句子一律不用——前者不可证伪，后者是趋势语言，会过期。
 
 **媒体位 `[ASSET-hero]`：真实产品截图，不是 CSS 画的模拟。** 现网页那块 showcase 是纯 HTML/CSS 仿的——当时没有可拍的东西，现在有了。四个 pane、四种状态（琥珀那个是视线磁铁）、侧栏可见、深色主题、Retina。取景规矩沿用 `docs/hero-mac.png`：真仓库、真任务、无密钥。
+
+**2026-08-13：H1 上方的胶囊 badge 删了。**那颗带脉冲绿点的圆角小标签（`✦ Free & open source`）是 AI 生成落地页最好认的一个记号，而且它写的两件事 trust strip 下面一屏就又说了一遍。现在标题直接开页，事实挪到按钮下方的一行等宽小字——底部 CTA 一直就是这个形式，所以它读起来是本页的固有习惯而不是又一个小控件；而且那正是已经决定要点的人会看的位置。`.hero` 顶部 padding 从 `clamp(48px,9vh,104px)` 提到 `clamp(88px,15vh,156px)` 补掉 badge 让出的约 63px，入场动画整体上移一档。
+
+按钮下那行必须回答**"我能用吗"**，所以它同时说两个轴：
+
+> Free and open source · Native on Mac, iPhone and iPad · Your agents run on macOS, Linux or WSL
+
+**两个轴不能混。**app 是 Mac/iPhone/iPad 独占（没有 Windows 客户端，这点不含糊）；**agent 跑在哪台机器上跟这个无关**——任何能 ssh 进去、装了 tmux 的机器都行，Mac、Linux 服务器、Windows 上的 WSL 都一样。少了后半句，一个开发机是 Linux 或 WSL 的人看完 "Native on Mac, iPhone and iPad" 就走了。这一条在三个深度各说一次：hero 一行、§③ 的 bullet、FAQ「What do I need on the other end?」（那条现在明确写出 app 端和主机端可以不是同一类系统）。
+
+**措辞的安全边界**：全篇一律用「anything with `sshd` and `tmux`」的框子来带出 WSL，不写成对 WSL 的专门支持——我们没有为 WSL 做任何事，它成立纯粹因为它就是一台普通的 Linux SSH 主机（用户得自己把 sshd 起起来）。这个框子在，句子就永远是真的。
 
 ### Trust strip
 
@@ -86,15 +101,11 @@ Footer
 
 （「Nothing between you and your own machine」替换 v1 的「no server of ours」——传输确实是纯 SSH，而语音走不走我们的中转在 §Privacy 里单说。）
 
-### The shift
+### ~~The shift~~ —— 已删
 
-> ## Your agents finish in seconds. Then they wait for you.
->
-> The slow part of the loop isn't the model any more — it's finding the pane
-> that needs an answer, typing that answer, and the fact that all of it stops
-> when you get up. Bento is built to take those three out.
+这一页曾经在 hero 之后放一段「问题陈述」（"Agents can work for hours without you…"）。**删掉了**：hero 已经说了产品是什么，紧接着一段抽象论述只是在推迟产品本身。问题陈述是营销页的体例，而这一页的参照系是工具页——ripgrep / fzf / Ghostty 都没有这一节，它们直接展示东西。
 
-这段是全页的枢纽：它把「10× 效率」这个主张换成了一个**可检验的因果**——三个停顿，三条解法。后面三节就是它的展开，顺序一一对应。
+（那段论证本身是对的，只是不该独占一屏：**单个 agent 能连续跑一小时 → 你的注意力是空的 → 才值得同时开几个**。要留的话，它属于 §① 的第一句，贴着一个具体功能说，而不是悬空一段。措辞红线仍然有效：不要写「agents got slower」。）
 
 ### ① A whole team, one screen
 
@@ -113,7 +124,9 @@ Footer
 
 `[ASSET-states]` 四条标题栏的近景 + 侧栏状态点，标注四种状态。
 
-**最后一条 bullet 的自曝是故意的。**这个受众对"AI 智能识别"这类说法的默认反应是不信；主动说清它是模式匹配、会认错，反而是唯一能让人相信前两条的写法。
+**「Nothing in your shell」这条的正面价值是"不用装任何东西"**——没有 init 行、没有 hook、不需要 agent 配合。对这个受众这是硬卖点：他们见过太多要求往 `.zshrc` 里加一行的工具。
+
+**这条 bullet 曾经带着一句自曝**（"it's a hint, not a guarantee"），已删。理由：**落地页上主动写免责声明，是在替读者制造一个他本来没有的疑虑**——没有人是带着"我猜它的状态检测不准"来的。那句话该在的两个地方它都在：app 的 Agents 面板（用户正要开始依赖它）和本页 FAQ 的「How is state detected?」（他主动问了）。**同一句诚实，放对地方是加分，放错地方是自伤。**
 
 ### ② Say it, don't type it
 
@@ -153,39 +166,82 @@ Footer
 
 （这三句是"为什么是十倍"的全部论证。不写数字，让读者自己得出结论。）
 
+### Day to day（2026-08-13 新增，三格，每格带一块 shot）
+
+三条主张之上是论证，这一节是**日常手感**——放在 Compounds 之后，正好接住"那平时用起来是什么样"。刻意做得比 pillar 轻（卡片，不是左右分栏的大块），因为它们本来就是次要功能；但每格**必须带图**，否则和下面的六格文字网格没有区别。
+
+> **See the files, not just the output** — Every pane carries its working directory, so its
+> file tree is always one click away — any depth, search included. When an agent prints a
+> path, click it; the file opens with syntax highlighting and a line gutter, even at `:42`,
+> and even if a TUI truncated the line. PDFs, images and documents go to Quick Look. From an
+> iPhone it's the same tree over the same SSH connection — read a file on your Mac or your
+> server, and save it out.
+>
+> **Panes move like windows** — Split right or down, then drag a pane by its title bar to
+> wherever it fits — including into another session. Or duplicate one and get a second pane in
+> the same directory running the same thing. It isn't a view of a layout: every drop is a real
+> tmux move, so a `tmux attach` from anywhere else agrees with what you see.
+>
+> **Never type a command again** — If you'd rather not, you don't have to. Pick a folder, pick
+> an agent, pick a layout — Bento opens the panes and starts the agent in every one of them.
+> Four Claude Codes in one repo is three clicks and no shell. Everything after that is one ⌘P
+> away.
+
+三条都核对过代码，措辞受这些事实约束：
+
+- **文件树**：`FileTreeBrowserView` 按 cwd 生根、逐层 readdir（深度无限），iOS 走同一条 SSH 上的 SFTP（`CitadelSFTPFileSource`）。文本/代码/Markdown 走自己的渲染器（高亮 + 行号 + `path:42` 跳转），其余交 Quick Look——所以不能笼统写"预览任何文件"，写法要分这两类。"save it out" 对应 `FileShareButton`（iOS 是 `UIActivityViewController`），说"download"会让人以为有下载管理。
+- **拖动**：`join-pane` 拒绝同窗口移动，实际走 `move-pane`；"real tmux move" 这句是这一段唯一值得说的差异点，别丢。
+- **Duplicate**：是 `.duplicateCurrent` seed —— 同目录 **+ 同启动命令**，两个都要提，只说"同目录"就漏了一半。
+- **向导**：name / workingDir / agent / layout 四项，layout 有 6 种（solo → 2×2）。"Four Claude Codes in one repo" 说的就是 `.quadTile`，是真的，不是修辞。
+
 ### Under the hood
+
+**三条，不是六条。**初稿列了六项（控制模式、真相源、GPU 渲染、主线程、字符格平铺、自带 tmux），单条都成立，合起来太散——读者记不住六件事，只会得到"这人很努力"的印象。收成三条，每条对应一个别人做不到的层：**协议层 / 引擎层 / 规则层。**
 
 > ## Built like a terminal, not a wrapper
 >
-> - **It speaks tmux's control-mode protocol.** `%begin`/`%end` block framing,
->   command numbers, out-of-band notifications — parsed, not screen-scraped.
->   Layout changes and pane lifecycle are facts tmux tells us, never guesses.
-> - **tmux is the source of truth.** Bento renders and edits tmux's state, never
->   a private copy. That's why sessions outlive the app and why other tmux
->   clients always agree with it.
-> - **Every pane is a real GPU terminal.** Rendering is libghostty — not a
->   webview, not a re-implementation. Your TUIs, vim, ssh and 24-bit color all
->   just work.
-> - **Output never touches the main thread.** Parsing and drawing run on
->   separate queues, because a frame that stalls on the GPU must not be able to
->   freeze your keyboard.
-> - **Panes tile to the character grid.** A pane title bar is exactly one cell
->   tall and dividers land on the grid line, so nothing is ever a half-character
->   off.
+> **tmux, in control mode** — Bento speaks tmux's `-CC` protocol instead of typing at it:
+> layouts, panes and lifecycle arrive as notifications, and every change goes back as a
+> command. Almost nothing is kept locally — tmux holds the state — so a plain `tmux attach`
+> from any other terminal shows exactly what you were looking at.
 >
-> `Read the architecture notes →`
+> **libghostty does the rendering** — The same GPU-accelerated core as Ghostty, on the Mac and
+> on iPhone and iPad — not a webview, and not a second implementation for mobile. Parsing and
+> drawing run on separate threads, so a frame stalled on the GPU can't freeze your keyboard and
+> heavy output doesn't cost you keystroke latency.
+>
+> **State detection is a config, not a black box** — Every agent is a profile: output patterns,
+> title patterns, prompt boundaries, quick keys — editable, and extendable to a tool nobody has
+> heard of. Want it deterministic rather than inferred? Have your agent's own hook print a
+> marker and match on that.
 
-**这一节是给会往下扒的人写的，也是全页最能换来 star 的一段。**规矩：只写别人能验证的具体事实，一个形容词都不要（"blazing fast"、"beautifully crafted" 之类一律不许出现）。上面五条每一条都能在代码里指出来。
+每条都必须是**别人能验证的具体事实，一个形容词都没有**（"blazing fast"、"beautifully crafted" 之类一律不许出现）。
+
+**排版：一整块面板，里面三列。**这一节返工了四次，最后一次才想明白前三次为什么都不行：
+
+1. 三个带框卡片 → 散
+2. 左标题 + 右三行 → 标题孤零零撑出一片空白
+3. 三列裸文字 + 代码 → **用户的原话是「我觉得是 CSS 没加载出来」**
+
+第三次的失败解释了前两次：**这一页的每一块内容都坐在一个有边框、有圆角、有渐变的面上**（终端窗口、`.media` 图框、六个功能格），唯独这一节是裸的文字——在这个语境里，少装饰不读作克制，读作样式挂了。
+
+定稿：用页面自己的 `.media` 面，里面三列用 1px 竖线分隔，每列配一块**真东西**——控制模式的 `%begin`/`%layout-change`/`%end` 帧、三条队列的分工、一段 profile 的 `outputPatterns`。既解决"没得看"，也正好是这个受众想看的。
+
+两个细节：标题**居中收成一行**；三列用 flex + `p { flex:1 }`，让三块代码**落在同一条基线**上，否则段落长短不同会让它们像楼梯一样往下错。
+
+**第三条的 hook 说法要留意。**代码里**没有** OSC 133 / shell 集成那类内建 hook 支持，所以不能写成"我们支持 hooks"。能成立的说法是现在这句：检测是**用户可编辑的模式**，所以你可以让 agent 自己的 hook 打印一个标记，再配一条匹配它的规则——**不需要我们加任何代码，今天就能做**。这条同时不跟 §① 的「Nothing in your shell」打架：默认零配置，确定性是可选的。
 
 ### Small things, done properly（六格）
 
 | | |
 |---|---|
-| **⌘-click any path** — rich preview with highlighting and jump-to-line, even when a TUI truncated the path. | **⌘P command palette** — every command and session, from anywhere. |
-| **Drag panes like VS Code** — drop zones, docking, and moves across sessions. | **Bring your own theme** — import any iTerm2 `.itermcolors`; light, dark, or follow-system. |
-| **Any monospaced font on your Mac** — enumerated from the system, not a list of four. | **Voice → shell** — say what you want, a model writes the command, you press enter. |
+| **⌘P command palette** — every command and session, from anywhere. | **Your `~/.ssh/config`** — the hosts you already have, one click from the launcher. |
+| **⌘F in the scrollback** — search runs in the engine, matches highlight in place. | **Bring your own theme** — import any iTerm2 `.itermcolors`; light, dark, or follow-system. |
+| **Any monospaced font on your Mac** — enumerated from the system, not a list of four. | **Built for the phone** — keyboard avoidance on the real cursor, inline CJK compose, scroll inertia. |
 
 （v1 的 "Jump between agent turns" 已删除，不再出现。）
+
+**2026-08-13：路径预览和拖动 pane 从这里升到了 Day to day。**这两格原来在这个网格里各占一行文字，现在有了自己的图和完整说法，留在这里就是同一件事说两遍——补进来的两格（`~/.ssh/config`、⌘F）都是代码里确实有、且此前整页没提过的。
 
 ### Privacy
 
@@ -233,8 +289,18 @@ Footer
 | `[ASSET-voice]` | 10–15s 循环 | 按住 → 中英混说 → 转写 → 上滑发送。 |
 | `[ASSET-continuity]` | 两帧对照或 10s 循环 | Mac 在跑 → 手机上同一批 pane。**手机那半必须真拍。** |
 | `[ASSET-og]` | 1200×630 | 图标 + H1 + 四状态 pane 条，深色。 |
+| `[ASSET-files]` | 8–12s 循环 | 输出里点一条路径 → 预览打开、跳到 `:42`；再从文件树点开一个 PDF。 |
+| `[ASSET-drag]` | 8–12s 循环 | 抓住标题栏拖起一个 pane → 投放区亮起 → 落下，布局重排。 |
+| `[ASSET-wizard]` | 8–12s 循环 | 选目录 → 选 agent → 选 2×2 → Launch，四个 pane 同时起来。 |
 
 **取景硬规矩**（沿用现有 hero 截图那套）：真仓库、真任务、无密钥、无真实主机名。
+
+**下一步是把页面上所有 CSS 假图换成真录屏。**为此每个图位都已经改成固定比例的容器，换的时候只动容器里那一层：
+
+- 新增的三格用 `.shot`（`aspect-ratio:16/10`），里面直接放 `<video autoplay muted loop playsinline poster>`，CSS 已经写好 `object-fit:cover` 的绝对定位规则，**页面不会掉一个像素**。
+- 三节 pillar 的图在 `.media` 里，hero 的在 `.showcase` 里，这两处换视频要先给容器一个显式比例，否则 CSS 仿图撤走时高度会塌。
+- 编码：H.264 MP4 + VP9 WebM 两份，短边 ≥ 720，每段控制在 1–2 MB；`preload="none"` + `poster`，首屏那段除外。
+- 手机上 `.craft-item` 会横过来（图占 44%），录屏的取景要保证在 44% 宽度下主体仍然认得出来——这是选镜头时的实际约束，不是后期能补的。
 
 ---
 

@@ -75,15 +75,19 @@ public struct WelcomeManifestoView: View {
                 }
                 Text("BentoTerm")
                     .font(.system(size: 28, weight: .bold))
-                // Category first, then the value — and the value is stated as
-                // the three things the claims below deliver, in the same order.
-                // An earlier draft said "Agents are fast. Your terminal isn't",
-                // which is literally false to anyone who has used a fast
-                // terminal: terminals aren't slow, they were built for one
-                // person typing one command. Losing this audience on a checkable
-                // exaggeration in the first sentence is the worst possible
-                // trade.
-                Text("A terminal for running a team of agents — all at once, by voice, from anywhere.")
+                // Category first, then the two things this app is for, as two
+                // verbs. Drafts that didn't survive, and why:
+                //  * "Agents are fast. Your terminal isn't" — literally false to
+                //    anyone who has used a fast terminal, and a checkable
+                //    exaggeration in the first sentence is the worst possible
+                //    trade with this audience.
+                //  * "…a team of agents, all at once, by voice, from anywhere" —
+                //    bragging about the count is what makes "multi-agent" copy
+                //    read like everyone else's. `your agents` is a noun; `many
+                //    agents` is a boast.
+                // The same sentence is the site's H1, so arriving here from the
+                // web is a confirmation rather than a second pitch.
+                Text("A terminal for watching and talking to your agents.")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
