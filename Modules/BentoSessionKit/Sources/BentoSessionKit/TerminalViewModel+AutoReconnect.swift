@@ -57,10 +57,30 @@ extension TerminalViewModel {
             recoverable = false
         }
         guard recoverable else {
-            failWithRemoteDiagnosis(fallback: fallback)
+            failWithRemoteDiagnosis(
+                fallback: fallback,
+                // Only the tmux-never-started branch above rewrites `fallback`;
+                // the others are carrying a transport message that is already
+                // its own explanation.
+                hint: fallback == message ? nil : tmuxStartupHint)
             return
         }
         scheduleReconnect()
+    }
+
+    /// What to check when tmux never greeted, or nil when the far side named a
+    /// failure that has nothing to do with tmux (a refused connection, a
+    /// host-key complaint, `Permission denied`) — a tmux suggestion under one
+    /// of those is just noise on top of the real answer.
+    var tmuxStartupHint: String? {
+        let remote = tmuxService.outputBeforeControlMode.lowercased()
+        guard remote.isEmpty || remote.contains("tmux") else { return nil }
+        return """
+            Check that tmux is installed on \(host.name) and on the PATH your \
+            login shell builds:
+
+            ssh \(host.name) '$SHELL -lc "command -v tmux"'
+            """
     }
 
     /// Surface a bring-up failure, preferring whatever the far side said over
@@ -73,7 +93,7 @@ extension TerminalViewModel {
     /// protocol, so every one of those failures used to present as the same
     /// blank window. `outputBeforeControlMode` keeps it; this is where it is
     /// spent.
-    func failWithRemoteDiagnosis(fallback: String) {
+    func failWithRemoteDiagnosis(fallback: String, hint: String? = nil) {
         // First diagnosis wins. The pty's EOF and the greeting timeout describe
         // the same failure from two ends, and the EOF gets there ~12s earlier;
         // letting the later one through would only overwrite it with a vaguer
@@ -82,7 +102,12 @@ extension TerminalViewModel {
         let remote = tmuxService.outputBeforeControlMode
             .trimmingCharacters(in: .whitespacesAndNewlines)
         dlog("session bring-up failed: \(fallback) | remote said: \(remote.isEmpty ? "<nothing>" : remote)")
-        errorMessage = remote.isEmpty ? fallback : "\(fallback)\n\n\(remote)"
+        // Order: our summary, then what the far side actually said, then what to
+        // check. The remote's own words are the most specific thing on screen
+        // and must not be buried under a suggestion.
+        errorMessage = [fallback, remote.isEmpty ? nil : remote, hint]
+            .compactMap { $0 }
+            .joined(separator: "\n\n")
         showError = true
         phase = .ended
         // Stop retrying. This verdict can be reached from inside the reconnect
@@ -108,6 +133,10 @@ extension TerminalViewModel {
         isReconnecting = true
         errorMessage = nil
         showError = false
+        // The state poll (which re-derives it) is about to stop, so retire the
+        // take-over banner here rather than leave a claim about a session we
+        // are no longer attached to.
+        noteSizingInputsChanged()
         reconnectTask = Task { [weak self] in
             await self?.runReconnectLoop()
         }

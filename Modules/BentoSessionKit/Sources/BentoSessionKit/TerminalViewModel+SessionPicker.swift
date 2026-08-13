@@ -111,6 +111,11 @@ extension TerminalViewModel {
     /// Apply the user's session choice. Called from the session picker UI.
     public func applyTmuxChoice(_ choice: TmuxStartChoice) async {
         phase = .starting
+        // The kind is known HERE, from the choice — before the handshake that
+        // `isTmuxReady` reports on, and independently of whether it succeeds.
+        // That is the whole point: chrome that asks "is this tmux" gets an
+        // answer while the session is still connecting.
+        kind = (choice == .noTmux) ? .plain : .tmux
         switch choice {
         case .noTmux:
             // Move into shell-only mode: subsequent SSH data flows to the
@@ -230,6 +235,10 @@ extension TerminalViewModel {
     ) async {
         usingTmux = true
         activeTmuxSessionName = sessionName
+        // Normally already set by `applyTmuxChoice`. Re-asserted because a
+        // reattach can reach this directly, and a session that is launching
+        // tmux is a tmux session whatever route it took.
+        kind = .tmux
 
         // When the transport carried the `tmux -CC` invocation as its own
         // argument, tmux is already coming up and there is nothing to type —
@@ -282,7 +291,8 @@ extension TerminalViewModel {
             if transport.startsInTmuxControlMode {
                 dlog("tmux -CC never greeted — the remote command did not start tmux")
                 failWithRemoteDiagnosis(
-                    fallback: "Couldn’t start tmux on \(host.name).")
+                    fallback: "Couldn’t start tmux on \(host.name).",
+                    hint: tmuxStartupHint)
                 return
             }
             // Proceeding used to be the tolerant choice here, on the theory
@@ -299,7 +309,8 @@ extension TerminalViewModel {
                 failedDuringReattach = true
                 return
             }
-            failWithRemoteDiagnosis(fallback: "Couldn’t start tmux on \(host.name).")
+            failWithRemoteDiagnosis(fallback: "Couldn’t start tmux on \(host.name).",
+                                    hint: tmuxStartupHint)
             return
         }
 
@@ -307,9 +318,19 @@ extension TerminalViewModel {
         // standalone session, since shrinking a shared session would also
         // shrink the desktop's view.
         if resizeToScreen {
-            let screen = idealTerminalSize()
-            dlog("Setting tmux client size to \(screen.cols)x\(screen.rows)")
-            tmuxService.sendFireAndForget(.refreshClient(width: screen.cols, height: screen.rows))
+            // Prefer what the surface MEASURED over what we estimated before it
+            // existed. By the time tmux has greeted, the container has usually
+            // laid out at least once, and its number accounts for things the
+            // estimate cannot see (the iPad sidebar, the quick-keys band).
+            //
+            // Getting this wrong is not self-correcting, which is why it is
+            // worth the two fallbacks: the container pushes a client size only
+            // when its own geometry CHANGES, so a session whose layout is
+            // already settled when this fires keeps whatever this wrote, for
+            // the life of the session.
+            let size = lastTmuxClientSize ?? lastReportedSize ?? idealTerminalSize()
+            dlog("Setting tmux client size to \(size.cols)x\(size.rows) (measured=\(lastTmuxClientSize != nil || lastReportedSize != nil))")
+            tmuxService.sendFireAndForget(.refreshClient(width: size.cols, height: size.rows))
             try? await Task.sleep(for: .milliseconds(300))
         }
 

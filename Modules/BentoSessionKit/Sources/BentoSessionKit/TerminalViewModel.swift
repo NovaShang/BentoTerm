@@ -31,6 +31,17 @@ public enum SessionPhase: Equatable {
     case ended
 }
 
+/// Whether a session is backed by tmux — decided when the start choice is
+/// applied, and stable from then on. Deliberately NOT derived from `phase`: a
+/// plain session that suspends or ends must not change kind under the UI.
+public enum SessionKind: Equatable {
+    /// No start choice has been applied yet — we do not know.
+    case undecided
+    case plain
+    /// tmux, whether or not the attach handshake has finished.
+    case tmux
+}
+
 @MainActor
 public final class TerminalViewModel: ObservableObject {
     @Published public var connectionState: TerminalConnectionState = .disconnected
@@ -83,6 +94,15 @@ public final class TerminalViewModel: ObservableObject {
     /// the real grid only ever arrives through `resizeTmuxClient`.
     var lastTmuxClientSize: (cols: Int, rows: Int)?
 
+    /// This device is looking at a canvas sized by something else — drives the
+    /// take-over banner. Nil most of the time, and deliberately LATE: it only
+    /// changes after the same answer has held for `sizeMismatchSettle`, so a
+    /// resize or a reattach can't blink it (see `noteSizingInputsChanged`).
+    @Published public internal(set) var sessionSizeMismatch: SessionSizeMismatch?
+    /// The answer the settle timer is currently waiting on — not what is shown.
+    var pendingSizeMismatch: SessionSizeMismatch?
+    var sizeMismatchSettleTask: Task<Void, Never>?
+
     /// Whether THIS device is the one that claimed the size. Survives app
     /// restarts (per session) so the owner can re-claim under its new client
     /// name after a reconnect instead of losing the session to whoever
@@ -109,6 +129,21 @@ public final class TerminalViewModel: ObservableObject {
 
     /// Where we are in the session lifecycle.
     @Published public var phase: SessionPhase = .sshConnecting
+
+    /// What KIND of session this is, as opposed to how far it has got.
+    ///
+    /// `isTmuxReady` answers "has the tmux attach handshake finished". Reading
+    /// it as "is this a tmux session" collapses two different questions, and UI
+    /// built on that reads wrong at both ends: a tmux session that is still
+    /// connecting is indistinguishable from a plain shell, and a plain shell is
+    /// defined only by the ABSENCE of tmux — so every tmux affordance has to be
+    /// suppressed one at a time, and things get suppressed that shouldn't be
+    /// (the iOS file browser, which needs no tmux at all, was lost this way).
+    @Published public internal(set) var kind: SessionKind = .undecided
+
+    /// A plain shell: no tmux, so no panes, windows, splits or session
+    /// structure. Its own shape, not a tmux session with the pieces missing.
+    public var isPlainSession: Bool { kind == .plain }
 
     /// Sessions discovered via `tmux ls` after SSH is up.
     @Published public var availableTmuxSessions: [String] = []
