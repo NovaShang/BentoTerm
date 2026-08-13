@@ -770,10 +770,15 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     private func pushToEngine(_ data: Data) {
         guard let surface else { return }
         bytesPushedSinceDraw += data.count
+        // The census has to be taken BEFORE the call: if this push is the one
+        // that parks, nothing on this thread runs again, and the background
+        // watchdog can only report what was already written down.
+        MailboxWedgeProbe.beginPush(data, surfaceTag: ObjectIdentifier(self).hashValue & 0xffff)
         data.withUnsafeBytes { raw in
             guard let ptr = raw.bindMemory(to: CChar.self).baseAddress else { return }
             ghostty_surface_process_output(surface, ptr, UInt(data.count))
         }
+        MailboxWedgeProbe.endPush()
         ghostty_surface_refresh(surface)
         setNeedsDraw()
     }

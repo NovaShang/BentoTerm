@@ -244,6 +244,11 @@ public final class GhosttyRuntime {
     func tick() {
         guard let app else { return }
         ghostty_app_tick(app)
+        // The App mailbox is now drained — see MailboxWedgeProbe for why the
+        // count between drains is the number that decides issue #1.
+        #if os(iOS)
+        MailboxWedgeProbe.noteTick()
+        #endif
     }
 
     /// ghostty's EFFECTIVE background color (r,g,b, 0–255) from the finalized base
@@ -285,6 +290,13 @@ public final class GhosttyRuntime {
         OSAllocatedUnfairLock(initialState: false)
 
     private static func handleWakeup() {
+        // BEFORE the coalescing check: libghostty calls this once per mailbox
+        // push, including the push that fails and then parks forever, so this is
+        // a direct count of slots consumed since the last drain. Counting after
+        // the check would count ticks scheduled, which is a different number.
+        #if os(iOS)
+        MailboxWedgeProbe.noteWakeup()
+        #endif
         let shouldSchedule = wakeupScheduled.withLock { scheduled -> Bool in
             if scheduled { return false }
             scheduled = true

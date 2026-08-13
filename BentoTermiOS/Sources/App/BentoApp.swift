@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import BentoSessionKit
 import BentoFoundationKit
+import BentoGhosttyKit
 
 @main
 struct BentoApp: App {
@@ -32,6 +33,12 @@ struct BentoApp: App {
         // Debug only: those lines quote terminal output and voice transcripts
         // verbatim, which a shipped app must not leave on disk. See DebugLogger.
         coreDlogFileSink = { DebugLogger.shared.log($0) }
+        // Issue #1 (the foreground freeze). Arms a background watchdog that can
+        // still write when the main thread is parked in ghostty's mailbox — the
+        // only condition under which anything gets recorded at all. Debug only,
+        // and temporary: it costs a pass over every chunk on the output path.
+        MailboxWedgeProbe.enabled = true
+        MailboxWedgeProbe.start()
 #endif
         Self.purgePairingLeftovers()
     }
@@ -96,6 +103,10 @@ struct BentoApp: App {
             .environmentObject(sessionManager)
             .preferredColorScheme(preferredScheme)
             .modifier(SystemAppearanceSync())
+            // The app's accent. System chrome everywhere else, but one brand
+            // colour for controls — dropping this left buttons system-blue
+            // while status dots and marks stayed green, which just read as
+            // inconsistent.
             .tint(Color.bentoEmerald)
             .onChange(of: scenePhase) { _, newPhase in
                 sessionManager.handleScenePhaseChange(newPhase)
