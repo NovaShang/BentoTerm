@@ -31,8 +31,8 @@ final class FloatingQuickKeysToolbar: UIView {
     /// `showsPaneActions`.
     let menuButton = UIButton(type: .system)
 
-    /// Show the pane-menu button. False for a non-tmux single pane, which has
-    /// no pane menu.
+    /// Show the pane-menu button. The menu itself decides which entries a plain
+    /// (non-tmux) pane gets — this only says whether there is a pane at all.
     var showsPaneActions: Bool = false {
         didSet { if oldValue != showsPaneActions { rebuild() } }
     }

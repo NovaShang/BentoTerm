@@ -34,6 +34,16 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     public var onTitleChanged: ((String) -> Void)?
     /// Split request (⌘D = side-by-side, ⌘⇧D = stacked). Host wires to the VM.
     public var onSplit: ((_ horizontal: Bool) -> Void)?
+
+    /// The pane-structure section of this surface's right-click menu, supplied
+    /// by the host because those actions belong to it (splits, layout, zoom,
+    /// swap, move-to-session, close) and this module knows nothing about panes.
+    ///
+    /// Right-click is the entry point that lands on the pane you MEAN, needs no
+    /// travel, and is the only mouse route at all in Focus mode, which has no
+    /// pane title bar. Built freshly per open — zoom state and the session list
+    /// both change under the user.
+    public var contextMenuPaneItems: (() -> [NSMenuItem])?
     /// Click anywhere in the surface → make this the active pane. Host wires to
     /// `viewModel.selectPane`. (The surface consumes mouseDown for selection, so
     /// the container's click handler no longer fires — this restores it.)
@@ -1346,6 +1356,18 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
             mouse.state = mouseReportingSuppressed ? .off : .on
             mouse.target = self
             menu.addItem(mouse)
+        }
+        // The host's pane actions last, as one block ending in Close Pane.
+        //
+        // The surface's own text/clipboard entries stay on top because they are
+        // what a right-click on TEXT is usually reaching for, and because the
+        // contextual toggles above are about this surface too — keeping them
+        // together means one insertion point instead of interleaving the two
+        // sources. Close Pane is still the final item overall.
+        let paneItems = contextMenuPaneItems?() ?? []
+        if !paneItems.isEmpty {
+            menu.addItem(.separator())
+            for item in paneItems { menu.addItem(item) }
         }
         return menu
     }

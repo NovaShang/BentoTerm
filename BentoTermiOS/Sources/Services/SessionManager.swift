@@ -80,6 +80,69 @@ final class SessionManager: ObservableObject {
         self.maxSessions = maxSessions
     }
 
+    // MARK: - Terminal geometry
+
+    /// The area the tmux page actually maps to, in points, as last laid out by
+    /// a terminal container (`pageRect`). One value for the app, because there
+    /// is one terminal area — whichever session is on screen measures the same
+    /// box.
+    ///
+    /// This exists because the pre-layout estimate had no way to know about the
+    /// iPad sidebar. It measured `UIScreen.main.bounds`, so in List mode it
+    /// counted the ~260pt sidebar as terminal, and on an 11" iPad in landscape
+    /// claimed ~1194pt of width for a column that has ~934 — a PTY wide enough
+    /// to wrap and misalign every TUI in it. The screen is also wrong under
+    /// Stage Manager and Split View, where the app's window is not the display.
+    private var lastTerminalPageSize: CGSize?
+
+    /// Called by the terminal container each time it computes its page.
+    func recordTerminalPageSize(_ size: CGSize) {
+        guard size.width > 1, size.height > 1 else { return }
+        lastTerminalPageSize = size
+    }
+
+    /// Best available cols×rows for the terminal area: measured if a container
+    /// has laid out, otherwise estimated from the app's WINDOW (not the screen).
+    ///
+    /// Only ever an opening bid — the surface's own reported grid is
+    /// authoritative and replaces it (`lastReportedSize`, `resizeTmuxClient`).
+    /// It has to be close, though: it is what the PTY starts at, and what a
+    /// freshly created session's tmux client viewport is set to.
+    static func terminalGridEstimate() -> (cols: Int, rows: Int) {
+        let font = STTheme.terminalFont
+        let cell = NSString(string: "M").size(withAttributes: [.font: font])
+        guard cell.width > 0, cell.height > 0 else { return (80, 24) }
+        let area = shared.lastTerminalPageSize ?? coldStartPageSize()
+        // Floors guard against a degenerate area only. The old floor was 40
+        // columns, which on a narrow container asked for a PTY wider than the
+        // grid — the same defect as the sidebar, from the other end.
+        return (max(Int(area.width / cell.width), 20),
+                max(Int(area.height / cell.height), 5))
+    }
+
+    /// The terminal area before any container has laid out: the app's window
+    /// minus its safe areas and the chrome the container reserves.
+    private static func coldStartPageSize() -> CGSize {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene?.keyWindow ?? scene?.windows.first
+        let bounds = window?.bounds ?? UIScreen.main.bounds
+        let insets = window?.safeAreaInsets ?? .zero
+        // The nav bar sits inside the safe area, and the quick-keys bar owns a
+        // band below the grid — the two pieces the old fixed `- 110` stood in
+        // for. No sidebar term: a session that has not attached yet shows none
+        // (it needs `isTmuxReady`), and once it appears the container's own
+        // measurement has long since replaced this.
+        let chrome = navigationBarHeight + FloatingQuickKeysToolbar.reservedBand
+        return CGSize(
+            width: max(0, bounds.width - insets.left - insets.right),
+            height: max(0, bounds.height - insets.top - insets.bottom - chrome))
+    }
+
+    private static let navigationBarHeight: CGFloat = 44
+
     // MARK: - Lookup
 
     /// Returns the cached `TerminalViewModel` for `key` if one exists.
@@ -111,14 +174,9 @@ final class SessionManager: ObservableObject {
         // Inject the iOS transport (SSH) + platform services. The VM
         // itself is platform-agnostic and lives in BentoTerminalCore.
         let env = TerminalEnvironment(
-            idealTerminalSize: {
-                let screen = UIScreen.main.bounds
-                let font = STTheme.terminalFont
-                let cell = NSString(string: "M").size(withAttributes: [.font: font])
-                let availH = screen.height - 110
-                return (max(Int(screen.width / cell.width), 40),
-                        max(Int(availH / cell.height), 20))
-            },
+            // Every caller of this is on the MainActor (it is a pre-layout
+            // estimate made during connect), and it reads UIKit either way.
+            idealTerminalSize: { MainActor.assumeIsolated { Self.terminalGridEstimate() } },
             loadKeychainPassword: { key in try? KeychainService.shared.loadPassword(for: key) },
             onAwaitingTriggered: { HapticService.shared.awaitingTriggered() },
             onSessionUpdate: { [weak self] hostID, name, awaiting, prompt in
@@ -476,6 +534,14 @@ final class RecentLaunchStore: ObservableObject {
         launches.insert(launch, at: 0)
         if launches.count > Self.maxLaunches { launches = Array(launches.prefix(Self.maxLaunches)) }
         save()
+    }
+
+    /// Forget everything. The list is a convenience, not a record — and it
+    /// names hosts and sessions, so someone handing the phone over deserves a
+    /// one-tap way to wipe it.
+    func clear() {
+        launches = []
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
     }
 
     private func load() {
