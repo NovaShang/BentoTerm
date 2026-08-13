@@ -7,6 +7,7 @@ import BentoTmuxKit
 import BentoFilePreviewKit
 import BentoFoundationKit
 import BentoGhosttyKit
+import BentoUISharedKit
 
 /// Phases of a pane title-bar drag (tiled mode), reported to the parent so it
 /// can resolve the pane + drop zone under the finger (center = swap, edge =
@@ -135,11 +136,8 @@ final class TerminalContainerVC: UIViewController {
     /// Tiled mode: the container owns sizing (it computes one tmux client size
     /// for the whole viewport and sizes each surface to its exact tmux cell
     /// geometry). When true this VC does NOT push its own size to tmux. Also
-    /// drives the title bar's look (fused state band vs. blend into the
-    /// terminal background).
-    var tiled = false {
-        didSet { titleBar.isTiled = tiled }
-    }
+    /// gates the focus border — one pane on screen has nothing to disambiguate.
+    var tiled = false
 
     /// In tiled mode, the exact surface size (points) = tmux cols×rows × cell,
     /// set by the container so ghostty's grid matches the tmux pane grid. nil =
@@ -282,7 +280,6 @@ final class TerminalContainerVC: UIViewController {
         let tbh = titleBarHeight
         titleBar.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: tbh)
         titleBar.autoresizingMask = [.flexibleWidth, .flexibleBottomMargin]
-        titleBar.surfaceColor = view.backgroundColor ?? STTheme.term
         // The title bar is now just [● state-dot] [title]. Zoom + the pane menu
         // live on the floating toolbar (the strip is one cell tall in tiled
         // mode — too short to host touch targets). See `paneMenu` / onToggleZoom.
@@ -336,9 +333,6 @@ final class TerminalContainerVC: UIViewController {
                 self.terminalVM?.resizeTerminal(cols: size.columns, rows: size.rows)
             }
             self.onSizeChanged?(size)
-        }
-        surface.onTitleChanged = { [weak self] title in
-            self?.updateTitle(title)
         }
         surface.onCopyModeScroll = { [weak self] rows in
             self?.onCopyModeScroll?(rows)
@@ -662,11 +656,21 @@ final class TerminalContainerVC: UIViewController {
             .receive(on: RunLoop.main)
             .sink { [weak self] inMode in
                 self?.surface?.tmuxInMode = inMode
-                self?.titleBar.inCopyMode = inMode
+                self?.titleBar.modeBadge = inMode ? .copyMode : .none
             }
             .store(in: &cancellables)
 
-        updateTitle(vm.pane.currentCommand ?? "shell")
+        // The pane's label, re-derived on every tmux report — a rename
+        // (`select-pane -T`) and a change of foreground command both land here.
+        // Reading it once at bind time is what left the strip showing whatever
+        // was running when the surface was created (macOS re-derives its titles
+        // on every layout pass, so the two disagreed).
+        vm.$pane
+            .map { PaneChrome.title(for: $0) }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] title in self?.updateTitle(title) }
+            .store(in: &cancellables)
     }
 
     // MARK: - Progressive feed (BUG-011)
@@ -828,9 +832,9 @@ extension TerminalContainerVC {
     }
 
     /// Push the current terminal bg + pane state onto the container surround,
-    /// the surface, the title bar (whose fused band re-derives from `surfaceColor`),
-    /// and the state wash. Animated on state change, instant on bg reports /
-    /// theme reapplies.
+    /// the surface, and the state wash. Animated on state change, instant on bg
+    /// reports / theme reapplies. (The title band is NOT derived from the
+    /// terminal bg — it's the shared chrome; see `PaneTitleBar.updateChrome`.)
     private func applyBackgrounds(animated: Bool) {
         let bgColor = resolvedTerminalBackground()
         let surround = STTheme.fusedBackground(
@@ -839,7 +843,6 @@ extension TerminalContainerVC {
         let apply = {
             self.view.backgroundColor = surround
             self.surface.backgroundColor = bgColor
-            self.titleBar.surfaceColor = bgColor
             self.stateTint.backgroundColor = tint
         }
         if animated { UIView.animate(withDuration: 0.26, animations: apply) } else { apply() }
@@ -1294,12 +1297,16 @@ extension TerminalContainerVC {
 // MARK: - Pane menu
 
 extension TerminalContainerVC {
+    /// Is this pane backed by tmux? A plain (non-tmux) session's single pane has
+    /// no `paneVM`, and everything phrased in tmux vocabulary is gated on this.
+    private var isTmuxPane: Bool { paneVM != nil }
+
     private func makePaneMenu() -> UIMenu {
         // Split entries are resolved when the menu OPENS (deferred), so a
         // mode switch after the menu was attached still hides/shows them
         // correctly. Tiled only — List mode has no split entry anywhere.
         let splitSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self, self.showsSplitActions?() ?? true else {
+            guard let self, self.isTmuxPane, self.showsSplitActions?() ?? true else {
                 completion([])
                 return
             }
@@ -1318,7 +1325,7 @@ extension TerminalContainerVC {
         // menu-open (deferred) like the split entries, since the mode can be
         // entered and left by another client at any moment.
         let copyModeSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self, self.titleBar.inCopyMode else {
+            guard let self, self.titleBar.modeBadge == .copyMode else {
                 completion([])
                 return
             }
@@ -1335,7 +1342,11 @@ extension TerminalContainerVC {
         // keys bar (2026-08-02 user decision: the bar was longer than the
         // screen; the zoom button and paste now live here).
         let zoomSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            let zoomed = self?.isZoomed?() ?? false
+            guard let self, self.isTmuxPane else {
+                completion([])
+                return
+            }
+            let zoomed = self.isZoomed?() ?? false
             completion([
                 UIAction(title: zoomed ? "Restore" : "Maximize",
                          image: UIImage(systemName: zoomed
@@ -1345,6 +1356,26 @@ extension TerminalContainerVC {
                 },
             ])
         }
+        // Moving a pane between sessions and closing one are tmux structure;
+        // a plain shell has neither. Deferred like everything else here so the
+        // menu is built once and answers correctly at open time.
+        let structureSection = UIDeferredMenuElement.uncached { [weak self] completion in
+            guard let self, self.isTmuxPane else {
+                completion([])
+                return
+            }
+            completion([
+                self.makeMoveToSessionMenu(),
+                UIAction(title: "Close Pane",
+                         image: UIImage(systemName: "xmark"),
+                         attributes: .destructive) { [weak self] _ in
+                    self?.onCloseRequested?()
+                },
+            ])
+        }
+        // What remains for a plain session is everything about the TERMINAL —
+        // find, paste, profile. It used to get no menu at all (the button was
+        // hidden outright), which took search and paste with it.
         return UIMenu(children: [
             UIAction(title: "Find…",
                      image: UIImage(systemName: "magnifyingglass")) { [weak self] _ in
@@ -1360,12 +1391,7 @@ extension TerminalContainerVC {
             splitSection,
             copyModeSection,
             makeProfileMenu(),
-            makeMoveToSessionMenu(),
-            UIAction(title: "Close Pane",
-                     image: UIImage(systemName: "xmark"),
-                     attributes: .destructive) { [weak self] _ in
-                self?.onCloseRequested?()
-            },
+            structureSection,
         ])
     }
 
@@ -1500,13 +1526,24 @@ final class PaneTitleBar: UIView {
     /// marker, the same rule the idle state follows.
     private let modeIcon = UIImageView()
 
-    /// tmux has this pane in copy-mode (entered from outside Bento).
-    var inCopyMode: Bool = false {
+    /// A non-default mode this pane is sitting in — see `PaneChrome.ModeBadge`,
+    /// the same vocabulary the macOS title bar uses.
+    var modeBadge: PaneChrome.ModeBadge = .none {
         didSet {
-            guard oldValue != inCopyMode else { return }
-            modeIcon.isHidden = !inCopyMode
+            guard oldValue != modeBadge else { return }
+            updateModeBadge()
             updateChrome()
         }
+    }
+
+    private func updateModeBadge() {
+        guard let symbol = modeBadge.symbol else {
+            modeIcon.isHidden = true
+            return
+        }
+        modeIcon.image = UIImage(systemName: symbol)
+        modeIcon.accessibilityLabel = modeBadge.help
+        modeIcon.isHidden = false
     }
 
     /// Drives the state glyph, the title-bar band color, and (when active) text
@@ -1530,20 +1567,6 @@ final class PaneTitleBar: UIView {
         didSet { updateChrome() }
     }
 
-    /// Tiled mode → macOS-style green/gray chrome; otherwise blend into the
-    /// terminal background (`surfaceColor`).
-    var isTiled: Bool = false {
-        didSet { if oldValue != isTiled { updateChrome() } }
-    }
-
-    /// The terminal's reported background. Drives the fused title band in BOTH
-    /// modes — the band is this bg blended toward the state accent, so a bg
-    /// report (or theme/appearance change) re-derives the whole band via
-    /// `updateChrome`.
-    var surfaceColor: UIColor = STTheme.term {
-        didSet { updateChrome() }
-    }
-
     override init(frame: CGRect) {
         super.init(frame: frame)
 
@@ -1562,7 +1585,6 @@ final class PaneTitleBar: UIView {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
 
-        modeIcon.image = UIImage(systemName: "doc.on.doc")
         modeIcon.contentMode = .scaleAspectFit
         modeIcon.isHidden = true
         modeIcon.translatesAutoresizingMaskIntoConstraints = false
@@ -1589,24 +1611,18 @@ final class PaneTitleBar: UIView {
         updateChrome()
     }
 
-    /// The title band FUSES with the terminal's real background: the bg blended
-    /// toward the state accent (working/awaiting/done), or nudged in luminance
-    /// for a faint neutral band when idle so the bento grid stays legible. Tiled
-    /// mode strengthens the active pane; blend (focus / single) mode lets the
-    /// band dissolve into the bg. Ink keys off the bg's luminance so it stays
-    /// legible even when a TUI repaints the bg at runtime.
+    /// The title band and its ink, from the shared `PaneChromeColors` — the same
+    /// strip the macOS chrome draws (2026-08-07: the Mac treatment is the one
+    /// treatment). The band's darkness follows the app appearance, tinted by the
+    /// state accent and strengthened on the focused pane; it no longer derives
+    /// from the terminal's reported background, so a TUI repainting its bg
+    /// leaves the chrome alone.
     private func updateChrome() {
         // Done-unseen wins the band, otherwise the per-state color (nil for
-        // idle → faint neutral band) — the macOS chrome's precedence.
-        let accent: UIColor? = agentFinishedUnseen
-            ? PaneState.uiColor(hex: PaneState.doneUnseenHex)
-            : paneState.chromeAccentUIColor
-        if isTiled {
-            backgroundColor = STTheme.fusedBand(bg: surfaceColor, accent: accent, active: isActivePane)
-        } else {
-            backgroundColor = surfaceColor   // fullscreen pane: band = terminal bg
-        }
-        titleLabel.textColor = STTheme.fusedInk(bg: surfaceColor, active: isActivePane)
+        // idle → neutral band) — the shared chrome precedence.
+        let accent: UIColor? = status.accentHex.map { PaneState.uiColor(hex: $0) }
+        backgroundColor = PaneChromeColors.titleBand(accent: accent, active: isActivePane)
+        titleLabel.textColor = PaneChromeColors.ink(accent: accent, active: isActivePane)
         // Same ink as the title: a mode is information, not an alarm, and it must
         // never be mistaken for one of the state colors.
         modeIcon.tintColor = titleLabel.textColor
@@ -1616,21 +1632,16 @@ final class PaneTitleBar: UIView {
     /// resolved at compute time, not trait-reactive UIColors).
     func recolor() { updateChrome() }
 
-    /// The leading glyph for the current state — identical mapping to the macOS
-    /// title bar and the window sidebar rows: working = play, awaiting =
-    /// question, done-unseen = check, idle = a quiet hollow gray ring (same
-    /// `.circle` family, empty = at rest).
+    /// What this pane's chrome is announcing — the shared mapping the macOS
+    /// title bar and the window sidebar rows also render.
+    private var status: PaneChrome.Status {
+        PaneChrome.Status(state: paneState, agentFinishedUnseen: agentFinishedUnseen)
+    }
+
+    /// The leading glyph for the current state.
     private func updateStateVisuals() {
-        let (symbol, hex): (String, UInt32) = {
-            if agentFinishedUnseen { return ("checkmark.circle.fill", PaneState.doneUnseenHex) }
-            switch paneState {
-            case .working:       return ("play.circle.fill", PaneState.workingHex)
-            case .awaitingInput: return ("questionmark.circle.fill", PaneState.awaitingHex)
-            case .idle:          return ("circle", PaneState.idleHex)
-            }
-        }()
-        let color = PaneState.uiColor(hex: hex)
-        stateIcon.image = UIImage(systemName: symbol, withConfiguration:
+        let color = PaneState.uiColor(hex: status.glyphHex)
+        stateIcon.image = UIImage(systemName: status.symbol, withConfiguration:
             UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
         stateIcon.tintColor = color
 

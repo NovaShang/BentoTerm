@@ -62,6 +62,9 @@ struct TerminalWrapperView: View {
     /// Kill Session is destructive AND irreversible (every window/pane dies), so
     /// it goes through a confirmation before it runs.
     @State private var pendingKillSession = false
+    /// A take-over waiting on confirmation — set only when a NAMED device is
+    /// being dispossessed (see `SessionSizeMismatch.needsConfirmation`).
+    @State private var pendingSizeTakeover: SessionSizeMismatch?
     /// iPad only: which split-view columns are up. Driven by the mode, never by
     /// the user (see `syncSidebarVisibility`).
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .detailOnly
@@ -162,6 +165,19 @@ struct TerminalWrapperView: View {
         viewModel.isTmuxReady && viewModel.sessionMode == .list && !isRegularWidth
     }
 
+    /// A plain shell — no tmux, so nothing phrased in tmux vocabulary belongs
+    /// on screen. Distinct from `!isTmuxReady`, which is also true of a tmux
+    /// session that is merely still connecting.
+    private var isPlain: Bool { viewModel.isPlainSession }
+
+    /// The file browser needs a live SSH connection and a working directory —
+    /// not tmux. It was gated on `isTmuxReady` and so vanished on plain
+    /// sessions, which is exactly where a phone has no other way to reach a
+    /// remote file.
+    private var showsFileBrowser: Bool {
+        viewModel.isTmuxReady || viewModel.phase == .shellReady
+    }
+
     var body: some View {
         terminalChrome
             .sheet(isPresented: $showSettings) { SettingsView() }
@@ -187,6 +203,18 @@ struct TerminalWrapperView: View {
                 Button("Cancel", role: .cancel) { pendingCloseWindow = nil }
             } message: {
                 Text("The processes running in it will be terminated.")
+            }
+            .alert(pendingSizeTakeover?.confirmTitle ?? "", isPresented: Binding(
+                get: { pendingSizeTakeover != nil },
+                set: { if !$0 { pendingSizeTakeover = nil } }
+            )) {
+                Button(pendingSizeTakeover?.actionTitle ?? "Take Over") {
+                    pendingSizeTakeover = nil
+                    viewModel.claimSessionSize()
+                }
+                Button("Cancel", role: .cancel) { pendingSizeTakeover = nil }
+            } message: {
+                Text(pendingSizeTakeover?.confirmMessage ?? "")
             }
             .alert("Kill this session?", isPresented: $pendingKillSession) {
                 Button("Kill Session", role: .destructive) {
@@ -490,15 +518,29 @@ struct TerminalWrapperView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     sessionTitle
                 }
+                // The centre already belongs to Parallel|Focus here, and the bar
+                // is wide enough to carry the banner beside the session name.
+                ToolbarItem(placement: .topBarLeading) {
+                    if let mismatch = viewModel.sessionSizeMismatch {
+                        sizeMismatchBanner(mismatch)
+                    }
+                }
                 ToolbarItem(placement: .principal) {
                     if viewModel.isTmuxReady { modeToggle }
                 }
             } else {
+                // A phone's bar has one usable slot. While the canvas is
+                // someone else's, that slot goes to the reason — the session
+                // name is one tap away in the switcher and does not change.
                 ToolbarItem(placement: .principal) {
-                    sessionTitle
+                    if let mismatch = viewModel.sessionSizeMismatch {
+                        sizeMismatchBanner(mismatch)
+                    } else {
+                        sessionTitle
+                    }
                 }
             }
-            if viewModel.isTmuxReady {
+            if showsFileBrowser {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { paneBridge.container?.presentFileBrowser() } label: {
                         Image(systemName: "folder")
@@ -531,6 +573,13 @@ struct TerminalWrapperView: View {
             HStack {
                 fullscreenBackButton
                 Spacer()
+                // Fullscreen has no bar to sit in, so the banner joins the
+                // floating chrome row — the strip the discs already occupy —
+                // rather than opening a new one over the terminal.
+                if let mismatch = viewModel.sessionSizeMismatch {
+                    sizeMismatchBanner(mismatch)
+                    Spacer()
+                }
                 fullscreenTrailingButtons
             }
             .padding(.top, 8)
@@ -582,6 +631,51 @@ struct TerminalWrapperView: View {
             .transition(.move(edge: .top).combined(with: .opacity))
             .animation(.easeInOut(duration: 0.2), value: viewModel.isReconnecting)
         }
+    }
+
+    /// "This canvas isn't yours" — shown when the grid the session is drawn at
+    /// stops matching what this device fits, in every sizing policy (the
+    /// default `latest` has no owner to name and is exactly where the surprise
+    /// comes from). Tapping makes this device the one that sets the size.
+    ///
+    /// It lives in the NAVIGATION BAR, not above the terminal, and that is
+    /// load-bearing twice over. A strip in the layout would steal rows from a
+    /// canvas that is already too big for the phone — the case this banner
+    /// exists to explain. And shrinking the viewport changes the very grid the
+    /// banner compares: under `smallest` a banner that pushed the device grid
+    /// down could drag the window down with it, clear its own condition, and
+    /// blink forever. Chrome that was already there perturbs nothing.
+    @ViewBuilder
+    private func sizeMismatchBanner(_ mismatch: SessionSizeMismatch) -> some View {
+        Button {
+            if mismatch.needsConfirmation {
+                pendingSizeTakeover = mismatch
+            } else {
+                viewModel.claimSessionSize()
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: TerminalSizingMode.thisDevice.symbol)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.stInkDim)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(mismatch.title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.stInk)
+                    Text("\(mismatch.actionTitle) · \(mismatch.compactDetail)")
+                        .font(.caption2)
+                        .foregroundStyle(Color.stInkDim)
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.bentoSurface))
+            .overlay(Capsule().strokeBorder(Color.bentoBorder, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(mismatch.summary) \(mismatch.actionTitle).")
     }
 
     @ViewBuilder
@@ -773,7 +867,10 @@ struct TerminalWrapperView: View {
     @ViewBuilder
     private var sessionTitle: some View {
         let label = VStack(spacing: 1) {
-            Text(viewModel.activeTmuxSessionName ?? host.displayName)
+            // A plain session has no tmux name to show, and falling back to the
+            // host printed it twice — once as the title, once under it. Name the
+            // kind instead, the way the session list already does.
+            Text(viewModel.activeTmuxSessionName ?? (isPlain ? "Shell" : host.displayName))
                 .font(.headline).lineLimit(1)
             HStack(spacing: 4) {
                 connectionDot
@@ -955,7 +1052,7 @@ struct TerminalWrapperView: View {
 
     private var fullscreenTrailingButtons: some View {
         HStack(spacing: 10) {
-            if viewModel.isTmuxReady {
+            if showsFileBrowser {
                 Button { paneBridge.container?.presentFileBrowser() } label: {
                     Image(systemName: "folder")
                         .font(.system(size: 16, weight: .medium))
@@ -1322,14 +1419,6 @@ final class PaneContainerVC: UIViewController {
         didSet { if oldValue != sizingOwnerIsMe { view.setNeedsLayout() } }
     }
 
-    /// May this device declare its grid to tmux? Only a foreign `manual` owner
-    /// silences us — under `latest` AND `smallest` every client must keep its
-    /// size current, because that is the input tmux computes the window from
-    /// (`smallest` with a stale client is just a wrong minimum).
-    private var canPushClientSize: Bool {
-        !(sizingMode == .thisDevice && !sizingOwnerIsMe)
-    }
-
     /// Is the window's size decided somewhere other than this viewport? Then
     /// the page is the window's natural cell size and we letterbox/pan, rather
     /// than stretching the surface to a grid tmux will not honour.
@@ -1655,16 +1744,41 @@ final class PaneContainerVC: UIViewController {
         // In focus mode, the visible pane fills the page → its reported size is
         // the device-fit client size. Push it (deduped).
         guard isFocusLayout, paneID == effectiveFocusID else { return }
-        pushClientSize(cols: size.columns, rows: size.rows)
+        // …unless the page is the WINDOW's size rather than this viewport's
+        // (`windowSizeIsForeign`): the surface is then sized to the grid another
+        // device chose, and reporting that back declares "this device fits
+        // exactly what you already picked". That is how `smallest` could never
+        // shrink anything from a phone, and it would make the take-over banner
+        // blind — the two grids it compares would be the same number by
+        // construction. Measure the viewport instead.
+        if windowSizeIsForeign, let fit = deviceFitGrid(reserveTitleRow: false) {
+            pushClientSize(cols: fit.cols, rows: fit.rows)
+        } else {
+            pushClientSize(cols: size.columns, rows: size.rows)
+        }
+    }
+
+    /// What this device's viewport fits, in tmux cells, independent of what the
+    /// surfaces are currently sized to. `reserveTitleRow` accounts for the one
+    /// cell of height the top pane's title bar takes in Tiles (Focus hides it).
+    private func deviceFitGrid(reserveTitleRow: Bool) -> (cols: Int, rows: Int)? {
+        guard let cellPx, cellPx.width > 0, cellPx.height > 0 else { return nil }
+        let rect = pageRect
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        let scale = displayScale
+        let cols = max(Int((rect.width * scale) / cellPx.width), 2)
+        let rows = max(Int((rect.height * scale) / cellPx.height) - (reserveTitleRow ? 1 : 0), 1)
+        return (cols, rows)
     }
 
     private func pushClientSize(cols: Int, rows: Int) {
         dlog("[pushClientSize] \(cols)x\(rows)")
         guard cols > 0, rows > 0 else { return }
-        // PRD §2.6 resize whitelist: a session owned by ANOTHER device is the
-        // only case where we stay quiet — tmux ignores `refresh-client` under
-        // `manual` anyway, and under `smallest` our size is half the answer.
-        guard canPushClientSize else { return }
+        // No policy gate here: the view model gates the WIRE (a foreign `manual`
+        // owner silences the `refresh-client`) and records the measurement
+        // either way. Dropping it here instead left the engine believing this
+        // device still fit whatever it measured before the other device took
+        // the size — a stale grid to resize the session to on take-over.
         guard lastClient?.cols != cols || lastClient?.rows != rows else { return }
         lastClient = (cols, rows)
         clientResizeWork?.cancel()
@@ -1739,6 +1853,10 @@ final class PaneContainerVC: UIViewController {
                             height: max(0, view.bounds.height - top - bottomReserve))
         let winTop = view.window.map { view.convert(.zero, to: $0).y } ?? -1
         dlog("[pageRect] frame=\(view.frame) winTop=\(winTop) full=\(isFullscreen) bounds=\(view.bounds) insets=\(insets) top=\(top) page=\(result)")
+        // Hand the measurement to whoever has to ESTIMATE it later: a session
+        // connecting before its container exists has nothing else to go on, and
+        // guessing from the screen counts the iPad sidebar as terminal.
+        SessionManager.shared.recordTerminalPageSize(result.size)
         return result
     }
 
@@ -1974,8 +2092,7 @@ extension PaneContainerVC {
     /// the page == viewport (proportional fit, container pushes one client size);
     /// in Pinned the page is the window's natural cell size (pannable, no push).
     private func layoutTiles(_ panes: [PaneViewModel]) {
-        let totalCols = CGFloat(max(panes.map { $0.pane.x + $0.pane.width }.max() ?? 1, 1))
-        let totalRows = CGFloat(max(panes.map { $0.pane.y + $0.pane.height }.max() ?? 1, 1))
+        let (totalCols, totalRows) = PaneTiling.gridSize(panes: panes.map(\.pane))
         let activeID = viewModel?.activePaneID
 
         guard let ppc = pointsPerCell else {
@@ -1984,18 +2101,17 @@ extension PaneContainerVC {
             // layout pass re-runs cell-exact once a surface has reported.
             let page = pageRect.size
             setContentFrame(page)
-            for (id, vc) in paneControllers {
-                guard let pvm = panes.first(where: { $0.paneID == id }) else { continue }
-                let p = pvm.pane
+            let tiles = PaneTiling.proportionalTiles(
+                panes: panes.map(\.pane), page: page,
+                titleBarHeight: TerminalContainerVC.defaultTitleBarHeight)
+            for tile in tiles {
+                guard let vc = paneControllers[tile.id],
+                      let pvm = panes.first(where: { $0.paneID == tile.id }) else { continue }
                 applyTileAssignments(vc, pvm: pvm, activeID: activeID,
-                                     titleBarHeight: TerminalContainerVC.defaultTitleBarHeight,
-                                     surfaceInsetX: 0,
+                                     titleBarHeight: tile.titleBarHeight,
+                                     surfaceInsetX: tile.surfaceInsetX,
                                      fixedCellSize: nil,
-                                     frame: CGRect(
-                                         x: (CGFloat(p.x) / totalCols) * page.width,
-                                         y: (CGFloat(p.y) / totalRows) * page.height,
-                                         width: (CGFloat(p.width) / totalCols) * page.width,
-                                         height: (CGFloat(p.height) / totalRows) * page.height))
+                                     frame: tile.frame)
             }
             return
         }
@@ -2010,28 +2126,21 @@ extension PaneContainerVC {
         // its true cell size and position (ghostty's grid still == tmux's).
         let page = pageSizeForTiles(totalCols: totalCols, totalRows: totalRows)
         setContentFrame(page)
-        let titleBar = ppc.height
-        let halfGap = ppc.width / 2
 
-        for (id, vc) in paneControllers {
-            guard let pvm = panes.first(where: { $0.paneID == id }) else { continue }
+        for tile in PaneTiling.cellExactTiles(panes: panes.map(\.pane), pointsPerCell: ppc) {
+            guard let vc = paneControllers[tile.id],
+                  let pvm = panes.first(where: { $0.paneID == tile.id }) else { continue }
             let p = pvm.pane
             // The surface is one cell larger than the pane so ghostty's grid >=
             // tmux (point rounding never drops a column/row); overflow is clipped.
             applyTileAssignments(vc, pvm: pvm, activeID: activeID,
-                                 titleBarHeight: titleBar,
-                                 surfaceInsetX: halfGap,
+                                 titleBarHeight: tile.titleBarHeight,
+                                 surfaceInsetX: tile.surfaceInsetX,
                                  fixedCellSize: CGSize(width: CGFloat(p.width + 1) * ppc.width,
                                                        height: CGFloat(p.height + 1) * ppc.height),
-                                 frame: CGRect(
-                                     x: CGFloat(p.x) * ppc.width - halfGap,
-                                     y: CGFloat(p.y) * ppc.height,
-                                     width: CGFloat(p.width) * ppc.width + 2 * halfGap,
-                                     height: titleBar + CGFloat(p.height) * ppc.height))
+                                 frame: tile.frame)
         }
-        if canPushClientSize {
-            recomputeTilesClientSize()
-        }
+        recomputeTilesClientSize()
         // Refresh the drag-to-resize divider hot zones for the new geometry.
         dividerOverlay.frame = CGRect(origin: .zero, size: page)
         dividerOverlay.pointsPerCell = CGPoint(x: ppc.width, y: ppc.height)
@@ -2091,18 +2200,14 @@ extension PaneContainerVC {
         positionFindBar()
     }
 
-    /// One tmux client size for the whole viewport (Tiles, Tracking only).
-    /// Cell-exact tiling reserves exactly ONE cell of height for the top title
-    /// bar (stacked panes reuse divider rows), so the usable terminal grid is
-    /// the viewport minus a single cell row.
+    /// One tmux client size for the whole viewport (Tiles). Cell-exact tiling
+    /// reserves exactly ONE cell of height for the top title bar (stacked panes
+    /// reuse divider rows), so the usable terminal grid is the viewport minus a
+    /// single cell row. Always measured, even when the policy forbids declaring
+    /// it — see `pushClientSize`.
     private func recomputeTilesClientSize() {
-        guard let cellPx else { return }
-        let rect = pageRect
-        guard rect.width > 0, rect.height > 0 else { return }
-        let scale = displayScale
-        let cols = max(Int((rect.width * scale) / cellPx.width), 2)
-        let rows = max(Int((rect.height * scale) / cellPx.height) - 1, 1)
-        pushClientSize(cols: cols, rows: rows)
+        guard let fit = deviceFitGrid(reserveTitleRow: true) else { return }
+        pushClientSize(cols: fit.cols, rows: fit.rows)
     }
 }
 
@@ -2110,76 +2215,28 @@ extension PaneContainerVC {
 
 extension PaneContainerVC {
     /// Resize the boundary owned by `paneID` by a signed cell delta (tmux
-    /// `resize-pane`). Vertical divider → grow Right/shrink Left; horizontal →
-    /// Down/Up. Identical mapping to the macOS host's `resizeBoundary`.
+    /// `resize-pane`).
     private func resizeBoundary(paneID: TmuxPaneID, vertical: Bool, deltaCells: Int) {
-        guard deltaCells != 0 else { return }
-        let dir = vertical ? (deltaCells > 0 ? "R" : "L")
-                           : (deltaCells > 0 ? "D" : "U")
+        guard let dir = PaneTiling.resizeDirection(vertical: vertical, deltaCells: deltaCells)
+        else { return }
         viewModel?.resizePaneBy(paneID, direction: dir, amount: abs(deltaCells))
     }
 
-    /// Compute divider hot zones from the current pane container frames, matching
-    /// the macOS `computeDividers`. Side-by-side panes meet on the divider
-    /// centerline (each container grew half a cell into the gap), so neighbours
-    /// are detected within ~1 cell. The vertical hot zone is centred on the line;
-    /// the horizontal one sits just ABOVE it (in the upper pane's surface) so it
-    /// never covers the lower pane's title bar — which keeps title-bar drag-to-
-    /// swap fully grabbable.
-    private func computeTileDividers(page: CGSize, ppc: CGSize) -> [TileDividerOverlay.Divider] {
-        let frames: [(id: TmuxPaneID, frame: CGRect)] = paneControllers.compactMap { id, vc in
-            vc.view.isHidden ? nil : (id, vc.view.frame)
+    /// The pane containers currently on screen — the input to divider and drop
+    /// hit-testing (both shared with the macOS host).
+    var paneFrames: [PaneFrame] {
+        paneControllers.compactMap { id, vc in
+            vc.view.isHidden ? nil : PaneFrame(id: id, frame: vc.view.frame)
         }
-        guard frames.count > 1 else { return [] }
-        let gapTolX = max(ppc.width * 1.8, 6)
-        let gapTolY = max(ppc.height * 1.8, 6)
-        let eps: CGFloat = 2
-        let hotV = TileDividerOverlay.hotThicknessV
-        let above = TileDividerOverlay.hotAboveLine
-        let below = TileDividerOverlay.hotBelowLine
-        var result: [TileDividerOverlay.Divider] = []
-
-        for a in frames {
-            // Vertical divider: a pane sits just to the right of a's right edge.
-            let rightEdge = a.frame.maxX
-            if rightEdge < page.width - eps {
-                let neighbors = frames.filter {
-                    $0.frame.minX > rightEdge - eps
-                        && $0.frame.minX - rightEdge < gapTolX
-                        && yOverlap($0.frame, a.frame) > eps
-                }
-                if let nearest = neighbors.map(\.frame.minX).min() {
-                    let pos = (rightEdge + nearest) / 2
-                    let yTop = neighbors.map { max($0.frame.minY, a.frame.minY) }.min() ?? a.frame.minY
-                    let yBot = neighbors.map { min($0.frame.maxY, a.frame.maxY) }.max() ?? a.frame.maxY
-                    result.append(.init(paneID: a.id, vertical: true, position: pos,
-                                        hotRect: CGRect(x: pos - hotV / 2, y: yTop,
-                                                        width: hotV, height: yBot - yTop)))
-                }
-            }
-            // Horizontal divider: a pane sits just below a's bottom edge.
-            let bottomEdge = a.frame.maxY
-            if bottomEdge < page.height - eps {
-                let neighbors = frames.filter {
-                    $0.frame.minY > bottomEdge - eps
-                        && $0.frame.minY - bottomEdge < gapTolY
-                        && xOverlap($0.frame, a.frame) > eps
-                }
-                if let nearest = neighbors.map(\.frame.minY).min() {
-                    let pos = (bottomEdge + nearest) / 2
-                    let xL = neighbors.map { max($0.frame.minX, a.frame.minX) }.min() ?? a.frame.minX
-                    let xR = neighbors.map { min($0.frame.maxX, a.frame.maxX) }.max() ?? a.frame.maxX
-                    result.append(.init(paneID: a.id, vertical: false, position: pos,
-                                        hotRect: CGRect(x: xL, y: pos - above,
-                                                        width: xR - xL, height: above + below)))
-                }
-            }
-        }
-        return result
     }
 
-    private func yOverlap(_ a: CGRect, _ b: CGRect) -> CGFloat { min(a.maxY, b.maxY) - max(a.minY, b.minY) }
-    private func xOverlap(_ a: CGRect, _ b: CGRect) -> CGFloat { min(a.maxX, b.maxX) - max(a.minX, b.minX) }
+    /// Divider hot zones for the current tiling — the same computation the macOS
+    /// host runs, with touch-sized grab areas instead of pointer-sized ones.
+    private func computeTileDividers(page: CGSize, ppc: CGSize) -> [PaneDivider] {
+        PaneTiling.dividers(frames: paneFrames, bounds: page,
+                            pointsPerCell: CGPoint(x: ppc.width, y: ppc.height),
+                            hotZone: TileDividerOverlay.hotZone)
+    }
 }
 
 // MARK: - Title-drag swap / dock
@@ -2191,15 +2248,11 @@ extension PaneContainerVC {
 // that side).
 
 extension PaneContainerVC {
-    /// The pane + drop zone under a window-coordinate point, excluding the
+    /// Where a drop at a window-coordinate point would land, excluding the
     /// dragged pane. Pane frames live in `contentView`, so convert in first.
-    private func dropTarget(atWindowPoint p: CGPoint, excluding source: TmuxPaneID)
-        -> (pane: TmuxPaneID, zone: PaneDropZone)? {
-        let local = contentView.convert(p, from: nil)
-        guard let (id, vc) = paneControllers.first(where: { id, vc in
-            id != source && !vc.view.isHidden && vc.view.frame.contains(local)
-        }) else { return nil }
-        return (id, PaneDropZone.zone(at: local, in: vc.view.frame))
+    private func landing(atWindowPoint p: CGPoint, excluding source: TmuxPaneID) -> PaneDrag.Landing? {
+        PaneDrag.landing(at: contentView.convert(p, from: nil),
+                         in: paneFrames, excluding: source)
     }
 
     private func handleTitleSwap(source paneID: TmuxPaneID, phase: TitleDragPhase) {
@@ -2210,16 +2263,17 @@ extension PaneContainerVC {
         case .began:
             paneControllers[paneID]?.view.alpha = 0.6
         case .moved(let p):
-            updateDropOverlay(dropTarget(atWindowPoint: p, excluding: paneID))
+            updateDropOverlay(landing(atWindowPoint: p, excluding: paneID))
         case .ended(let p):
-            let drop = dropTarget(atWindowPoint: p, excluding: paneID)
+            let drop = landing(atWindowPoint: p, excluding: paneID)
             endTitleDrag(paneID)
-            guard let (target, zone) = drop else { return }
-            if let dock = zone.dock {
-                viewModel?.movePane(paneID, splitting: target,
-                                    horizontal: dock.horizontal, before: dock.before)
-            } else {
-                viewModel?.swapPanes(paneID, with: target)
+            guard let drop else { return }
+            switch PaneDrag.action(source: paneID, landing: drop) {
+            case let .dock(source, target, horizontal, before):
+                viewModel?.movePane(source, splitting: target,
+                                    horizontal: horizontal, before: before)
+            case let .swap(source, target):
+                viewModel?.swapPanes(source, with: target)
             }
         case .cancelled:
             endTitleDrag(paneID)
@@ -2235,8 +2289,8 @@ extension PaneContainerVC {
     /// Show/move/hide the landing preview. The frame animates between zones
     /// and across panes while visible; appearing (or reappearing after a gap)
     /// snaps into place so the preview never slides in from a stale spot.
-    private func updateDropOverlay(_ drop: (pane: TmuxPaneID, zone: PaneDropZone)?) {
-        guard let drop, let paneFrame = paneControllers[drop.pane]?.view.frame else {
+    private func updateDropOverlay(_ drop: PaneDrag.Landing?) {
+        guard let drop else {
             dropOverlay?.isHidden = true
             return
         }
@@ -2251,13 +2305,12 @@ extension PaneContainerVC {
             dropOverlay = overlay
             appearing = true
         }
-        let target = drop.zone.highlightRect(in: paneFrame)
         overlay.isHidden = false
         overlay.zone = drop.zone
         if appearing {
-            overlay.frame = target
+            overlay.frame = drop.highlightRect
         } else {
-            UIView.animate(withDuration: 0.12) { overlay.frame = target }
+            UIView.animate(withDuration: 0.12) { overlay.frame = drop.highlightRect }
         }
     }
 }
@@ -2370,13 +2423,16 @@ extension PaneContainerVC {
                                        containerBounds: containerBounds, animated: false)
     }
 
-    /// Point the floating toolbar's menu at the active pane. Pane actions only
-    /// exist for tmux panes (a non-tmux single pane has no pane menu), so the
-    /// menu button is hidden otherwise.
+    /// Point the floating toolbar's menu at the active pane.
+    ///
+    /// Shown for a plain session too: the menu drops its tmux entries there and
+    /// keeps Find / Paste / Change Profile, which are about the terminal and
+    /// have nothing to do with tmux. Hiding the whole button (what this used to
+    /// do for anything without a `paneVM`) took search and paste with it, and on
+    /// a phone the bar is the only way to reach either.
     private func refreshFloatingToolbarActions(for activeVC: TerminalContainerVC?) {
-        let isTmuxPane = activeVC?.paneVM != nil
-        floatingToolbar.showsPaneActions = isTmuxPane
-        guard isTmuxPane, let activeVC else { return }
+        floatingToolbar.showsPaneActions = activeVC != nil
+        guard let activeVC else { return }
         // The pane menu is cached on the VC (deferred elements re-resolve at
         // open time); only reassign when the active pane actually changed, so
         // per-layout-pass calls don't churn UIKit's menu plumbing.
@@ -2526,6 +2582,11 @@ extension PaneContainerVC {
 /// which re-runs this body and re-derives `windowState`. (`.id(stateVersion)`
 /// on the scroll content would also reset the user's horizontal scroll
 /// position every poll, so it's deliberately not used here.)
+///
+/// Drag a tab onto another to rearrange the session (`reorderWindow`): the
+/// system drag interaction, so the phone's usual long-press-then-move applies
+/// and holding still keeps opening the context menu instead — a hand-rolled
+/// long-press gesture would have to fight that menu for the same touch.
 struct WindowTabBar: View {
     @ObservedObject var viewModel: TerminalViewModel
     @State private var pendingClose: TmuxWindowID?
@@ -2533,6 +2594,9 @@ struct WindowTabBar: View {
     @State private var pendingMove: TmuxWindowID?
     @State private var moveSessionName = ""
     @State private var landingChoice: (window: TmuxWindowID, session: String)?
+    /// The tab a dragged tab is currently hovering over — it lifts to show the
+    /// slot the drop would take.
+    @State private var dropTarget: TmuxWindowID?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -2546,8 +2610,40 @@ struct WindowTabBar: View {
                                   paneCount: viewModel.panes(in: window.id).count,
                                   isActive: window.id == viewModel.activeWindowID)
                             .id(window.id)
+                            .scaleEffect(dropTarget == window.id ? 1.08 : 1)
+                            .animation(.easeOut(duration: 0.15), value: dropTarget)
                             .onTapGesture { viewModel.selectWindow(window.id) }
+                            .draggable(window.id.description) {
+                                // Drag preview: the same chip, drawn inactive so
+                                // it reads as a thing in transit rather than as
+                                // a second "current window".
+                                WindowTab(name: viewModel.windowBodyName(window.id),
+                                          state: viewModel.windowState(window.id),
+                                          paneCount: viewModel.panes(in: window.id).count,
+                                          isActive: false)
+                            }
+                            .dropDestination(for: String.self) { items, _ in
+                                drop(items, onto: window.id)
+                            } isTargeted: { targeted in
+                                if targeted { dropTarget = window.id }
+                                else if dropTarget == window.id { dropTarget = nil }
+                            }
                             .contextMenu {
+                                // The drag's one-step equivalent, for when the
+                                // drag isn't practical (VoiceOver, one hand on
+                                // a long strip).
+                                Button {
+                                    shift(window.id, earlier: true)
+                                } label: {
+                                    Label("Move Left", systemImage: "arrow.left")
+                                }
+                                .disabled(position(of: window.id) == 0)
+                                Button {
+                                    shift(window.id, earlier: false)
+                                } label: {
+                                    Label("Move Right", systemImage: "arrow.right")
+                                }
+                                .disabled(position(of: window.id) == viewModel.windows.count - 1)
                                 WindowMoveToSessionMenu(viewModel: viewModel) { session in
                                     moveWindow(window.id, to: session)
                                 } onNewSession: {
@@ -2635,6 +2731,32 @@ struct WindowTabBar: View {
         } message: {
             Text("That session isn't settled into Parallel or Focus yet. Where should this land?")
         }
+    }
+
+    /// Landing a dragged tab on `target` gives it that tab's position — drop
+    /// where you want it to end up.
+    ///
+    /// The payload is the window ID's own text (`@7`) rather than a custom
+    /// transfer type, which would mean a UTType declared in the Info.plist and
+    /// kept in sync for a two-character string. Foreign text dropped in from
+    /// another app therefore reaches here too, and is refused by the same check
+    /// that guards a stale ID: it has to name a window this session still has.
+    private func drop(_ items: [String], onto target: TmuxWindowID) -> Bool {
+        dropTarget = nil
+        guard let dragged = items.first.flatMap({ TmuxWindowID(string: $0) }),
+              dragged != target,
+              viewModel.windows.contains(where: { $0.id == dragged }),
+              let destination = position(of: target) else { return false }
+        Task { await viewModel.reorderWindow(dragged, toIndex: destination) }
+        return true
+    }
+
+    private func position(of id: TmuxWindowID) -> Int? {
+        viewModel.windows.firstIndex { $0.id == id }
+    }
+
+    private func shift(_ id: TmuxWindowID, earlier: Bool) {
+        Task { await viewModel.shiftWindow(id, earlier: earlier) }
     }
 
     /// Run the move; an unsettled target bounces back as the landing dialog.
@@ -2861,33 +2983,22 @@ private struct WindowTab: View {
 /// the touch to drag-resize them (sends tmux `resize-pane`). Everywhere else,
 /// touches fall through to the panes. iOS mirror of the macOS `DividerOverlay`.
 final class TileDividerOverlay: UIView {
-    /// A draggable boundary: the pane that owns it, orientation, and hot rect.
-    struct Divider {
-        let paneID: TmuxPaneID
-        let vertical: Bool    // true = vertical line, drags left/right
-        let position: CGFloat // x (vertical) or y (horizontal), in points
-        let hotRect: CGRect
-    }
+    /// Touch grab sizes (the pointer-driven macOS overlay uses a symmetric 10).
+    /// Vertical dividers are CENTRED on the line. Horizontal dividers STRADDLE
+    /// it — generous above (the upper pane's free surface) but only a little
+    /// below, so the band sits on the border yet barely covers the lower pane's
+    /// title bar, which is the drag-to-swap handle.
+    static let hotZone = DividerHotZone(verticalThickness: 34, aboveLine: 26, belowLine: 6)
 
-    /// Touch grab sizes (the mouse-era macOS overlay uses 10). Vertical dividers
-    /// are CENTRED on the line. Horizontal dividers STRADDLE it — generous above
-    /// (the upper pane's free surface) but only a little below, so the band sits
-    /// on the border yet barely covers the lower pane's title bar, which is the
-    /// drag-to-swap handle.
-    static let hotThicknessV: CGFloat = 34
-    static let hotAboveLine: CGFloat = 26
-    static let hotBelowLine: CGFloat = 6
-
-    var dividers: [Divider] = [] { didSet { setNeedsDisplay() } }
+    var dividers: [PaneDivider] = [] { didSet { setNeedsDisplay() } }
     /// Points per tmux cell, set by the host so drag distance → cell delta.
     var pointsPerCell: CGPoint?
     /// (paneID, vertical, signed incremental cell delta) during a live drag.
     var onResize: ((TmuxPaneID, Bool, Int) -> Void)?
 
-    private var dragDivider: Divider?
-    private var dragStart: CGPoint = .zero
-    private var dragSentCells = 0
-    private var dragLivePos: CGFloat?
+    /// The drag in progress — cell-delta math and live line position, shared
+    /// with the macOS overlay.
+    private var drag: DividerDrag?
 
     private static let accent = UIColor(red: 0.20, green: 0.80, blue: 0.55, alpha: 1.0)
 
@@ -2903,7 +3014,7 @@ final class TileDividerOverlay: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    private func divider(at point: CGPoint) -> Divider? {
+    private func divider(at point: CGPoint) -> PaneDivider? {
         dividers.first { $0.hotRect.contains(point) }
     }
 
@@ -2916,28 +3027,16 @@ final class TileDividerOverlay: UIView {
         switch g.state {
         case .began:
             let p = g.location(in: self)
-            dragDivider = divider(at: p)
-            dragStart = p
-            dragSentCells = 0
-            dragLivePos = dragDivider.map { $0.vertical ? p.x : p.y }
+            drag = divider(at: p).map { DividerDrag(divider: $0, startPoint: p) }
             setNeedsDisplay()
         case .changed:
-            guard let d = dragDivider, let ppc = pointsPerCell else { return }
-            let p = g.location(in: self)
-            dragLivePos = d.vertical ? p.x : p.y
-            setNeedsDisplay()
-            let deltaPts = d.vertical ? (p.x - dragStart.x) : (p.y - dragStart.y)
-            let perCell = d.vertical ? ppc.x : ppc.y
-            guard perCell > 0 else { return }
-            let totalCells = Int((deltaPts / perCell).rounded())
-            let incremental = totalCells - dragSentCells
-            guard incremental != 0 else { return }
-            dragSentCells = totalCells
-            onResize?(d.paneID, d.vertical, incremental)
+            guard drag != nil, let ppc = pointsPerCell else { return }
+            let cells = drag!.advance(to: g.location(in: self), pointsPerCell: ppc)
+            setNeedsDisplay()   // the live line follows the finger even between cells
+            guard cells != 0 else { return }
+            onResize?(drag!.divider.paneID, drag!.divider.vertical, cells)
         default:
-            dragDivider = nil
-            dragSentCells = 0
-            dragLivePos = nil
+            drag = nil
             setNeedsDisplay()
         }
     }
@@ -2948,12 +3047,12 @@ final class TileDividerOverlay: UIView {
         }
         // The line being dragged tracks the finger (tmux relayout lags), drawn in
         // the accent colour so the drag is clearly visible.
-        if let d = dragDivider, let pos = dragLivePos {
-            stroke(d, at: pos, color: Self.accent, width: 2)
+        if let drag {
+            stroke(drag.divider, at: drag.livePosition, color: Self.accent, width: 2)
         }
     }
 
-    private func stroke(_ d: Divider, at pos: CGFloat, color: UIColor, width: CGFloat) {
+    private func stroke(_ d: PaneDivider, at pos: CGFloat, color: UIColor, width: CGFloat) {
         color.setStroke()
         let path = UIBezierPath()
         path.lineWidth = width
