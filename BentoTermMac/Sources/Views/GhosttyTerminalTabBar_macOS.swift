@@ -41,6 +41,19 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// until that device hands it over (or leaves).
     var sizingOwner: TmuxSizingOwner?
     var sizingOwnerIsMe = false
+    /// The take-over banner's state, or nil when this window's grid IS the
+    /// session's. Settled by the view model (it only changes after the same
+    /// answer has held for a couple of seconds), so this can be applied
+    /// verbatim — nothing here debounces or second-guesses it.
+    var sizeMismatch: SessionSizeMismatch? {
+        didSet {
+            guard sizeMismatch != oldValue else { return }
+            applySizeMismatch()
+        }
+    }
+    /// The banner was clicked and (where a named device is being dispossessed)
+    /// confirmed: make this window the one that sets the session size.
+    var onClaimSessionSize: (() -> Void)?
     var onCloseTab: (() -> Void)?
     /// The Tiled|List mode switch picked a mode (the manager runs `setMode`,
     /// warning first when a mixed external structure must be flattened).
@@ -52,17 +65,13 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     /// False on a launcher window: this toolbar's window has no session YET.
     ///
-    /// The two windows are the same window, so the toolbar is the same toolbar
-    /// and every item keeps its slot; what changes is which of them have
-    /// something to refer to. The session button and the Parallel|Focus switch
-    /// are DISABLED rather than removed — they name and reshape a session, and
-    /// dropping them would resize the toolbar so that answering the launcher's
-    /// question shifted every remaining control sideways, which is the same
-    /// "a new window appeared" impression the in-place fill exists to avoid.
-    /// The window strip is the one thing that goes: it is a variable-width list
-    /// of tmux windows, and an empty list is not a disabled control, it is
-    /// nothing. Its slot is already shared with search (`setCenterShowsTabs`),
-    /// so the centre holds search — exactly what a one-window session shows.
+    /// These items used to be DISABLED rather than removed, to keep every slot
+    /// filled so that answering the launcher's question didn't shift the
+    /// remaining controls sideways. That was reversed deliberately (user
+    /// decision): the toolbar now shows only what the window can actually do, so
+    /// the launcher does move its controls when a session arrives. A greyed
+    /// control still has to be read and dismissed, and there were three of them
+    /// on a screen whose whole job is to ask one question.
     var hasSession = true {
         didSet {
             guard hasSession != oldValue else { return }
@@ -72,14 +81,58 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     }
 
     private func applySessionAvailability() {
-        sessionsButton.isEnabled = hasSession
-        modeSwitch.isEnabled = hasSession
-        // Nothing to preview: the dock's content is the focused pane's folder.
-        previewButton.isEnabled = hasSession
-        // An attributed title ignores AppKit's disabled dimming, so the color
-        // has to be chosen here or a dead button reads as a live one.
+        syncToolbarItems()
         setMenuText(sessionsButton, sessionsText)
         setMenuText(newButton, "New")
+    }
+
+    /// Which items belong in the toolbar right now.
+    ///
+    /// - **Sessions** names the active session and lists the others: nothing to
+    ///   name without one, and the launcher page below already IS that list.
+    /// - **Parallel|Focus** reshapes a tmux session — meaningless on a launcher,
+    ///   and on a plain terminal there are no panes to arrange.
+    /// - **Preview** shows the focused pane's folder, so it needs a pane. A
+    ///   PLAIN terminal keeps it: it has a real working directory (the shell's
+    ///   OSC 7 report), which is exactly what the dock browses.
+    /// - Search, New and Settings survive every state — searching, creating and
+    ///   configuring are what a window with nothing in it is FOR.
+    ///
+    /// The window strip is not here: it is a variable-width list, and its slot
+    /// is already shared with search by `setCenterShowsTabs`.
+    private func syncToolbarItems() {
+        guard let tb = toolbarRef else { return }
+        setItem(Self.sessionsID, visible: hasSession, insertAt: 0)
+        let afterSessions = tb.items.firstIndex { $0.itemIdentifier == Self.sessionsID }
+            .map { $0 + 1 } ?? 0
+        setItem(Self.modeID, visible: hasSession && wantsModeItem, insertAt: afterSessions)
+        // The take-over banner rides in the toolbar rather than in a strip above
+        // the panes, and that is deliberate: a strip would shrink the terminal,
+        // which is the very grid the banner is comparing — it would keep
+        // clearing its own condition and blink. The toolbar is chrome that was
+        // already there, so it perturbs nothing.
+        let afterMode = tb.items.firstIndex { $0.itemIdentifier == Self.modeID }
+            .map { $0 + 1 } ?? afterSessions
+        setItem(Self.sizeID, visible: hasSession && sizeMismatch != nil, insertAt: afterMode)
+        // Preview is the rightmost item, so it re-enters at the end.
+        setItem(Self.previewID, visible: hasSession, insertAt: tb.items.count)
+    }
+
+    /// Add or remove the toolbar ITEM — not just its view.
+    ///
+    /// Setting `isHidden` on the view leaves the `NSToolbarItem` in place, and
+    /// the item draws its own background: a plain terminal showed an empty
+    /// switch-shaped capsule with no labels in it, the control gone but the
+    /// thing it sat in still there. Removing the item is what the centre strip
+    /// already does to swap tabs for search.
+    private func setItem(_ id: NSToolbarItem.Identifier, visible: Bool, insertAt: Int) {
+        guard let tb = toolbarRef else { return }
+        let existing = tb.items.firstIndex { $0.itemIdentifier == id }
+        if visible, existing == nil {
+            tb.insertItem(withItemIdentifier: id, at: min(max(insertAt, 0), tb.items.count))
+        } else if !visible, let existing {
+            tb.removeItem(at: existing)
+        }
     }
 
     /// A view to put in the search slot instead of the palette button.
@@ -99,7 +152,31 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// the row says. They differ for a session on an ssh host, whose row has to
     /// name the machine — showing the bare name would present it as a local
     /// session, and clicking it would then be a different session than it read.
-    var sessions: [(key: String, label: String, dot: NSImage?, isOpen: Bool)] = []
+    var sessions: [SessionRow] = []
+
+    /// One row of the Sessions list.
+    ///
+    /// `key` is the session's identity (`TmuxSessionID.key`) and `label` is what
+    /// the row says. They differ for a session on an ssh host, whose row has to
+    /// name the machine.
+    ///
+    /// `info` is what the LOCAL `tmux ls` poll knows — and it is nil for a
+    /// remote session on purpose, not by omission. Every per-session action
+    /// below the row (rename, kill) is a `TmuxCLI` call against the local
+    /// server; pointing one at a session on another machine is the exact bug
+    /// `LocalTmuxSessionName` exists to prevent. A remote session's rename and
+    /// kill live in its own window's toolbar, where they go over its own
+    /// control channel.
+    struct SessionRow {
+        let key: String
+        let label: String
+        let dot: NSImage?
+        /// Already loaded as a Bento tab — clicking focuses it rather than
+        /// opening a second.
+        let isOpen: Bool
+        let local: LocalTmuxSessionName?
+        let info: LocalSessionInfo?
+    }
     var activeSessionKey: String?
     var onSelectSession: ((String) -> Void)?
 
@@ -111,6 +188,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     private let moreButton = NSButton()
     /// Show/hide the preview dock (always present, like an inspector toggle).
     private let previewButton = NSButton()
+    /// The take-over banner: present only while this window's grid differs from
+    /// the session's (see `sizeMismatch`).
+    private let sizeButton = NSButton()
     /// The sessions button's current label text — kept so its rasterized chevron
     /// can be rebuilt (with the same text) when the appearance changes.
     private var sessionsText = "Session"
@@ -148,6 +228,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     fileprivate static let moreID = NSToolbarItem.Identifier("bento.more")
     fileprivate static let centerID = NSToolbarItem.Identifier("bento.center")
     fileprivate static let previewID = NSToolbarItem.Identifier("bento.preview")
+    fileprivate static let sizeID = NSToolbarItem.Identifier("bento.size")
     fileprivate static let searchID = NSToolbarItem.Identifier("bento.search")
     fileprivate static let searchCompactID = NSToolbarItem.Identifier("bento.searchCompact")
 
@@ -191,6 +272,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         configure(previewButton, symbol: "sidebar.trailing", title: "",
                   action: #selector(previewTapped))
         previewButton.toolTip = "Show/hide the file panel (⌥⌘P)"
+        configure(sizeButton, symbol: TerminalSizingMode.thisDevice.symbol, title: "",
+                  action: #selector(sizeBannerTapped))
         configureSearchField()
         configure(searchCompact, symbol: "magnifyingglass", title: "", action: #selector(searchTapped))
         searchCompact.toolTip = "Search commands, files, sessions, windows, panes (⌘P)"
@@ -225,12 +308,18 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     /// Reflect the active tab's mode on the Tiled|List switch. nil = the tab
     /// has no tmux session (plain terminal) — the switch is meaningless there,
-    /// so it hides.
+    /// so it goes away entirely.
     func setSessionMode(_ mode: TmuxSessionMode?) {
-        modeSwitch.isHidden = (mode == nil)
+        wantsModeItem = (mode != nil)
+        syncToolbarItems()
         guard let mode else { return }
         modeSwitch.selectedSegment = (mode == .tiled) ? 0 : 1
     }
+
+    /// Whether the Layout item belongs in the toolbar at all. Kept as state
+    /// because `setSessionMode` can run before `makeToolbar`, and the answer has
+    /// to survive until there is a toolbar to apply it to.
+    private var wantsModeItem = true
 
     @objc private func modeSwitched() {
         onSelectMode?(modeSwitch.selectedSegment == 1 ? .list : .tiled)
@@ -247,8 +336,27 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         searchField.imagePosition = .imageLeading
         searchField.image = NSImage(systemSymbolName: "magnifyingglass",
                                     accessibilityDescription: "Search")
-        searchField.title = "Search commands, files, sessions…"
         searchField.alignment = .left
+        // The magnifier and the placeholder are PROMPTS, not content, and the
+        // button draws both at full label strength — the loudest thing in the
+        // toolbar on the one item that has nothing to say yet.
+        //
+        // Two mechanisms, because one does not cover both: `contentTintColor`
+        // colors the template image, but a BORDERED button (`.roundRect`) draws
+        // its title with its own style and ignores the tint there — setting only
+        // the tint left the text at full `labelColor`, i.e. near-black on light.
+        // The title's color can only be set through `attributedTitle`.
+        searchField.contentTintColor = .tertiaryLabelColor
+        searchField.attributedTitle = NSAttributedString(
+            string: "Search commands, files, sessions…",
+            attributes: [
+                .foregroundColor: NSColor.placeholderTextColor,
+                // The button's own font: an attributed title with no font
+                // attribute does not reliably inherit the control's, so leaving
+                // it out would resize the text while recoloring it.
+                .font: searchField.font
+                    ?? NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .large)),
+            ])
         searchField.target = self
         searchField.action = #selector(searchTapped)
         searchField.toolTip = "⌘P"
@@ -271,19 +379,115 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         header.isEnabled = false
         menu.addItem(header)
         for session in sessions {
-            let item = NSMenuItem(title: session.label,
+            let item = NSMenuItem(title: sessionRowTitle(session),
                                   action: #selector(selectSessionAction(_:)),
                                   keyEquivalent: "")
             item.target = self
             item.representedObject = session.key
             item.image = session.dot
             item.state = (session.key == activeSessionKey) ? .on : .off
-            // A hollow dot already says "not open"; the suffix says what
-            // clicking will DO, since it opens rather than switches.
-            if !session.isOpen { item.title = "\(session.label)  —  open in a new tab" }
+            if let sub = sessionRowSubmenu(session) {
+                // An item with a submenu no longer fires its own action in
+                // AppKit (unlike the SwiftUI `Menu … primaryAction:` this shape
+                // came from), so the submenu leads with the action the row used
+                // to perform. Clicking the row still costs nothing extra — it
+                // opens the submenu, and the thing you wanted is the first item.
+                item.submenu = sub
+            }
             menu.addItem(item)
         }
         menu.addItem(.separator())
+    }
+
+    /// `name  ·  2 windows  ·  5m ago`, via the shared launcher phrasing so this
+    /// menu and the launcher describe a session the same way. A remote session
+    /// (no local poll info) keeps the older "— open in a new tab" hint, which is
+    /// all we can honestly say about it.
+    private func sessionRowTitle(_ session: SessionRow) -> String {
+        if let subtitle = session.info?.subtitle() {
+            return "\(session.label)  ·  \(subtitle)"
+        }
+        // A hollow dot already says "not open"; the suffix says what clicking
+        // will DO, since it opens rather than switches.
+        return session.isOpen ? session.label : "\(session.label)  —  open in a new tab"
+    }
+
+    /// A session's own actions, reachable WITHOUT switching to it first — which
+    /// is the point: renaming or killing a session you are not in used to mean
+    /// opening it, acting, and closing it again.
+    ///
+    /// Windows are listed for other sessions only. For the ACTIVE session the
+    /// centre strip already owns its windows, and duplicating them here would
+    /// give the same thing two homes; for a session you are not in, nothing else
+    /// can reach them at all.
+    private func sessionRowSubmenu(_ session: SessionRow) -> NSMenu? {
+        // Local sessions only — see `SessionRow.info`.
+        guard let local = session.local, let info = session.info else { return nil }
+        let sub = NSMenu()
+        let isActive = session.key == activeSessionKey
+
+        let primary = NSMenuItem(
+            title: isActive ? "Switch to This Session"
+                            : (session.isOpen ? "Switch to This Session" : "Open in a New Tab"),
+            action: #selector(selectSessionAction(_:)), keyEquivalent: "")
+        primary.target = self
+        primary.representedObject = session.key
+        primary.isEnabled = !isActive
+        sub.addItem(primary)
+
+        if !isActive, !info.windows.isEmpty {
+            sub.addItem(.separator())
+            let header = NSMenuItem(title: "Windows", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            sub.addItem(header)
+            for window in info.windows {
+                let it = NSMenuItem(title: window.label,
+                                    action: #selector(openSessionWindowAction(_:)),
+                                    keyEquivalent: "")
+                it.target = self
+                it.representedObject = [session.key, window.index] as [Any]
+                it.image = NSImage(systemSymbolName: window.isActive ? "circle.fill" : "circle",
+                                   accessibilityDescription: nil)
+                sub.addItem(it)
+            }
+        }
+
+        sub.addItem(.separator())
+        let rename = NSMenuItem(title: "Rename Session…",
+                                action: #selector(renameNamedSessionAction(_:)), keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = local
+        sub.addItem(rename)
+        sub.addItem(.separator())
+        let kill = NSMenuItem(title: "Kill Session",
+                              action: #selector(killNamedSessionAction(_:)), keyEquivalent: "")
+        kill.target = self
+        kill.representedObject = local
+        sub.addItem(kill)
+        return sub
+    }
+
+    @objc private func openSessionWindowAction(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Any], pair.count == 2,
+              let key = pair[0] as? String, let index = pair[1] as? Int,
+              let id = TmuxSessionID(key: key) else { return }
+        BentoTerminalWindow.focusOrOpen(id, windowIndex: index)
+    }
+
+    @objc private func renameNamedSessionAction(_ sender: NSMenuItem) {
+        guard let local = sender.representedObject as? LocalTmuxSessionName else { return }
+        guard let newName = promptRename(current: local.rawValue) else { return }
+        Task { try? await TmuxCLI.rename(session: local, to: newName) }
+    }
+
+    @objc private func killNamedSessionAction(_ sender: NSMenuItem) {
+        guard let local = sender.representedObject as? LocalTmuxSessionName else { return }
+        // Confirm here specifically. Everywhere else in Bento quitting or
+        // closing is a DETACH — the session survives — so this is the one action
+        // that actually destroys running processes, and from this menu it can be
+        // aimed at a session that isn't even on screen.
+        guard confirmKill(session: local.rawValue) else { return }
+        Task { try? await TmuxCLI.kill(session: local) }
     }
 
     @objc private func selectSessionAction(_ sender: NSMenuItem) {
@@ -479,6 +683,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // ever nudging the tabs (the native alternative to hardcoding widths).
         tb.centeredItemIdentifiers = [hasSession ? Self.centerID : Self.searchID]
         toolbarRef = tb
+        // State decided before the toolbar existed still has to land.
+        syncToolbarItems()
         return tb
     }
 
@@ -563,7 +769,10 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // The centre swaps between the window strip and the search field, and
         // the compact magnifier comes and goes with it, so both must be
         // ALLOWED even though only one of each pair is in the default set.
-        toolbarDefaultItemIdentifiers(toolbar) + [Self.searchID, Self.searchCompactID]
+        // The size banner is never in the DEFAULT set — it exists only while the
+        // canvas is someone else's — but an item can't be inserted unless it is
+        // allowed.
+        toolbarDefaultItemIdentifiers(toolbar) + [Self.searchID, Self.searchCompactID, Self.sizeID]
     }
 
     @objc private func previewTapped() { onTogglePreview?() }
@@ -581,6 +790,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         case Self.newID:      item.view = newButton;      item.label = "New"
         case Self.moreID:     item.view = moreButton;     item.label = "Settings"
         case Self.previewID:  item.view = previewButton;  item.label = "Preview"
+        case Self.sizeID:     item.view = sizeButton;     item.label = "Session Size"
         case Self.searchID:   item.view = customSearchView ?? searchField; item.label = "Search"
         case Self.searchCompactID: item.view = searchCompact; item.label = "Search"
         default: return nil
@@ -655,6 +865,55 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         sub.addItem(note)
         root.submenu = sub
         return root
+    }
+
+    /// Put the banner's copy on the button and add or drop its toolbar item.
+    /// The button carries WHY the canvas looks wrong; the tooltip carries the
+    /// two grids and what clicking will do, since a toolbar has no room for a
+    /// second line.
+    private func applySizeMismatch() {
+        if let mismatch = sizeMismatch {
+            // The button says what CLICKING does, not what is currently true.
+            // It used to carry `title` — "Sized by the device used most
+            // recently" — which reads on a control as though clicking would
+            // make that happen, and is a sentence where there is room for a
+            // label. The state it was reporting is in the tooltip below.
+            sizeButton.title = mismatch.actionTitle
+            sizeButton.imagePosition = .imageLeading
+            // Tinted, because this is the one item that appears in order to be
+            // noticed — everything else up here is permanent chrome.
+            sizeButton.contentTintColor = .controlAccentColor
+            // The state the button no longer says, plus the numbers behind it.
+            sizeButton.toolTip = "\(mismatch.title) — \(mismatch.detail)."
+            sizeButton.sizeToFit()
+        }
+        syncToolbarItems()
+    }
+
+    /// Click = make this window the size owner. Confirm ONLY when a named
+    /// device is losing control it explicitly claimed; under the client-derived
+    /// policies nobody claimed anything, so a sheet there is friction with
+    /// no one on the other end.
+    @objc private func sizeBannerTapped() {
+        guard let mismatch = sizeMismatch else { return }
+        guard mismatch.needsConfirmation else {
+            onClaimSessionSize?()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = mismatch.confirmTitle
+        alert.informativeText = mismatch.confirmMessage
+        alert.addButton(withTitle: mismatch.actionTitle)
+        alert.addButton(withTitle: "Cancel")
+        let run: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.onClaimSessionSize?()
+        }
+        if let window = hostWindow {
+            alert.beginSheetModal(for: window, completionHandler: run)
+        } else {
+            run(alert.runModal())
+        }
     }
 
     @objc private func sizingAction(_ sender: NSMenuItem) {

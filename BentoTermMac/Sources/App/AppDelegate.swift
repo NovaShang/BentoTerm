@@ -358,9 +358,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // what wakes the launcher up, and it should redraw with the counts
         // already in hand rather than a frame later.
         BentoTerminalWindow.setLocalServerSessionInfo(sessions.map { s in
-            LocalSessionInfo(name: s.name.rawValue,
-                             windowCount: fresh[s.name]?.count ?? 0,
-                             lastActivity: s.lastActivity)
+            let wins = fresh[s.name] ?? []
+            return LocalSessionInfo(
+                name: s.name.rawValue,
+                windowCount: wins.count,
+                lastActivity: s.lastActivity,
+                attached: s.attached,
+                // The window rows travel with the session so the toolbar's
+                // Sessions menu can offer them the moment it opens — an async
+                // fetch would land after the menu is already on screen.
+                windows: wins.map {
+                    LocalWindowInfo(index: $0.index, name: $0.name,
+                                    isActive: $0.active, paneCount: $0.paneCount)
+                })
         })
         // Drive the terminal window's tab strip with the full session list.
         BentoTerminalWindow.setLocalServerSessions(sessions.map(\.name))

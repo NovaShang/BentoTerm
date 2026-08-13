@@ -57,6 +57,31 @@ public enum TmuxSessionNaming {
 
 // MARK: - Session metadata
 
+/// One window of a local session, as the poll saw it.
+public struct LocalWindowInfo: Equatable, Sendable, Identifiable {
+    /// tmux's window INDEX — sparse (1, 3, 7…) once windows are closed, and the
+    /// number `select-window -t` and the user's `prefix 3` both take.
+    public let index: Int
+    public let name: String
+    public let isActive: Bool
+    public let paneCount: Int
+
+    public var id: Int { index }
+
+    public init(index: Int, name: String, isActive: Bool, paneCount: Int) {
+        self.index = index
+        self.name = name
+        self.isActive = isActive
+        self.paneCount = paneCount
+    }
+
+    /// "3: claude  ·  2 panes" — the pane count only when there is more than
+    /// one, since "1 pane" is the default and says nothing.
+    public var label: String {
+        paneCount > 1 ? "\(index): \(name)  ·  \(paneCount) panes" : "\(index): \(name)"
+    }
+}
+
 /// What the local `tmux ls` poll knows about a session beyond its name.
 ///
 /// A bare session name answers "what is it called" and nothing else, and the
@@ -70,11 +95,22 @@ public struct LocalSessionInfo: Equatable, Sendable {
     public let windowCount: Int
     /// Last output/keystroke/attach, as tmux reports it. nil = unknown.
     public let lastActivity: Date?
+    /// Does tmux have a client on it? Distinct from "open as a Bento tab": a
+    /// session can be attached from another terminal entirely, and a menu that
+    /// cannot tell those apart cannot answer "is anyone else in here".
+    public let attached: Bool
+    /// The session's windows, as the same poll saw them. Carried so a menu can
+    /// offer "jump straight into window 3" without an async fetch that would
+    /// land after the menu is already on screen. Empty when unknown.
+    public let windows: [LocalWindowInfo]
 
-    public init(name: String, windowCount: Int, lastActivity: Date?) {
+    public init(name: String, windowCount: Int, lastActivity: Date?,
+                attached: Bool = false, windows: [LocalWindowInfo] = []) {
         self.name = name
         self.windowCount = windowCount
         self.lastActivity = lastActivity
+        self.attached = attached
+        self.windows = windows
     }
 
     /// "2 windows · 5 minutes ago" — the one phrasing every launcher surface

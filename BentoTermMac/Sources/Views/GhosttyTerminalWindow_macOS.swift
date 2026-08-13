@@ -77,6 +77,35 @@ public enum BentoTerminalWindow {
         }
     }
 
+    /// Open/focus `id` and land on the window with tmux INDEX `windowIndex`.
+    ///
+    /// The whole point of listing another session's windows in a menu is to
+    /// arrive in the one you picked. `TmuxCLI.attach` takes a `window:` and
+    /// documents that it ignores it, so the old menu-bar version of this quietly
+    /// landed on whatever window the session was last on.
+    ///
+    /// The select cannot be issued with the open: the window's tmux ID isn't
+    /// known until the control channel has attached and listed them, and the
+    /// index is all a poll can give. So wait for the list, then select. Bounded,
+    /// because an attach that never completes must not leave a task waiting on
+    /// it forever — and landing on the session's own current window is a fine
+    /// failure mode.
+    public static func focusOrOpen(_ id: TmuxSessionID, windowIndex: Int?) {
+        focusOrOpen(id)
+        guard let windowIndex else { return }
+        Task { @MainActor in
+            let deadline = Date().addingTimeInterval(10)
+            while Date() < deadline {
+                if let m = manager(for: id.key),
+                   let window = m.tab.viewModel.windows.first(where: { $0.index == windowIndex }) {
+                    m.tab.viewModel.selectWindow(window.id)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
     /// Pushed from the app's `tmux ls` poll: every session on the LOCAL server.
     ///
     /// This is now only the *dormant sessions* list — the names a window can
@@ -749,18 +778,20 @@ final class SessionTab {
 
     /// The `tmux -CC …` line handed to `ssh` as its argument. Built by the same
     /// builder the typed local path uses, so a remote session is created and
-    /// attached on exactly the same terms as a local one.
+    /// attached on exactly the same terms as a local one — wrapped in a login
+    /// shell, because unlike the local path there is no login shell here
+    /// otherwise (`remoteLaunchCommandLine`).
     static func remoteLaunchCommand(for choice: TmuxStartChoice, name: String) -> String {
         switch choice {
         case .createAgent(let spec):
-            return TmuxControlMode.launchCommandLine(
+            return TmuxControlMode.remoteLaunchCommandLine(
                 sessionName: name, path: spec.workingDir,
                 command: spec.agentCommand.isEmpty ? nil : spec.agentCommand)
         case .shareWithDesktop(let target):
-            return TmuxControlMode.launchCommandLine(
+            return TmuxControlMode.remoteLaunchCommandLine(
                 sessionName: "\(target)-mobile", groupWith: target)
         case .createOrAttach, .noTmux:
-            return TmuxControlMode.launchCommandLine(sessionName: name)
+            return TmuxControlMode.remoteLaunchCommandLine(sessionName: name)
         }
     }
 }
@@ -967,6 +998,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onCloseWindow = { [weak self] in self?.activeTab?.viewModel.closeWindow() }
         toolbar.onSetSizingMode = { [weak self] mode in
             self?.activeTab?.viewModel.setSizingMode(mode)
+            self?.rebuildTabBar()
+        }
+        toolbar.onClaimSessionSize = { [weak self] in
+            self?.activeTab?.viewModel.claimSessionSize()
             self?.rebuildTabBar()
         }
         toolbar.onSelectMode = { [weak self] mode in self?.requestMode(mode) }
@@ -1345,6 +1380,19 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
                 self.updateSidebar()
             }
             .store(in: &activeCancellables)
+        // The take-over banner. Its own subscription rather than a ride on the
+        // pane/window churn: it changes rarely (and only after the view model
+        // has let one answer settle), and it must still land on a window that is
+        // otherwise doing nothing — the canvas can be taken away from a session
+        // nobody is touching.
+        tab.viewModel.$sessionSizeMismatch
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self, weak tab] mismatch in
+                guard let self, let tab, tab === self.activeTab else { return }
+                self.toolbar.sizeMismatch = mismatch
+            }
+            .store(in: &activeCancellables)
         // The dock's directory tree follows the FOCUSED pane: switching window
         // (⌘1..9) or selecting another tiled pane changes activePaneID, so
         // re-root the tree on it (fires immediately for the newly-active tab
@@ -1494,8 +1542,16 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.sessions = ids
             .sorted { ($0.isLocal ? 0 : 1, $0.displayName) < ($1.isLocal ? 0 : 1, $1.displayName) }
             .map { id in
-                (key: id.key, label: id.displayName,
-                 dot: dotImage(for: dot(forSession: id)), isOpen: openKeys.contains(id.key))
+                // The poll only describes the LOCAL server, so a remote session
+                // gets a name and nothing else — deliberately, see `SessionRow`.
+                let local = LocalTmuxSessionName(id)
+                return TerminalToolbarController.SessionRow(
+                    key: id.key,
+                    label: id.displayName,
+                    dot: dotImage(for: dot(forSession: id)),
+                    isOpen: openKeys.contains(id.key),
+                    local: local,
+                    info: local.flatMap { BentoTerminalWindow.serverSessionInfo[$0.rawValue] })
             }
         toolbar.activeSessionKey = tab.sessionKey
 
@@ -1542,6 +1598,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             toolbar.sizingMode = active.viewModel.sizingMode
             toolbar.sizingOwner = active.viewModel.sizingOwner
             toolbar.sizingOwnerIsMe = active.viewModel.sizingOwnerIsMe
+            toolbar.sizeMismatch = active.viewModel.sessionSizeMismatch
         }
     }
 
