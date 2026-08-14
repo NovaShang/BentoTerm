@@ -20,7 +20,26 @@ public final class AudioCaptureService: @unchecked Sendable {
     private var converterInputFormat: AVAudioFormat?
     private var outputFormat: AVAudioFormat!
     private var targetRate: Double = 16000
-    public private(set) var isRunning = false
+
+    /// Serial queue owning every engine lifecycle call. It exists for `stop()`:
+    /// CoreAudio's HAL teardown (plus `AVAudioSession.setActive(false)` on iOS)
+    /// takes long enough to SEE — held on the main thread it stalled the voice
+    /// overlay's exit animation, so releasing the mouse looked like a hang.
+    /// `start()` goes through the same queue synchronously, so a press landing
+    /// right after a release still cannot install a second tap on top of a
+    /// teardown that hasn't finished — that combination corrupts CoreAudio and
+    /// hangs the main thread for real.
+    private let lifecycle = DispatchQueue(label: "com.bento.voice.audio-lifecycle")
+    private let stateLock = NSLock()
+    private var _isRunning = false
+
+    /// Whether capture is live. Flipped to false the instant `stop()` is called
+    /// (not when the teardown finishes) so the tap callback and any re-entrant
+    /// caller see the truth immediately.
+    public private(set) var isRunning: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _isRunning }
+        set { stateLock.lock(); _isRunning = newValue; stateLock.unlock() }
+    }
 
     /// Called on the audio queue with each PCM chunk as it arrives.
     public var onPCM: (@Sendable (Data) -> Void)?
@@ -33,7 +52,15 @@ public final class AudioCaptureService: @unchecked Sendable {
     /// button goes down) to overlap warm-up with the hold threshold the user is
     /// already waiting through. Never lights the mic indicator — only `start()`
     /// activates input. No-op once running.
+    /// Runs on the lifecycle queue like the rest of the engine calls — it is the
+    /// cold-start cost itself, so paying it on the main thread would freeze the
+    /// UI at the exact moment the user is pressing.
     public func prewarm() {
+        guard !isRunning else { return }
+        lifecycle.async { self.prewarmOnQueue() }
+    }
+
+    private func prewarmOnQueue() {
         guard !isRunning else { return }
         #if os(iOS)
         // Pre-set the record category so start() skips the (re)configure cost.
@@ -46,11 +73,19 @@ public final class AudioCaptureService: @unchecked Sendable {
         engine.prepare()
     }
 
+    /// Go live. Synchronous on the caller (the mic must be open by the time this
+    /// returns, and it throws), but routed through `lifecycle` so it is ordered
+    /// behind any teardown still in flight.
     public func start(targetSampleRate: Double = 16000) throws {
+        try lifecycle.sync { try startOnQueue(targetSampleRate: targetSampleRate) }
+        isRunning = true
+    }
+
+    private func startOnQueue(targetSampleRate: Double) throws {
         // Never stack a second engine/tap on top of a running one: installing two
         // taps on the same input bus corrupts CoreAudio and hangs the main thread.
         // A prior session that failed without a clean stop must be torn down first.
-        if isRunning { stop() }
+        if isRunning { isRunning = false; teardown() }
         engine.inputNode.removeTap(onBus: 0)   // belt-and-suspenders: drop any stale tap
         self.targetRate = targetSampleRate
         self.outputFormat = AVAudioFormat(
@@ -95,14 +130,20 @@ public final class AudioCaptureService: @unchecked Sendable {
 
         engine.prepare()
         try engine.start()
-        isRunning = true
     }
 
+    /// Stop capturing. Returns immediately — the CoreAudio teardown runs on the
+    /// lifecycle queue, because it is slow enough to be visible on the main
+    /// thread and nothing the caller does next depends on it having finished.
     public func stop() {
         guard isRunning else { return }
+        isRunning = false
+        lifecycle.async { self.teardown() }
+    }
+
+    private func teardown() {
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
-        isRunning = false
         converter = nil
         converterInputFormat = nil
 

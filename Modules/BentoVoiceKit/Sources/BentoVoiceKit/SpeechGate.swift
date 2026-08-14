@@ -26,11 +26,24 @@ public struct SpeechGate {
     /// Loudest chunk seen this session — logged at finish for threshold tuning.
     public private(set) var maxRMS: Double = 0
 
+    /// Bytes of audio whose own energy reached the speech threshold. NOT the same
+    /// as "bytes admitted": the gate latches open and then forwards everything,
+    /// silence included, so admitted bytes say nothing about how much was
+    /// actually spoken. This is what tells a real utterance from a blip.
+    public private(set) var voicedBytes = 0
+
+    private let sampleRate: Double
     private var preRoll: [Data] = []
     private var preRollBytes = 0
 
+    /// Seconds of speech-level audio seen this session.
+    public var voicedDuration: TimeInterval {
+        Double(voicedBytes) / (sampleRate * Double(MemoryLayout<Int16>.size))
+    }
+
     public init(threshold: Double = 180, sampleRate: Double) {
         self.threshold = threshold
+        self.sampleRate = sampleRate
         self.preRollCapBytes = Int(sampleRate * 0.6) * MemoryLayout<Int16>.size
     }
 
@@ -38,9 +51,13 @@ public struct SpeechGate {
     /// empty while gated, pre-roll + current on the opening chunk, and the
     /// chunk alone once open.
     public mutating func admit(_ pcm: Data) -> [Data] {
-        if isOpen { return [pcm] }
+        // Measured on every chunk, open or not: `voicedDuration` has to keep
+        // counting after the gate latches, or a hold that opens on one click and
+        // then says nothing would look exactly like a spoken sentence.
         let level = Self.rms16(pcm)
         if level > maxRMS { maxRMS = level }
+        if level >= threshold { voicedBytes += pcm.count }
+        if isOpen { return [pcm] }
         if level >= threshold {
             isOpen = true
             let out = preRoll + [pcm]

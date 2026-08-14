@@ -119,7 +119,7 @@ struct VoiceControllerTests {
 
     // MARK: - Release routing
 
-    @Test func downCancelsWithoutResult() {
+    @Test func downCancelsWithoutResult() async {
         let (c, s) = makeController()
         var result: VoiceInputResult?
         c.onResult = { result = $0 }
@@ -128,11 +128,30 @@ struct VoiceControllerTests {
         c.end()
         #expect(s.cancelCount == 1)
         #expect(!c.isRecording)
+        #expect(c.isDismissing, "overlay plays its outro before it goes")
+        #expect(c.activeDirection == .down, "the cancelled target is the last thing to leave")
+        await waitFor { !c.showOverlay }
         #expect(!c.showOverlay)
+        #expect(c.activeDirection == .none, "direction resets once the overlay is gone")
         #expect(result == nil)
     }
 
-    @Test func rightBeginsPreviewSeededWithStreamedTranscript() {
+    @Test func beginDuringOutroKeepsOverlayUp() async {
+        let (c, _) = makeController()
+        c.begin(originScreen: .zero)
+        c.update(toScreen: .init(x: 0, y: 80))   // .down → cancel
+        c.end()
+        #expect(c.isDismissing)
+        // A new press lands while the compass is still folding away.
+        c.begin(originScreen: .zero)
+        #expect(!c.isDismissing, "the outro is called off, not left running")
+        try? await Task.sleep(for: .milliseconds(600))
+        #expect(c.showOverlay, "the stale outro must not yank the live recording's overlay")
+        #expect(c.isRecording)
+        c.end()
+    }
+
+    @Test func rightBeginsPreviewSeededWithStreamedTranscript() async {
         let (c, s) = makeController()
         s.currentTranscript = "ls -la"
         c.begin(originScreen: .zero)
@@ -140,6 +159,7 @@ struct VoiceControllerTests {
         c.end()
         #expect(s.cancelCount == 1)
         #expect(!c.isRecording)
+        await waitFor { !c.showOverlay }         // after the outro
         #expect(!c.showOverlay)
         #expect(c.showPreview)
         #expect(c.previewText == "ls -la")
@@ -170,10 +190,11 @@ struct VoiceControllerTests {
         #expect(result?.direction == .up)
         #expect(s.finishLanguage != nil, "finish called with a language hint")
         #expect(!c.isRecording)
+        await waitFor { !c.showOverlay }         // after the outro
         #expect(!c.showOverlay)
     }
 
-    @Test func releaseKeepsDirectionLitWhileFinishing() async {
+    @Test func releaseDismissesOverlayWithoutWaitingForTheFinal() async {
         let (c, s) = makeController()
         s.finishResult = "ls"
         s.finishWaits = true
@@ -182,18 +203,22 @@ struct VoiceControllerTests {
         c.begin(originScreen: .zero)
         c.update(toScreen: .init(x: 0, y: -80))  // .up
         c.end()
-        // Wait until the send task is parked inside `finish` — that IS the
-        // lingering overlay state.
+        // Releasing ends the gesture: the compass starts leaving immediately,
+        // with the release target still lit as the last thing to go.
+        #expect(c.isDismissing)
+        #expect(c.activeDirection == .up, "release target is lit through the outro")
+        // Park inside `finish` — the final can take a couple of seconds (commit +
+        // authoritative result, sometimes a batch fallback). The overlay must NOT
+        // wait for it; that lag on mouse-up read as the app hanging.
         await waitFor { s.finishLanguage != nil }
-        // The finish wait can take up to a couple of seconds (mid-speech
-        // release + batch final). The release target must stay lit the whole
-        // time so the lingering overlay reads as "sending", not a dead gesture.
-        #expect(c.activeDirection == .up, "release target stays lit during the finish wait")
-        #expect(c.showOverlay, "overlay stays up until the final text resolves")
+        await waitFor { !c.showOverlay }
+        #expect(!c.showOverlay, "compass is gone while the final is still resolving")
+        #expect(c.activeDirection == .none, "direction resets once the overlay hides")
+        #expect(result == nil, "nothing sent yet — the text has not resolved")
+        // The work keeps running and delivers whenever it lands.
         s.allowFinish()
         await waitFor { result != nil }
-        #expect(c.activeDirection == .none, "direction resets once the overlay hides")
-        #expect(!c.showOverlay)
+        #expect(result?.text == "ls")
     }
 
     @Test func leftSendsWithLlmDirection() async {
@@ -230,6 +255,7 @@ struct VoiceControllerTests {
         await waitFor { !c.isRecording }
         try? await Task.sleep(for: .milliseconds(100))
         #expect(!fired, "silent hold / empty result must not fire onResult")
+        await waitFor { !c.showOverlay }
         #expect(!c.showOverlay)
     }
 

@@ -687,7 +687,11 @@ struct TerminalWrapperView: View {
                 .position(anchor)
             }
             .ignoresSafeArea()
-            .transition(.scale.combined(with: .opacity))
+            // No transition here on purpose: the compass choreographs its own
+            // entrance and exit internally (macOS can't use a transition at all
+            // — it keeps one hosting view around — so the animation had to live
+            // in the shared view). `showOverlay` only drops once the outro has
+            // finished, by which point there is nothing left to fade.
         }
     }
 

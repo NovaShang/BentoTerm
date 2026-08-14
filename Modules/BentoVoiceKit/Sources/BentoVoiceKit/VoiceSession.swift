@@ -184,6 +184,11 @@ public final class VoiceSession {
     /// transcription if streaming caught nothing. `language` is the batch hint.
     public func finish(language: String) async -> String {
         isActive = false
+        // The overlay now leaves on release, so the user can start a NEW hold
+        // while this one is still resolving. Everything below the awaits is
+        // therefore generation-checked: a stale finish must not read the new
+        // recording's transcript, and above all must not null out its socket.
+        let generation = sessionGeneration
         // A cancel() (error path) may have torn the session down before we got
         // here — a cancelled session resolves empty, never with text.
         guard !interrupted else { return "" }
@@ -208,12 +213,13 @@ public final class VoiceSession {
         case .openai, .qwen:
             audioCapture.stop()
             let asr = realtime
-            // Silent hold: the gate never opened, so the model received no
-            // audio. Don't commit (forcing a model to transcribe nothing is
-            // what produced the corpus-echo / "(尴尬的沉默)" hallucinations)
-            // and don't batch-transcribe the silence either. Just end empty.
-            if !speechGate.isOpen {
-                dlog("[voice] no speech above gate during hold (maxRMS=\(Int(speechGate.maxRMS))) — empty result")
+            // Silent (or near-silent) hold: the gate never opened, or it opened
+            // on a blip and there was never enough speech to transcribe. Don't
+            // commit — forcing a model to transcribe nothing is what produced
+            // the corpus-echo / "(尴尬的沉默)" hallucinations — and don't
+            // batch-transcribe it either. Just end empty.
+            if !speechGate.isOpen || speechGate.voicedDuration < Self.minVoicedSeconds {
+                dlog("[voice] not enough speech during hold (maxRMS=\(Int(speechGate.maxRMS)), voiced=\(String(format: "%.2f", speechGate.voicedDuration))s) — empty result")
                 realtime = nil
                 realtimeReady = false
                 pendingPCM = []
@@ -228,7 +234,7 @@ public final class VoiceSession {
                 realtimeReady = false
                 pendingPCM = []
                 Task { await asr?.cancel() }
-                return streamed
+                return isHallucinated(streamed) ? "" : streamed
             }
             // Released mid-speech (or Qwen, always): commit the buffer and wait
             // (bounded) for the realtime final. The socket stays open during this
@@ -237,6 +243,13 @@ public final class VoiceSession {
             let graceMs = engine == .qwen ? 2000 : Self.tailGraceMs
             await asr?.commit()
             await waitForRealtimeFinal(graceMs: graceMs)
+            // A newer recording began while we waited: its state has replaced
+            // ours, so there is nothing of this utterance left to resolve — and
+            // the teardown below would rip the socket out from under it.
+            guard generation == sessionGeneration else {
+                await asr?.cancel()
+                return ""
+            }
             let streamed = lastTranscript
             await asr?.cancel()
             realtime = nil
@@ -245,15 +258,21 @@ public final class VoiceSession {
             // The session may have been cancelled (error) while we awaited the
             // final — resolve empty, never text right after the user saw an error.
             guard !interrupted else { return "" }
-            if !streamed.isEmpty { return streamed }
+            if !streamed.isEmpty { return isHallucinated(streamed) ? "" : streamed }
             // Realtime delivered nothing (short clip): batch-transcribe the full
             // captured clip so the utterance is never lost. A clip that hit the
             // accumulation ceiling is truncated — treat it as nothing captured.
             guard !recordedPCM.isEmpty, !recordedPCMOverflowed else { return "" }
             dlog("[voice] realtime empty → batch fallback (\(recordedPCM.count) bytes)")
+            let clipSeconds = recordedDuration
+            let corpus = activeCorpus
             let better = await BatchTranscriptionService.shared.transcribe(
-                pcm: recordedPCM, sampleRate: activeSampleRate, language: language, corpus: activeCorpus)
-            return better ?? ""
+                pcm: recordedPCM, sampleRate: activeSampleRate, language: language, corpus: corpus)
+            // The batch model is biased by the same corpus and fails the same
+            // way on a thin clip — this is the path that reaches it most often.
+            guard let better,
+                  !isHallucinated(better, clipSeconds: clipSeconds, corpus: corpus) else { return "" }
+            return better
         }
     }
 
@@ -277,6 +296,30 @@ public final class VoiceSession {
         isActive = false
     }
 
+    // MARK: - Hallucination guards
+
+    /// Least voiced audio an utterance must contain before we ask a model to
+    /// transcribe it. Under this it is a blip — a click, a breath, the button
+    /// coming up — and committing it is precisely what makes Qwen hand the
+    /// biasing corpus back as if it had been spoken.
+    private static let minVoicedSeconds: TimeInterval = 0.25
+
+    /// Seconds of audio actually captured this recording.
+    private var recordedDuration: TimeInterval {
+        Double(recordedPCM.count) / (activeSampleRate * Double(MemoryLayout<Int16>.size))
+    }
+
+    private func isHallucinated(_ text: String) -> Bool {
+        isHallucinated(text, clipSeconds: recordedDuration, corpus: activeCorpus)
+    }
+
+    /// The clip's length and corpus are passed in so a caller that awaits a slow
+    /// batch transcription can capture them BEFORE the await — by the time it
+    /// returns, a new recording may have replaced both.
+    private func isHallucinated(_ text: String, clipSeconds: TimeInterval, corpus: String) -> Bool {
+        isImplausibleTranscript(text, clipSeconds: clipSeconds, corpus: corpus)
+    }
+
     /// Poll for the realtime final after a commit, up to `graceMs`. Returns as
     /// soon as the `completed` event arrives (the flags are set on the main actor
     /// by the ASR callbacks, which run while this awaits).
@@ -294,9 +337,9 @@ public final class VoiceSession {
     /// e.g. the Apple on-device engine, which records internally.
     public func takeRecordedPCM() -> (pcm: Data, sampleRate: Double)? {
         guard !recordedPCM.isEmpty, !recordedPCMOverflowed else { return nil }
-        // A clip with no speech above the gate would only make the batch model
+        // A clip with no real speech in it would only make the batch model
         // hallucinate in the preview editor — treat it as "nothing captured".
-        guard speechGate.isOpen else { return nil }
+        guard speechGate.isOpen, speechGate.voicedDuration >= Self.minVoicedSeconds else { return nil }
         return (recordedPCM, activeSampleRate)
     }
 
@@ -307,11 +350,18 @@ public final class VoiceSession {
                                   completion: @escaping @MainActor (String?) -> Void) -> Bool {
         guard let rec = takeRecordedPCM() else { return false }
         let corpus = assembleQwenCorpus(screenText: screenText)
+        let clipSeconds = recordedDuration
         Task {
             let lang = openAILanguageHint(for: UserDefaults.standard.string(forKey: "speech_locale") ?? "auto")
             let better = await BatchTranscriptionService.shared.transcribe(
                 pcm: rec.pcm, sampleRate: rec.sampleRate, language: lang, corpus: corpus)
-            await MainActor.run { completion(better) }
+            // Same guard as the send path: a corpus echo must not land in the
+            // preview editor either, where it reads as "this is what you said".
+            await MainActor.run {
+                completion(better.flatMap {
+                    self.isHallucinated($0, clipSeconds: clipSeconds, corpus: corpus) ? nil : $0
+                })
+            }
         }
         return true
     }
@@ -433,6 +483,56 @@ public final class VoiceSession {
             }
         }
     }
+}
+
+// MARK: - Transcript sanity
+
+/// Ceiling on how much text a hold can plausibly contain. Fast English runs
+/// ~20 chars/s and Mandarin well under 10; a corpus echo lands in the hundreds,
+/// so this only ever catches the impossible.
+let maxTranscriptCharsPerSecond: Double = 30
+/// Only short holds are checked against the corpus — that is where the model has
+/// too little acoustic evidence and falls back on its context. On a normal-length
+/// utterance, matching corpus text is far more likely to be the user genuinely
+/// reading something off their screen.
+let corpusEchoWindowSeconds: TimeInterval = 2.5
+/// How much verbatim corpus text has to come back before it counts as an echo.
+/// Kept high enough that dictating a short command that happens to be on screen
+/// ("npm run build") still goes through.
+let minCorpusEchoChars = 16
+
+/// Is this "transcript" something the audio cannot have said?
+///
+/// Qwen — any context-biased ASR, really — does not answer "I heard nothing".
+/// Starved of acoustic evidence it reaches for the context we handed it and
+/// returns the biasing corpus, verbatim, as if it had been spoken; that text
+/// used to go straight into the user's shell. Two structural tells, no model
+/// involved: more text than the hold could physically contain, or a long
+/// verbatim slice of our own corpus on a hold too short to have held it.
+///
+/// Free function on purpose — it is pure, and the failure it guards against is
+/// worth testing without a live audio session.
+func isImplausibleTranscript(_ text: String, clipSeconds: TimeInterval, corpus: String) -> Bool {
+    let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    // No captured audio (Apple's engine records internally) → no duration to
+    // judge against, so neither test applies.
+    guard !t.isEmpty, clipSeconds > 0 else { return false }
+    let seconds = max(clipSeconds, 0.2)
+    if Double(t.count) / seconds > maxTranscriptCharsPerSecond {
+        dlog("[voice] rejected hallucination: \(t.count) chars for \(String(format: "%.2f", seconds))s of audio")
+        return true
+    }
+    guard seconds < corpusEchoWindowSeconds, !corpus.isEmpty else { return false }
+    let key = corpusEchoKey(t)
+    guard key.count >= minCorpusEchoChars, corpusEchoKey(corpus).contains(key) else { return false }
+    dlog("[voice] rejected corpus echo (\(t.count) chars came back verbatim from the biasing corpus)")
+    return true
+}
+
+/// Normalized form for the echo comparison: the model reflows whitespace and
+/// re-punctuates what it echoes, so neither can be part of the match.
+func corpusEchoKey(_ s: String) -> String {
+    s.lowercased().filter { !$0.isWhitespace && !$0.isPunctuation && !$0.isSymbol }
 }
 
 /// Compass direction from a press-origin translation (points, y-down). Shared by

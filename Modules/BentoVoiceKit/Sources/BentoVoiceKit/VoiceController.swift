@@ -49,6 +49,17 @@ open class VoiceController: ObservableObject {
     @Published public private(set) var activeDirection: VoiceDirection = .none
     @Published public private(set) var showOverlay = false
 
+    /// The overlay is playing its EXIT animation: still on screen (`showOverlay`
+    /// stays true for `dismissDuration`), but the compass is folding away. The
+    /// shared view reads this to run its outro; hosts keep following
+    /// `showOverlay` alone and see no extra state.
+    @Published public private(set) var isDismissing = false
+
+    /// How long the compass gets to fold away before the overlay is torn down.
+    /// The view choreographs its outro against the same number, so it lives here
+    /// as the one source of truth.
+    public static let dismissDuration: Duration = .milliseconds(560)
+
     /// Drag delta from the press origin (y-down point space), fed to the shared
     /// compass so the finger ball can track the drag.
     @Published public private(set) var fingerOffset: CGSize = .zero
@@ -90,6 +101,11 @@ open class VoiceController: ObservableObject {
     /// sleep (the iOS pre-refactor race).
     private var errorDismissTask: Task<Void, Never>?
 
+    /// The outro timer (see `dismissOverlay`). Cancelled by a new `begin`, so a
+    /// press landing inside the fold-away keeps the overlay instead of having it
+    /// pulled out from under the fresh recording.
+    private var dismissTask: Task<Void, Never>?
+
     public init() {
         self.session = VoiceSession()
         voiceSendTotal = tipCenter.recordedVoiceSendCount
@@ -118,12 +134,18 @@ open class VoiceController: ObservableObject {
     open func begin(originScreen: CGPoint) {
         guard !isRecording else { return }
         errorDismissTask?.cancel()
+        // A press during the previous overlay's fold-away: keep the overlay and
+        // replay the intro from wherever it got to, rather than letting the
+        // stale outro tear it down mid-recording.
+        dismissTask?.cancel()
+        isDismissing = false
         self.originScreen = originScreen
         isRecording = true
         showOverlay = true
         transcript = ""
         activeDirection = .none
         fingerOffset = .zero
+        startWatchdog("recording begins")
         feedback.prepare()
         feedback.recordingStarted()
         // The shared VoiceSession handles permissions + engine selection + audio.
@@ -146,16 +168,33 @@ open class VoiceController: ObservableObject {
     }
 
     /// End hold-to-talk; routes the result unless cancelled (↓) or empty.
+    ///
+    /// The RELEASE is the end of the gesture, so the overlay leaves on the
+    /// release — every direction, no waiting. Resolving the final text can take
+    /// the better part of a second (Qwen commits the buffer and waits for its
+    /// authoritative `completed`, and a thin clip may fall back to a batch
+    /// transcription); that work now finishes with the compass already gone and
+    /// delivers its text whenever it lands. Holding the overlay up for it read
+    /// as the app hanging on mouse-up.
     open func end() {
         guard isRecording else { return }
         let dir = activeDirection
+        isRecording = false
+        dlog("[watchdog] RELEASE dir=\(dir) — outro starts now")
+        dismissOverlay()
+        // The main thread has to be free for the compass to fade out: anything
+        // blocking here (CoreAudio teardown was the offender) freezes the
+        // animation and the release looks like a hang. Logged so a regression
+        // shows up as a number instead of a feeling.
+        let t0 = Date()
+        defer {
+            let ms = Date().timeIntervalSince(t0) * 1000
+            if ms > 16 { dlog("[voice] end() blocked the main thread for \(Int(ms))ms") }
+        }
 
         if dir == .down {
-            activeDirection = .none
             session.cancel()
-            isRecording = false
             feedback.cancelled()
-            showOverlay = false
             return
         }
         if dir == .right {
@@ -164,32 +203,15 @@ open class VoiceController: ObservableObject {
             // batches the captured PCM itself, so just stop capture here.
             TelemetryService.shared.record(.voiceSwipeRightPreview)
             let streamed = session.currentTranscript
-            activeDirection = .none
             session.cancel()
-            isRecording = false
-            showOverlay = false
             beginPreview(streamed: streamed)
             return
         }
-        // up / none / left → resolve the reliable final. A settled utterance sends
-        // instantly; only a mid-speech release waits. Show "识别中…" only if that
-        // wait actually drags on (>200ms), so fast sends never flash it.
-        //
-        // KEEP `activeDirection` (and with it the release target's highlight and
-        // the finger ball's rest point) lit while the final text resolves: the
-        // overlay lingers here for up to a couple of seconds, and reverting the
-        // compass to its neutral center mid-wait reads as the gesture dying. It
-        // snaps to `.none` the moment the overlay hides.
+        // up / none / left → resolve the reliable final in the background.
         Task { [weak self] in
             guard let self else { return }
             let lang = openAILanguageHint(for: UserDefaults.standard.string(forKey: "speech_locale") ?? "auto")
-            let indicator = DispatchWorkItem { [weak self] in self?.transcript = "识别中…" }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: indicator)
             let text = await self.session.finish(language: lang)
-            indicator.cancel()
-            self.activeDirection = .none
-            self.isRecording = false
-            self.showOverlay = false
             guard !text.isEmpty else { return }
             self.feedback.sent()
             TelemetryService.shared.record(.voiceSend)
@@ -199,6 +221,88 @@ open class VoiceController: ObservableObject {
             self.voiceSendTotal = self.tipCenter.recordVoiceSend()
         }
     }
+
+    /// Take the overlay down THROUGH its outro instead of yanking it: the
+    /// compass gets `dismissDuration` to fold away, and only then does
+    /// `showOverlay` drop (which is all the hosts watch).
+    ///
+    /// `activeDirection` is cleared at the END, not here — the outro's whole
+    /// idea is that the target the release acted on outlives everything else,
+    /// so it has to stay lit for the length of the animation.
+    private func dismissOverlay() {
+        guard showOverlay else {
+            activeDirection = .none
+            return
+        }
+        guard !isDismissing else { return }
+        isDismissing = true
+        dismissTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: VoiceController.dismissDuration)
+            guard !Task.isCancelled, let self else { return }
+            dlog("[watchdog] overlay torn down")
+            self.stopWatchdog()
+            self.showOverlay = false
+            self.isDismissing = false
+            self.activeDirection = .none
+        }
+    }
+
+    // MARK: - Main-thread stall watchdog
+
+    /// A repeating main-actor tick that reports its own lateness while the
+    /// overlay is up. The compass animating and the compass being ON SCREEN but
+    /// frozen look identical from the outside; this tells them apart, with the
+    /// stall's size and its offset from the release.
+    ///
+    /// Opt in with `defaults write com.bento.term.mac voice_watchdog -bool YES`
+    /// (off by default — it is a diagnostic, not a feature).
+    private var watchdog: Timer?
+    private var watchdogLast = Date()
+    private static var watchdogEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "voice_watchdog")
+    }
+
+    private func startWatchdog(_ tag: String) {
+        guard Self.watchdogEnabled else { return }
+        stopWatchdog()
+        dlog("[watchdog] \(tag) t=0")
+        let t0 = Date()
+        watchdogLast = t0
+        // .common so it keeps ticking through event tracking (a mouse drag).
+        let timer = Timer(timeInterval: 0.008, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let now = Date()
+                let gap = now.timeIntervalSince(self.watchdogLast) * 1000
+                if gap > 50 {
+                    dlog("[watchdog] MAIN THREAD STALLED \(Int(gap))ms, at +\(Int(now.timeIntervalSince(t0) * 1000))ms")
+                }
+                self.watchdogLast = now
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watchdog = timer
+    }
+
+    private func stopWatchdog() {
+        watchdog?.invalidate()
+        watchdog = nil
+    }
+
+    // MARK: - Debug harness
+
+    /// Put the overlay up with no microphone and no ASR session, so the compass
+    /// choreography can be driven and measured on its own (a probe app, a
+    /// preview). Not part of the gesture path.
+    public func debugPresentOverlay(direction: VoiceDirection = .up, transcript text: String = "") {
+        showOverlay = true
+        isDismissing = false
+        activeDirection = direction
+        transcript = text
+    }
+
+    /// Take it down again through the real exit path.
+    public func debugDismissOverlay() { dismissOverlay() }
 
     // MARK: - Preview (right-swipe)
 
@@ -256,7 +360,7 @@ open class VoiceController: ObservableObject {
         errorDismissTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(1200))
             guard !Task.isCancelled else { return }
-            self?.showOverlay = false
+            self?.dismissOverlay()
         }
     }
 }

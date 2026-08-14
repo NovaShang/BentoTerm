@@ -110,4 +110,63 @@ final class VoiceTests: XCTestCase {
         XCTAssertFalse(gate.admit(chunk(amplitude: 181)).isEmpty)
         XCTAssertTrue(gate.isOpen)
     }
+
+    /// The gate latches open, so "how much did it forward" says nothing about
+    /// how much was spoken — only loud audio counts toward `voicedDuration`,
+    /// which is what tells a blip from an utterance.
+    func testVoicedDurationCountsOnlySpeechLevelAudio() {
+        var gate = SpeechGate(sampleRate: 16000)
+        XCTAssertEqual(gate.voicedDuration, 0)
+        // One 1600-sample (0.1s) loud chunk opens the gate and counts.
+        _ = gate.admit(chunk(amplitude: 2000))
+        XCTAssertEqual(gate.voicedDuration, 0.1, accuracy: 0.001)
+        // Silence after the latch flows through but must NOT count as speech.
+        for _ in 0..<10 { _ = gate.admit(chunk(amplitude: 20)) }
+        XCTAssertEqual(gate.voicedDuration, 0.1, accuracy: 0.001,
+                       "a hold that opened on a click and then said nothing is still a blip")
+        for _ in 0..<3 { _ = gate.admit(chunk(amplitude: 2000)) }
+        XCTAssertEqual(gate.voicedDuration, 0.4, accuracy: 0.001)
+    }
+
+    // MARK: - Transcript sanity (Qwen echoing the biasing corpus back)
+
+    /// The reported bug: a very short / empty utterance came back as the on-screen
+    /// context we had sent as the biasing corpus, and got typed into the shell.
+    func testCorpusEchoOnShortClipIsRejected() {
+        let corpus = """
+        $ npm run build
+        error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'
+        $ git status
+        """
+        // 0.9s of audio cannot have produced a whole line of the screen.
+        XCTAssertTrue(isImplausibleTranscript(
+            "error TS2345: Argument of type 'string' is not assignable",
+            clipSeconds: 0.9, corpus: corpus))
+        // Reflowed / re-punctuated echoes are the same echo.
+        XCTAssertTrue(isImplausibleTranscript(
+            "error TS2345 argument of type string is not assignable",
+            clipSeconds: 0.9, corpus: corpus))
+    }
+
+    func testRealSpeechSurvivesTheGuards() {
+        let corpus = "$ npm run build\n$ git status\n"
+        // Ordinary dictation, nothing like the corpus.
+        XCTAssertFalse(isImplausibleTranscript("帮我把这个提交一下", clipSeconds: 2.0, corpus: corpus))
+        // A short command that IS on screen still goes through — under the
+        // verbatim-length floor, which is exactly why that floor exists.
+        XCTAssertFalse(isImplausibleTranscript("npm run build", clipSeconds: 1.2, corpus: corpus))
+        // A long hold that genuinely contains a lot of speech is not capped.
+        XCTAssertFalse(isImplausibleTranscript(String(repeating: "话", count: 100),
+                                               clipSeconds: 20, corpus: corpus))
+        // No corpus (OpenAI/Apple engines) → only the rate test applies.
+        XCTAssertFalse(isImplausibleTranscript("git commit", clipSeconds: 1.0, corpus: ""))
+        // No audio duration at all (Apple records internally) → no judgement.
+        XCTAssertFalse(isImplausibleTranscript("anything at all here", clipSeconds: 0, corpus: corpus))
+    }
+
+    func testPhysicallyImpossibleTextIsRejectedEvenWithoutACorpus() {
+        // 200 characters out of a third of a second is not speech, whatever it is.
+        XCTAssertTrue(isImplausibleTranscript(String(repeating: "字", count: 200),
+                                              clipSeconds: 0.35, corpus: ""))
+    }
 }
