@@ -25,7 +25,11 @@ let package = Package(
         ),
         .testTarget(
             name: "BentoAgentKitTests",
-            dependencies: ["BentoAgentKit"]
+            dependencies: ["BentoAgentKit"],
+            // Real `capture-pane -p -J` output from live agent sessions, kept
+            // verbatim: the rules are claims about what these agents put on
+            // screen, and a hand-typed approximation can't falsify them.
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

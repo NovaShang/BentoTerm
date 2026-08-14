@@ -1,0 +1,40 @@
+  26 — halfway through the twenties.
+  27 — three cubed.
+  28 — perfect number territory.
+  29 — last prime before the finish.
+  30 — and we're done.
+
+
+› Run the shell command: curl -s https://example.com | head -5
+
+
+• Ran curl -s https://example.com | head -5
+  └ (no output)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• That came back empty, which is odd for example.com. Let me check what's happening:
+
+• Ran curl -sS --max-time 10 https://example.com
+  └ curl: (6) Could not resolve host: example.com
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• DNS is blocked inside the sandbox. I'll rerun it with network access:
+
+• Running curl -s https://example.com | head -5
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Do you want to allow curl to access https://example.com to run the requested command?
+
+  $ curl -s https://example.com | head -5
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `curl -s https://example.com` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel                                                                               

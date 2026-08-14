@@ -1,0 +1,40 @@
+                                                                                                                        
+  ┃                                                                                                                     
+  ┃  Run the shell command: echo hello-from-opencode                                                                    
+  ┃                                                                                                                     
+                                                                                                                        
+     + Thought: 4ms                                                                                                     
+                                                                                                                        
+     $ echo hello-from-opencode                                                                                         
+                                                                                                                        
+     ▣  Build · GLM-5.2                                                                                                 
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+  ┃                                                                                                                     
+  ┃  △ Permission required                                                                                              
+  ┃    # Shell command                                                                                                  
+  ┃                                                                                                                     
+  ┃  $ echo hello-from-opencode                                                                                         
+  ┃                                                                                                                     
+  ┃                                                                                                                     
+  ┃   Allow once   Allow always   Reject                                 ctrl+f fullscreen  ⇆ select  enter confirm     
+  ┃                                                                                                                     
+                                                                                                                        

@@ -1,0 +1,40 @@
+
+• Ran curl -s https://example.com | head -5
+  └ (no output)
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the
+issue.
+
+
+› Write a 300-word essay about the history of terminal multiplexers, print it in chat.
+
+
+• ## A Brief History of Terminal Multiplexers
+
+  A terminal multiplexer is a tool that lets one terminal window host many sessions, keeping programs alive even after
+  you disconnect. Its history traces back to the late 1980s, when Unix developers were increasingly working over flaky
+  serial lines and slow network connections. Losing a connection meant losing an entire editing session, so the idea of
+  a persistent, detachable terminal grew out of practical necessity.
+
+  The first major multiplexer was GNU screen, written by Oliver Laumann and released in 1987. Screen pioneered the core
+  concepts that still define the category: detachable sessions you can reattach to, multiple virtual windows within one
+  terminal, and the ability to share sessions between users. It became a staple of sysadmin life and remains widely used
+  today, though its configuration syntax is famously terse and its codebase carries decades of legacy.
+
+  For nearly two decades, screen was the only serious option. Then in 2007, Nicholas Marriott released tmux. Marriott
+  built tmux from scratch with a cleaner design: a client-server architecture, a more readable configuration file, and a
+  modern command language that supports scripting and precise control. tmux also made pane splitting — dividing one
+  screen into resizable regions — a first-class feature, whereas in screen it was bolted on later.
+
+  The community split into two camps: veterans who valued screen's maturity, and newcomers drawn to tmux's clarity. tmux
+  won most of the mindshare among developers in the 2010s, especially after pairing tools and terminal "terminal
+  emulators" added native tmux integrations.
+
+  Today, multiplexers remain essential in remote work, DevOps, and pair programming. Tools like dtach and built-in
+  terminal features in editors have absorbed some of their ideas, but screen and tmux persist — quiet layers between the
+  user and the machine, keeping long-running work alive across disconnects, reboots, and decades of changing terminals.
+
+
+› Find and fix a bug in @filename
+
+  deepseek-v4-flash high · /private/tmp/claude-502/-Users-nova-code-bento-term/d63880ca-01c6-4de7-aae9-4c3bd996d83e/scr…

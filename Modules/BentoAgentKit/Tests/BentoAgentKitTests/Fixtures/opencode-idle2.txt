@@ -1,0 +1,40 @@
+     A Brief History of Terminal Multiplexers                                                                           
+                                                                                                                        
+     The story of terminal multiplexers begins in the early days of Unix, when system administrators and developers     
+     needed ways to manage multiple programs from a single physical terminal. Before multiplexers existed, users were   
+     limited to one foreground process per terminal connection, a constraint that became increasingly frustrating as    
+     computing tasks grew more complex and interdependent.                                                              
+                                                                                                                        
+     The earliest influential solution was screen, created in 1987 by Oliver Laumann at the University of Karlsruhe.    
+     Screen introduced the revolutionary concept of virtual terminals: multiple shell sessions running within a         
+     single physical terminal, switchable with simple keyboard shortcuts. Equally important, screen allowed sessions    
+     to detach—continuing to run in the background even after the user disconnected. This was transformative for        
+     unreliable network connections over dial-up or SSH, where a dropped link no longer meant a killed process.         
+     Screen quickly became indispensable in the Unix toolkit and remained dominant for over two decades.                
+                                                                                                                        
+     In 2007, tmux emerged, written by Nicholas Marriott as a modern alternative. Tmux addressed long-standing          
+     frustrations with screen's aging codebase and limited extensibility. It offered a cleaner client-server            
+     architecture, powerful scripting capabilities, and sophisticated window splitting through panes. Its               
+     configuration syntax was more approachable, and active development attracted a vibrant community. By the 2010s,    
+     tmux had largely supplanted screen as the multiplexer of choice for new users.                                     
+                                                                                                                        
+     Beyond screen and tmux, related tools expanded the concept. GNU Screen received ongoing maintenance, while         
+     projects like byobu wrapped tmux and screen with friendlier defaults and status indicators. More recently,         
+     terminal emulators such as iTerm2, Kitty, and Alacritty, alongside protocol innovations like iTerm2's tmux         
+     integration and Zellij—a Rust-based newcomer—have pushed multiplexing forward with tiling layouts, persistent      
+     layouts, and modern ergonomics.                                                                                    
+                                                                                                                        
+     Terminal multiplexers remain essential today, bridging the gap between minimalist text interfaces and the          
+     demands of complex, multi-process workflows. Their evolution reflects a simple truth: developers will always       
+     seek finer control over their computing environment.                                                               
+                                                                                                                        
+     ▣  Build · GLM-5.2 · 9.8s                                                                                          
+                                                                                                                        
+  ┃                                                                                                                     
+  ┃                                                                                                                     
+  ┃                                                                                                                     
+  ┃  Build · GLM-5.2 Z.AI Coding Plan · high                                                                            
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+   /private/tmp/claude-502/-Users-nova-code-bento-term/d63880ca-01c6-4de7-aae9-4c3bd996d83e/  14.8K (1% ctrl+p          
+   scratchpad/work                                                                                      commands        
+                                                                                                                        

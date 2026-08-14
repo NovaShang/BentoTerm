@@ -141,12 +141,26 @@ extension TerminalViewModel {
         case .state(let s):
             return (s, true)
         case .needsSnapshot:
-            let snap = await captureSnapshot(id)
-            if case .state(let s) = stateDetection.classifyAgent(
-                command: command, title: title, snapshot: snap, pane: id, current: current) {
-                return (s, true)
+            guard let snap = await captureSnapshot(id) else {
+                // The capture failed. If the pane has never been identified,
+                // the snapshot was only an identity probe — it is not an agent
+                // pane, and must not be counted as one.
+                guard stateDetection.identifiedAgent(for: id) != nil else {
+                    return (stateDetection.detectState(pane: id, currentCommand: command, title: title), false)
+                }
+                return (current, true)
             }
-            return (current, true)
+            switch stateDetection.classifyAgent(
+                command: command, title: title, snapshot: snap, pane: id, current: current) {
+            case .state(let s):
+                return (s, true)
+            case .notAgent:
+                // The snapshot was the identity probe (a `node` pane that could
+                // have been an agent), and the screen says it isn't one.
+                return (stateDetection.detectState(pane: id, currentCommand: command, title: title), false)
+            case .needsSnapshot:
+                return (current, true)
+            }
         }
     }
 

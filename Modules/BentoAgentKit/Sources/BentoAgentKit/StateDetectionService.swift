@@ -38,6 +38,34 @@ public final class StateDetectionService {
     /// — no longer a hardcoded singleton, so adding/editing an agent is data.
     var agentDetector: AgentDetector { AgentDetector(ruleSets: profiles.compactMap(\.agentRules)) }
 
+    /// Which agent a pane was last identified as, keyed by pane and pinned to
+    /// the foreground command it was identified under.
+    ///
+    /// Agents launched through a language runtime don't announce themselves
+    /// continuously: codex is `node`, and its title is just the working
+    /// directory until a turn starts. So identity is remembered once won — the
+    /// pane keeps its rule set while the same command keeps running, and drops
+    /// it the moment the command changes (agent quits → shell → `zsh`).
+    private var stickyAgent: [TmuxPaneID: (command: String, setID: String)] = [:]
+    /// Last time a pane was probed for screen identity and came back unknown.
+    /// Without it, one `node` pane running a dev server would cost a
+    /// capture-pane on every poll, forever.
+    private var identityProbeMiss: [TmuxPaneID: Date] = [:]
+    private let identityProbeInterval: TimeInterval = 10
+
+    /// Foreground command names that mean "something is running under a
+    /// runtime, and the real program's name is lost". These are the panes worth
+    /// spending a snapshot on to ask the screen who it is.
+    static let runtimeCommands: Set<String> = [
+        "node", "bun", "deno", "npx", "python", "python3", "ruby", "uv", "uvx",
+    ]
+
+    static func isRuntimeCommand(_ command: String?) -> Bool {
+        guard let command, !command.isEmpty else { return false }
+        let name = (command as NSString).lastPathComponent
+        return runtimeCommands.contains(name.lowercased())
+    }
+
     /// Compiled once — `replacingOccurrences(options: .regularExpression)`
     /// recompiles the pattern on every call, which showed up as a top
     /// main-thread cost under heavy TUI output.
@@ -220,12 +248,39 @@ public final class StateDetectionService {
     /// `.working` with no tmux round-trip; otherwise you get `.needsSnapshot`,
     /// so fetch `capture-pane` and call again with the text. Maps the engine's
     /// agent status onto `PaneState` (blocked → `.awaitingInput`).
+    ///
+    /// Identity is resolved in cost order: the sticky answer from a previous
+    /// poll, then command/title, then — only for panes running a language
+    /// runtime — the screen itself.
     public func classifyAgent(command: String?, title: String, snapshot: String?,
                               pane: TmuxPaneID, current: PaneState) -> AgentClassification {
-        guard let set = agentDetector.ruleSet(command: command, title: title) else {
-            return .notAgent
+        let detector = agentDetector
+        var set = resolveSet(detector: detector, command: command, title: title, pane: pane)
+
+        if set == nil {
+            // Nothing named the agent. A runtime pane may still be one — ask
+            // the screen, at most once per `identityProbeInterval`.
+            guard Self.isRuntimeCommand(command) else { return .notAgent }
+            guard let snapshot else {
+                let lastMiss = identityProbeMiss[pane] ?? .distantPast
+                guard Date().timeIntervalSince(lastMiss) > identityProbeInterval else {
+                    return .notAgent
+                }
+                return .needsSnapshot
+            }
+            guard let found = detector.ruleSet(screen: snapshot) else {
+                identityProbeMiss[pane] = Date()
+                return .notAgent
+            }
+            identityProbeMiss.removeValue(forKey: pane)
+            set = found
         }
-        let result = agentDetector.classify(set, title: title, snapshot: snapshot)
+        guard let set else { return .notAgent }
+        // Remember who this pane is, so the next poll doesn't have to re-earn it
+        // from a title that only says "codex" while a turn is running.
+        stickyAgent[pane] = (command ?? "", set.id)
+
+        let result = detector.classify(set, title: title, snapshot: snapshot)
         if snapshot == nil {
             if result?.status == .working { return .state(.working) }
             return .needsSnapshot   // need the screen to tell blocked vs idle
@@ -244,6 +299,28 @@ public final class StateDetectionService {
         }
     }
 
+    /// Identity from the sticky memory first (same pane, same command), then
+    /// from the command name / title. A sticky answer is dropped as soon as the
+    /// foreground command changes — quitting the agent back to the shell must
+    /// not leave the pane wearing the agent's rules.
+    private func resolveSet(detector: AgentDetector, command: String?, title: String,
+                            pane: TmuxPaneID) -> AgentRuleSet? {
+        if let sticky = stickyAgent[pane] {
+            if sticky.command == (command ?? ""), let set = detector.ruleSet(id: sticky.setID) {
+                return set
+            }
+            stickyAgent.removeValue(forKey: pane)
+            identityProbeMiss.removeValue(forKey: pane)
+        }
+        return detector.ruleSet(command: command, title: title)
+    }
+
+    /// Which agent this pane is currently believed to be running (nil = none).
+    /// Exposed for the settings' rule tester and for diagnostics.
+    public func identifiedAgent(for pane: TmuxPaneID) -> String? {
+        stickyAgent[pane]?.setID
+    }
+
     /// Get quick keys for a pane's current state
     public func quickKeys(for state: PaneState) -> [QuickKey] {
         guard case .awaitingInput(let profileID) = state else { return [] }
@@ -258,6 +335,8 @@ public final class StateDetectionService {
         pendingRaw.removeValue(forKey: pane)
         pendingArrival.removeValue(forKey: pane)
         paneProfileOverride.removeValue(forKey: pane)
+        stickyAgent.removeValue(forKey: pane)
+        identityProbeMiss.removeValue(forKey: pane)
     }
 
     /// Return the most recent N lines of stripped text for a pane, joined by

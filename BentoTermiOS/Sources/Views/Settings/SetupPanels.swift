@@ -41,9 +41,9 @@ struct IOSSetupPanel: View {
         case .agents:
             AgentsPanel(context: context) {
                 Section {
-                    NavigationLink("State Detection Profiles") { ProfileListView() }
+                    NavigationLink("Quick Keys & Fallback Patterns") { ProfileListView() }
                 } footer: {
-                    PanelNote("Patterns that decide when a pane is waiting for input, and which quick keys to show.")
+                    PanelNote("The reply buttons offered when a pane is waiting, and the simpler patterns used for tools that aren't coding agents — shells, vim, git.")
                 }
             }
         case .finish:

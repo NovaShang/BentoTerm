@@ -17,6 +17,7 @@ public struct AgentsPanel<Extra: View>: View {
 
     @State private var agents: [DetectedAgent] = []
     @State private var scanning = true
+    @State private var showRules = false
 
     public init(context: PanelContext, @ViewBuilder extra: () -> Extra = { EmptyView() }) {
         self.context = context
@@ -53,6 +54,19 @@ public struct AgentsPanel<Extra: View>: View {
                 }
             } header: { Text(Self.listTitle) }
 
+            // The colors are a guess, and this is where the guess is written
+            // down. It sits on the panel that explains the color language,
+            // because "why is that pane amber?" is asked from here.
+            Section {
+                #if os(macOS)
+                Button("Detection Rules…") { showRules = true }
+                #else
+                NavigationLink("Detection Rules") { AgentRulesListView() }
+                #endif
+            } footer: {
+                PanelNote("What Bento looks for on screen to decide a pane is working, waiting for you, or done — readable, switchable, and extendable if your agent shows something we don't know about.")
+            }
+
             AdvancedBlock(context) {
                 Button("Re-scan") { Task { await rescan() } }
                     .disabled(scanning)
@@ -61,6 +75,21 @@ public struct AgentsPanel<Extra: View>: View {
             extra
         }
         .task { await rescan() }
+        #if os(macOS)
+        // Settings on the Mac is a TabView, not a navigation stack, so the
+        // rules open in their own stack rather than pushing over the panel.
+        .sheet(isPresented: $showRules) {
+            NavigationStack {
+                AgentRulesListView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showRules = false }
+                        }
+                    }
+            }
+            .frame(width: 560, height: 560)
+        }
+        #endif
     }
 
     private static var listTitle: String {

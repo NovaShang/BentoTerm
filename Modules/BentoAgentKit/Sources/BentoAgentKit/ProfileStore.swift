@@ -56,15 +56,25 @@ public final class ProfileStore: ObservableObject {
         }
         // Refresh the PRESET-DRIVEN detection fields on existing built-ins so
         // installs that stored an older built-in (e.g. before the rich rules /
-        // boundary existed) pick them up. These have no editor, so this can't
-        // clobber a user edit; user-editable fields (name/outputPatterns/
-        // titlePatterns/quickKeys) are left as stored.
+        // boundary existed) pick them up. This is the delivery path for every
+        // rule fix we ship, so it runs by default — EXCEPT on profiles the user
+        // has edited in Settings, which say so with `agentRulesCustomized`.
+        // Other user-editable fields (name/outputPatterns/titlePatterns/
+        // quickKeys) are left as stored either way.
         let presetByID = Dictionary(Self.defaultProfiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        for i in profiles.indices where profiles[i].isBuiltIn {
+        for i in profiles.indices where profiles[i].isBuiltIn && !profiles[i].agentRulesCustomized {
             guard let preset = presetByID[profiles[i].id] else { continue }
-            // Adopt preset detection logic (idempotent: only writes when different).
-            if !sameRules(profiles[i].agentRules, preset.agentRules) {
-                profiles[i].agentRules = preset.agentRules
+            // Adopt preset detection logic (idempotent: only writes when
+            // different), while carrying over the one switch that isn't logic:
+            // "detect this agent at all". Turning an agent off is a standing
+            // preference, not an edit to its rules, so it must survive a
+            // refresh that improves them.
+            var refreshed = preset.agentRules
+            if let stored = profiles[i].agentRules {
+                refreshed?.isEnabled = stored.isEnabled
+            }
+            if !sameRules(profiles[i].agentRules, refreshed) {
+                profiles[i].agentRules = refreshed
                 changed = true
             }
             if profiles[i].promptBoundary != preset.promptBoundary {
@@ -74,6 +84,11 @@ public final class ProfileStore: ObservableObject {
         }
         if changed { save() }
     }
+
+    /// Run the built-in refresh against the live store. Only for tests — it's
+    /// the launch-time path, and what it must NOT do (overwrite an edit, drop
+    /// the off switch) is worth asserting directly.
+    func applyBuiltInRefreshForTesting() { mergeMissingBuiltIns() }
 
     /// Cheap structural compare of two optional rule sets (encode + equate JSON).
     private func sameRules(_ a: AgentRuleSet?, _ b: AgentRuleSet?) -> Bool {
@@ -97,6 +112,46 @@ public final class ProfileStore: ObservableObject {
         save()
     }
 
+    // MARK: - Detection rule editing (Settings)
+
+    /// Store an edited rule set and mark the profile as customized, so the
+    /// built-in refresh stops overwriting it. Every rules editor goes through
+    /// here — forgetting the flag is how a user's edit silently disappears on
+    /// the next launch.
+    public func updateRules(_ rules: AgentRuleSet, for profileID: String) {
+        guard let i = profiles.firstIndex(where: { $0.id == profileID }) else { return }
+        profiles[i].agentRules = rules
+        profiles[i].agentRulesCustomized = true
+        save()
+    }
+
+    /// Turn detection for one agent on or off. Deliberately NOT an edit: the
+    /// preference is carried across preset refreshes (see mergeMissingBuiltIns),
+    /// so switching an agent off doesn't also freeze it on today's rules.
+    public func setDetectionEnabled(_ enabled: Bool, for profileID: String) {
+        guard let i = profiles.firstIndex(where: { $0.id == profileID }),
+              var rules = profiles[i].agentRules, rules.isEnabled != enabled
+        else { return }
+        rules.isEnabled = enabled
+        profiles[i].agentRules = rules
+        save()
+    }
+
+    /// Drop the user's edits for one agent and take the shipped rules back.
+    public func resetRules(for profileID: String) {
+        guard let i = profiles.firstIndex(where: { $0.id == profileID }),
+              let preset = Self.defaultProfiles.first(where: { $0.id == profileID })
+        else { return }
+        profiles[i].agentRules = preset.agentRules
+        profiles[i].agentRulesCustomized = false
+        save()
+    }
+
+    /// True when this profile's shipped rules differ from what's stored.
+    public func hasPresetRules(for profileID: String) -> Bool {
+        Self.defaultProfiles.contains { $0.id == profileID && $0.agentRules != nil }
+    }
+
     // MARK: - Built-in Presets
 
     // Command-specific profiles are listed before the catch-all `genericShell`;
@@ -105,7 +160,7 @@ public final class ProfileStore: ObservableObject {
     // shadowed by the generic one.
     public static let defaultProfiles: [StateProfile] = [
         claudeCode, codex, gemini, opencode, hermes, antigravity,
-        cursorAgent, copilot, amp, cline,
+        cursorAgent, copilot, amp, cline, droid, qwen, grok, kimi,
         gitInteractive, vim, genericShell,
     ]
 
@@ -285,6 +340,46 @@ public final class ProfileStore: ObservableObject {
         quickKeys: agentQuickKeys,
         isBuiltIn: true,
         agentRules: .cline
+    )
+
+    public static let droid = StateProfile(
+        id: "droid",
+        name: "Droid",
+        outputPatterns: ["Yes, allow", "esc to stop"],
+        commandPattern: "droid",
+        quickKeys: agentQuickKeys,
+        isBuiltIn: true,
+        agentRules: .droid
+    )
+
+    public static let qwen = StateProfile(
+        id: "qwen",
+        name: "Qwen Code",
+        outputPatterns: ["Waiting for user confirmation", "Yes, allow once"],
+        commandPattern: "qwen",
+        quickKeys: agentQuickKeys,
+        isBuiltIn: true,
+        agentRules: .qwen
+    )
+
+    public static let grok = StateProfile(
+        id: "grok",
+        name: "Grok",
+        outputPatterns: ["Yes, proceed", "No, reject"],
+        commandPattern: "grok",
+        quickKeys: agentQuickKeys,
+        isBuiltIn: true,
+        agentRules: .grok
+    )
+
+    public static let kimi = StateProfile(
+        id: "kimi",
+        name: "Kimi Code",
+        outputPatterns: ["Requesting approval", "Approve once"],
+        commandPattern: "kimi",
+        quickKeys: agentQuickKeys,
+        isBuiltIn: true,
+        agentRules: .kimi
     )
 
     // commandPattern "vim" matches vim / nvim / gvim (substring). Vim is always

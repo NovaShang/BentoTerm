@@ -24,6 +24,12 @@ public struct StateProfile: Identifiable, Codable {
     /// ProfileStore.mergeMissingBuiltIns) — detection logic stays preset-driven,
     /// user edits to name/outputPatterns/quickKeys persist.
     public var agentRules: AgentRuleSet?
+    /// Set once the user edits this profile's detection rules in Settings.
+    /// It's what stops `mergeMissingBuiltIns` from refreshing the rules out
+    /// from under them on the next launch — the refresh is how everyone else
+    /// gets improved built-ins, so the flag, not the refresh, is the exception.
+    /// "Reset to built-in" clears it.
+    public var agentRulesCustomized: Bool
     /// Line regexes that mark a USER-TURN START in the scrollback.
     /// e.g. Claude Code: a line starting `❯ `.
     public var promptBoundary: [String]
@@ -31,12 +37,14 @@ public struct StateProfile: Identifiable, Codable {
     public init(id: String, name: String, outputPatterns: [String],
                 titlePatterns: [String] = [],
                 commandPattern: String?, quickKeys: [QuickKey], isBuiltIn: Bool = false,
-                agentRules: AgentRuleSet? = nil, promptBoundary: [String] = []) {
+                agentRules: AgentRuleSet? = nil, agentRulesCustomized: Bool = false,
+                promptBoundary: [String] = []) {
         self.id = id; self.name = name; self.outputPatterns = outputPatterns
         self.titlePatterns = titlePatterns
         self.commandPattern = commandPattern; self.quickKeys = quickKeys
         self.isBuiltIn = isBuiltIn
-        self.agentRules = agentRules; self.promptBoundary = promptBoundary
+        self.agentRules = agentRules; self.agentRulesCustomized = agentRulesCustomized
+        self.promptBoundary = promptBoundary
     }
 
     // Lenient decoder — defaults all fields so adding new ones doesn't
@@ -51,6 +59,7 @@ public struct StateProfile: Identifiable, Codable {
         self.quickKeys = (try? c.decode([QuickKey].self, forKey: .quickKeys)) ?? []
         self.isBuiltIn = (try? c.decode(Bool.self, forKey: .isBuiltIn)) ?? false
         self.agentRules = try? c.decodeIfPresent(AgentRuleSet.self, forKey: .agentRules)
+        self.agentRulesCustomized = (try? c.decode(Bool.self, forKey: .agentRulesCustomized)) ?? false
         self.promptBoundary = (try? c.decode([String].self, forKey: .promptBoundary)) ?? []
     }
 }
