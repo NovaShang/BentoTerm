@@ -58,6 +58,12 @@ public final class VoiceSession {
     /// saw an error. Reset on every `start()`.
     private var interrupted = false
 
+    /// `start()`'s error reporter, kept for the paths that run AFTER the caller's
+    /// closure went out of scope — the batch fallback in `finish()` and the
+    /// right-swipe refine. Without it a relay refusal (daily voice quota spent)
+    /// would resolve as an empty transcript, which reads as "it didn't hear me".
+    private var reportError: (@MainActor (String) -> Void)?
+
     /// PCM captured before the realtime socket is open, flushed once it connects
     /// so the opening words aren't lost to the (cold) WSS handshake latency.
     private var pendingPCM: [Data] = []
@@ -114,6 +120,7 @@ public final class VoiceSession {
         realtimeFinalArrived = false
         realtimeCompleted = false
         interrupted = false
+        reportError = onError
         dlog("[voice] start engine=\(engine)")
 
         // Fast path: when permission is already granted (the common case after the
@@ -266,12 +273,16 @@ public final class VoiceSession {
             dlog("[voice] realtime empty → batch fallback (\(recordedPCM.count) bytes)")
             let clipSeconds = recordedDuration
             let corpus = activeCorpus
-            let better = await BatchTranscriptionService.shared.transcribe(
+            let outcome = await BatchTranscriptionService.shared.outcome(
                 pcm: recordedPCM, sampleRate: activeSampleRate, language: language, corpus: corpus)
+            if case .refused(let refusal) = outcome {
+                await reportRefusal(refusal)
+                return ""
+            }
+            guard case .text(let better) = outcome else { return "" }
             // The batch model is biased by the same corpus and fails the same
             // way on a thin clip — this is the path that reaches it most often.
-            guard let better,
-                  !isHallucinated(better, clipSeconds: clipSeconds, corpus: corpus) else { return "" }
+            guard !isHallucinated(better, clipSeconds: clipSeconds, corpus: corpus) else { return "" }
             return better
         }
     }
@@ -331,6 +342,16 @@ public final class VoiceSession {
         }
     }
 
+    /// Tell the user the relay turned this clip down, on the main actor. Silent
+    /// when nobody is listening — a refusal with no reporter is still better as
+    /// an empty transcript than as a crash.
+    private func reportRefusal(_ refusal: RelayQuotaError) async {
+        dlog("[voice] relay refused: \(refusal.reason.rawValue)")
+        let message = refusal.errorDescription ?? "Voice recognition is unavailable right now."
+        let report = reportError
+        await MainActor.run { report?(message) }
+    }
+
     /// The complete recorded audio of the just-finished session as 16-bit mono
     /// PCM + its sample rate, for the right-swipe batch re-transcription. Survives
     /// `stop()` (cleared on the next `start()`). Nil when no PCM was captured —
@@ -353,8 +374,14 @@ public final class VoiceSession {
         let clipSeconds = recordedDuration
         Task {
             let lang = openAILanguageHint(for: UserDefaults.standard.string(forKey: "speech_locale") ?? "auto")
-            let better = await BatchTranscriptionService.shared.transcribe(
+            let outcome = await BatchTranscriptionService.shared.outcome(
                 pcm: rec.pcm, sampleRate: rec.sampleRate, language: lang, corpus: corpus)
+            if case .refused(let refusal) = outcome {
+                await reportRefusal(refusal)
+                await MainActor.run { completion(nil) }
+                return
+            }
+            let better: String? = if case .text(let t) = outcome { t } else { nil }
             // Same guard as the send path: a corpus echo must not land in the
             // preview editor either, where it reads as "this is what you said".
             await MainActor.run {

@@ -13,6 +13,15 @@ public final class BatchTranscriptionService: @unchecked Sendable {
     public static let shared = BatchTranscriptionService()
     private let session = URLSession(configuration: .default)
 
+    /// What a batch attempt produced. `refused` exists so a spent quota reaches
+    /// the user as a sentence instead of as silence — every other failure is
+    /// still just "nothing came back", which the caller already handles.
+    public enum Outcome: Sendable, Equatable {
+        case text(String)
+        case empty
+        case refused(RelayQuotaError)
+    }
+
     private static let relayURL = URL(string: "https://relay.bentoai.dev/v1/audio/transcriptions")!
     private static let directURL = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
     private static let model = "gpt-4o-transcribe"
@@ -22,6 +31,18 @@ public final class BatchTranscriptionService: @unchecked Sendable {
     private static let qwenRelayURL = URL(string: "https://relay.bentoai.dev/v1/asr/qwen/transcribe")!
     private static let qwenDirectURL = URL(string: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation")!
 
+    /// Mirrors the relay's `QUOTA_MAX_CLIP_SECONDS`. Kept as a client-side
+    /// pre-check only — the relay is the one that enforces it.
+    static let relayMaxClipSeconds: Double = 120
+
+    /// True when the user brought a key for whichever engine is selected, so the
+    /// request bypasses the relay entirely.
+    private static var hasOwnKey: Bool {
+        let key = SpeechEngineKind.current() == .qwen ? "dashscope_api_key" : "openai_api_key"
+        return !(UserDefaults.standard.string(forKey: key) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     public init() {}
 
     /// Transcribe 16-bit mono PCM at `sampleRate`. `language` is an optional
@@ -29,7 +50,21 @@ public final class BatchTranscriptionService: @unchecked Sendable {
     /// by the OpenAI path). Routes to the engine the user has selected so switching
     /// to Qwen is end-to-end Qwen. Returns the text, or nil on empty/failure.
     public func transcribe(pcm: Data, sampleRate: Double, language: String = "", corpus: String = "") async -> String? {
-        guard !pcm.isEmpty else { return nil }
+        switch await outcome(pcm: pcm, sampleRate: sampleRate, language: language, corpus: corpus) {
+        case .text(let t): return t
+        case .empty, .refused: return nil
+        }
+    }
+
+    /// Same call, but able to say the relay refused it (daily free quota spent).
+    public func outcome(pcm: Data, sampleRate: Double, language: String = "", corpus: String = "") async -> Outcome {
+        guard !pcm.isEmpty else { return .empty }
+        // The relay refuses clips past its per-call ceiling. Catching that here
+        // saves uploading megabytes of WAV to be told no — BYOK skips the check
+        // because it isn't the relay's audio to cap.
+        if !Self.hasOwnKey, Double(pcm.count) / (sampleRate * 2) > Self.relayMaxClipSeconds {
+            return .refused(RelayQuotaError(reason: .clipTooLong))
+        }
         let wav = Self.wav(pcm: pcm, sampleRate: sampleRate)
         if SpeechEngineKind.current() == .qwen {
             return await transcribeQwen(wav: wav, language: language, corpus: corpus)
@@ -38,7 +73,7 @@ public final class BatchTranscriptionService: @unchecked Sendable {
     }
 
     /// OpenAI `gpt-4o-transcribe` batch (relay zero-config, or BYOK direct).
-    private func transcribeOpenAI(wav: Data, language: String) async -> String? {
+    private func transcribeOpenAI(wav: Data, language: String) async -> Outcome {
         let key = (UserDefaults.standard.string(forKey: "openai_api_key") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -50,6 +85,7 @@ public final class BatchTranscriptionService: @unchecked Sendable {
             request = URLRequest(url: comps.url!)
             request.httpMethod = "POST"
             request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
+            RelayInstall.stamp(&request)
             request.httpBody = wav
         } else {
             // BYOK: multipart form straight to OpenAI.
@@ -67,22 +103,31 @@ public final class BatchTranscriptionService: @unchecked Sendable {
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 let code = (response as? HTTPURLResponse)?.statusCode ?? -1
                 dlog("[batch-asr] HTTP \(code): \(String(data: data, encoding: .utf8)?.prefix(200) ?? "")")
-                return nil
+                if let refusal = Self.refusal(status: code, body: data) { return .refused(refusal) }
+                return .empty
             }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let text = json["text"] as? String else { return nil }
+                  let text = json["text"] as? String else { return .empty }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
+            return trimmed.isEmpty ? .empty : .text(trimmed)
         } catch {
             dlog("[batch-asr] error: \(error)")
-            return nil
+            return .empty
         }
+    }
+
+    /// Read a relay quota refusal out of a non-2xx response. 429 is the quota
+    /// gate; 413 is a clip the relay won't accept at any quota.
+    static func refusal(status: Int, body: Data) -> RelayQuotaError? {
+        guard status == 429 || status == 413 else { return nil }
+        guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return nil }
+        return RelayQuotaError.from(payload: json)
     }
 
     /// Qwen `qwen3-asr-flash` batch via DashScope multimodal ASR. Zero-config posts
     /// `{ audio, language?, corpus? }` to the relay (which injects the key and
     /// returns `{ text }`); BYOK posts the native DashScope request directly.
-    private func transcribeQwen(wav: Data, language: String, corpus: String) async -> String? {
+    private func transcribeQwen(wav: Data, language: String, corpus: String) async -> Outcome {
         let b64 = wav.base64EncodedString()
         let key = (UserDefaults.standard.string(forKey: "dashscope_api_key") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -109,6 +154,7 @@ public final class BatchTranscriptionService: @unchecked Sendable {
             request = URLRequest(url: Self.qwenRelayURL)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            RelayInstall.stamp(&request)
             var payload: [String: Any] = ["audio": b64]
             if !language.isEmpty { payload["language"] = language }
             if !corpus.isEmpty { payload["corpus"] = corpus }
@@ -121,16 +167,17 @@ public final class BatchTranscriptionService: @unchecked Sendable {
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 let code = (response as? HTTPURLResponse)?.statusCode ?? -1
                 dlog("[batch-asr] qwen HTTP \(code): \(String(data: data, encoding: .utf8)?.prefix(200) ?? "")")
-                return nil
+                if let refusal = Self.refusal(status: code, body: data) { return .refused(refusal) }
+                return .empty
             }
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .empty }
             // Relay returns { text }; direct returns the native DashScope shape.
             let text = direct ? Self.parseDashScope(json) : (json["text"] as? String)
             let trimmed = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
+            return trimmed.isEmpty ? .empty : .text(trimmed)
         } catch {
             dlog("[batch-asr] qwen error: \(error)")
-            return nil
+            return .empty
         }
     }
 

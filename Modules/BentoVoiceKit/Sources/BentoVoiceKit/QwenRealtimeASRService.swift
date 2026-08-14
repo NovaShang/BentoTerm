@@ -111,9 +111,11 @@ public final class QwenRealtimeASRService: NSObject, @unchecked Sendable, Realti
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             request.setValue("realtime=v1", forHTTPHeaderField: "OpenAI-Beta")
         } else if let proxyURL {
-            // Zero-config: the relay adds the key + upstream headers.
+            // Zero-config: the relay adds the key + upstream headers, and meters
+            // the audio this install streams against its daily free quota.
             endpoint = proxyURL
             request = URLRequest(url: endpoint)
+            RelayInstall.stamp(&request)
         } else {
             throw ASRError.missingCredentials
         }
@@ -258,8 +260,15 @@ public final class QwenRealtimeASRService: NSObject, @unchecked Sendable, Realti
                     }
                     onCompleted?()
                 case "error":
-                    let info = (json["error"] as? [String: Any])?["message"] as? String
-                        ?? "Qwen Realtime error"
+                    let payload = json["error"] as? [String: Any] ?? [:]
+                    // The relay refuses a quota-spent session inside the socket
+                    // (rather than failing the upgrade) precisely so this case
+                    // can say why instead of reading as a network drop.
+                    if let quota = RelayQuotaError.from(payload: payload) {
+                        onError?(quota)
+                        return
+                    }
+                    let info = payload["message"] as? String ?? "Qwen Realtime error"
                     onError?(ASRError.server(info))
                     return
                 default:

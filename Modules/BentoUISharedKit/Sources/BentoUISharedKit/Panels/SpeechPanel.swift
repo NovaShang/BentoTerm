@@ -134,8 +134,8 @@ public struct SpeechPanel<Extra: View>: View {
 
             AdvancedBlock(context) {
                 PanelNote("""
-                    Leave the key blank to use Bento's servers (rate-limited). \
-                    Fill it in to talk to your own account directly.
+                    Leave the key blank to use Bento's servers — 30 minutes of speech a day, \
+                    free. Fill it in to talk to your own account directly, with no limit.
                     """)
                 switch speechEngine {
                 case "openai":
@@ -177,10 +177,12 @@ public struct SpeechPanel<Extra: View>: View {
         }
     }
 
+    // The free allowance is a real number, so say the number. "Rate-limited"
+    // reads as a warning about nothing until the day it stops you mid-sentence.
     private var relayNote: LocalizedStringKey {
         speechEngine == "apple"
-            ? "Apple's engine runs on this device. Turning speech into a shell command still goes through Bento's relay (rate-limited) — you can use your own API key in Settings."
-            : "Speech recognition and voice → shell go through Bento's relay (rate-limited). You can use your own API key in Settings."
+            ? "Apple's engine runs on this device. Turning speech into a shell command still goes through Bento's relay (free, with a daily limit) — you can use your own API key in Settings."
+            : "Speech recognition and voice → shell go through Bento's relay: 30 minutes of speech a day, free. Add your own API key in Settings for unlimited use."
     }
 
     private func engineRow(_ engine: SpeechEngineOption) -> some View {
