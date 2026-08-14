@@ -683,7 +683,10 @@ struct TerminalWrapperView: View {
         if voiceController.showOverlay {
             GeometryReader { geo in
                 let anchor = compassAnchor(in: geo)
-                VoiceCompassView(controller: voiceController)
+                VoiceCompassView(controller: voiceController,
+                                 placement: .resolve(anchor: anchor,
+                                                     in: geo.frame(in: .local),
+                                                     insets: compassInsets(in: geo)))
                 .position(anchor)
             }
             .ignoresSafeArea()
@@ -695,28 +698,36 @@ struct TerminalWrapperView: View {
         }
     }
 
-    /// Keep the compass on screen when the press starts near an edge. It is
-    /// centered on the touch point, so a press near the top clipped the transcript
-    /// bubble, near the bottom clipped the cancel target (and it collided with the
-    /// floating quick-keys toolbar), and near a side clipped the side targets.
+    /// Edges the compass cannot use: the safe areas, plus the floating quick-keys
+    /// toolbar at the bottom (the down target has to clear it).
+    private func compassInsets(in geo: GeometryProxy) -> EdgeInsets {
+        let safe = geo.safeAreaInsets
+        return EdgeInsets(top: safe.top,
+                          leading: safe.leading,
+                          bottom: safe.bottom + FloatingQuickKeysToolbar.reservedBand,
+                          trailing: safe.trailing)
+    }
+
+    /// Keep the compass on screen when the press starts near an edge — but only
+    /// the COMPASS: the ring is the part that has to stay under the finger, and
+    /// it needs `ringReach` around the anchor, nothing more.
     ///
-    /// Clamp the ANCHOR rather than the view: the compass keeps its fixed internal
-    /// layout (the four targets stay reachable at known offsets) and just stops
-    /// short of the edges. Only what the content actually needs is reserved —
-    /// clamping by the full half-height would yank the overlay to mid-screen and
-    /// away from the finger.
+    /// This used to reserve the transcript bubble's footprint too (270pt above,
+    /// 180pt each side), which made a huge band along every edge unable to host a
+    /// compass at the touch point — press there and the whole thing jumped inward,
+    /// away from the finger. The bubble now moves instead: it flips below the
+    /// compass near the top and slides sideways near a side
+    /// (`VoiceCompassView.Placement`), so the anchor itself barely has to move.
     private func compassAnchor(in geo: GeometryProxy) -> CGPoint {
         typealias M = VoiceCompassView.Metrics
         let bounds = geo.frame(in: .local)
-        let safe = geo.safeAreaInsets
+        let insets = compassInsets(in: geo)
         let margin: CGFloat = 8
-        // The toolbar sits at the bottom, so the down target has to clear it too.
-        let bottomReserve = safe.bottom + FloatingQuickKeysToolbar.reservedBand + margin
 
-        let minX = bounds.minX + M.halfWidth + margin
-        let maxX = bounds.maxX - M.halfWidth - margin
-        let minY = bounds.minY + safe.top + M.reachUp + margin
-        let maxY = bounds.maxY - bottomReserve - M.reachDown
+        let minX = bounds.minX + insets.leading + M.ringReach + margin
+        let maxX = bounds.maxX - insets.trailing - M.ringReach - margin
+        let minY = bounds.minY + insets.top + M.ringReach + margin
+        let maxY = bounds.maxY - insets.bottom - M.ringReach - margin
 
         let p = voiceController.fingerScreenPosition
         // A screen too small for the ideal margins: center on that axis instead of

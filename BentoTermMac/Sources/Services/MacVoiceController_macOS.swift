@@ -86,8 +86,21 @@ public final class MacVoiceOverlay: NSView {
     public static let preferredSize = NSSize(width: 360, height: 580)
 
     private let hosting: NSHostingView<VoiceCompassView>
+    private let controller: MacVoiceController
+
+    /// Where the transcript bubble sits relative to the anchor. Set by the host
+    /// when it positions the overlay — i.e. BEFORE the recording (and the
+    /// compass's entrance animation) begins, which is why replacing the root
+    /// view here is safe: mid-recording it would cancel the animation.
+    public var placement = VoiceCompassView.Placement() {
+        didSet {
+            guard placement != oldValue else { return }
+            hosting.rootView = VoiceCompassView(controller: controller, placement: placement)
+        }
+    }
 
     public init(controller: MacVoiceController, frame frameRect: NSRect) {
+        self.controller = controller
         hosting = NSHostingView(rootView: VoiceCompassView(controller: controller))
         super.init(frame: frameRect)
         wantsLayer = true

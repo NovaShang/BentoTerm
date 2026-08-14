@@ -41,12 +41,55 @@ public struct VoiceCompassView: View {
     /// centered on the touch point, so nothing inside it can enforce that.
     public enum Metrics {
         public static let size = CGSize(width: 360, height: 580)
-        /// Half-width: the side targets sit within this of the anchor.
-        public static let halfWidth: CGFloat = size.width / 2
-        /// Top of the tallest bubble, above the anchor.
-        public static let reachUp: CGFloat = 270
-        /// Bottom of the down target (plus its glow), below the anchor.
-        public static let reachDown: CGFloat = 120
+
+        /// What the COMPASS ITSELF needs around the anchor: the ring sits at
+        /// radius 80, the active disc is 74 across, and its glow adds a few more
+        /// points. This — and only this — is what a host must keep on screen,
+        /// because it is the part that has to stay under the finger/cursor.
+        public static let ringReach: CGFloat = 130
+
+        /// How far the transcript bubble reaches beyond the anchor on whichever
+        /// side it is placed. A host with less room than this on the preferred
+        /// side flips the bubble instead of dragging the whole compass inward
+        /// (`Placement.bubbleBelow`).
+        public static let bubbleReach: CGFloat = 270
+        /// Half the bubble's width, for the same reason horizontally
+        /// (`Placement.bubbleShift`).
+        public static let bubbleHalfWidth: CGFloat = 140
+    }
+
+    /// Where the bubble goes when the anchor is near an edge. The compass stays
+    /// under the finger; only the bubble moves.
+    ///
+    /// The old behaviour reserved the bubble's whole footprint around EVERY
+    /// press and clamped the anchor by it, so a band 270pt deep along the top,
+    /// 120pt along the bottom and 180pt down each side could not host a compass
+    /// at the cursor at all — in a normal window that is most of the screen.
+    public struct Placement: Equatable, Sendable {
+        /// The bubble hangs below the compass (no room above the anchor).
+        public var bubbleBelow: Bool
+        /// Sideways nudge that keeps the bubble on screen while the compass
+        /// stays put. Positive = right.
+        public var bubbleShift: CGFloat
+
+        public init(bubbleBelow: Bool = false, bubbleShift: CGFloat = 0) {
+            self.bubbleBelow = bubbleBelow
+            self.bubbleShift = bubbleShift
+        }
+
+        /// Resolve the placement for an anchor inside `bounds`, given how much
+        /// of each edge is unavailable (safe areas, a floating toolbar…).
+        public static func resolve(anchor: CGPoint, in bounds: CGRect,
+                                   insets: EdgeInsets = EdgeInsets(),
+                                   margin: CGFloat = 8) -> Placement {
+            let roomAbove = anchor.y - (bounds.minY + insets.top)
+            let below = roomAbove < Metrics.bubbleReach + margin
+            let minX = bounds.minX + insets.leading + margin + Metrics.bubbleHalfWidth
+            let maxX = bounds.maxX - insets.trailing - margin - Metrics.bubbleHalfWidth
+            var shift: CGFloat = 0
+            if minX <= maxX { shift = min(max(anchor.x, minX), maxX) - anchor.x }
+            return Placement(bubbleBelow: below, bubbleShift: shift)
+        }
     }
 
     /// Observed directly: the shared controller's published state IS the overlay's
@@ -55,8 +98,13 @@ public struct VoiceCompassView: View {
     /// SwiftUI animation state, so the bubble jumped instead of growing.)
     @ObservedObject public var controller: VoiceController
 
-    public init(controller: VoiceController) {
+    /// Set by the host, which is the only one that knows where on screen the
+    /// press landed.
+    public var placement: Placement
+
+    public init(controller: VoiceController, placement: Placement = Placement()) {
         self.controller = controller
+        self.placement = placement
     }
 
     private let accent = Color(red: 0.30, green: 0.90, blue: 0.62)
@@ -127,13 +175,20 @@ public struct VoiceCompassView: View {
             // which is what leaves the eye on the target.
             if !leaving || chromeShown {
                 bubble
-                    .frame(height: Self.bubbleSlot, alignment: .bottom)
-                    .offset(y: -(radius + 106))
+                    // Above the compass by default, below it when the press
+                    // landed too near the top — mirrored, so it still grows away
+                    // from the ring and never creeps over it.
+                    .frame(height: Self.bubbleSlot,
+                           alignment: placement.bubbleBelow ? .top : .bottom)
+                    .offset(x: placement.bubbleShift,
+                            y: placement.bubbleBelow ? (radius + 106) : -(radius + 106))
                     // The rise + fade is an entrance flourish; `leaving` pins it
                     // in place so the exit adds no movement of its own.
                     .opacity(chromeShown ? 1 : 0)
-                    .scaleEffect(chromeShown || leaving ? 1 : 0.94, anchor: .bottom)
-                    .offset(y: chromeShown || leaving ? 0 : 10)
+                    .scaleEffect(chromeShown || leaving ? 1 : 0.94,
+                                 anchor: placement.bubbleBelow ? .top : .bottom)
+                    // The entrance drifts in from the compass, so it mirrors too.
+                    .offset(y: chromeShown || leaving ? 0 : (placement.bubbleBelow ? -10 : 10))
                     .animation(chromeShown ? Self.chromeFade : Self.chromeOut, value: chromeShown)
                     .transition(.opacity)
             }

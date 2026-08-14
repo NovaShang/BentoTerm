@@ -164,6 +164,50 @@ final class VoiceTests: XCTestCase {
         XCTAssertFalse(isImplausibleTranscript("anything at all here", clipSeconds: 0, corpus: corpus))
     }
 
+    // MARK: - Compass placement near the window edges
+
+    /// A 1200x800 window, the anchor well away from every edge: the bubble keeps
+    /// its default spot above the compass and does not slide.
+    func testPlacementLeavesTheBubbleAloneInTheMiddle() {
+        let bounds = CGRect(x: 0, y: 0, width: 1200, height: 800)
+        let p = VoiceCompassView.Placement.resolve(anchor: CGPoint(x: 600, y: 400), in: bounds)
+        XCTAssertFalse(p.bubbleBelow)
+        XCTAssertEqual(p.bubbleShift, 0)
+    }
+
+    /// Near the top there is no room for the bubble above the anchor — it flips
+    /// below rather than dragging the whole compass down away from the cursor.
+    func testBubbleFlipsBelowNearTheTop() {
+        let bounds = CGRect(x: 0, y: 0, width: 1200, height: 800)
+        XCTAssertTrue(VoiceCompassView.Placement.resolve(
+            anchor: CGPoint(x: 600, y: 140), in: bounds).bubbleBelow)
+        // Just past the bubble's reach it stays above.
+        XCTAssertFalse(VoiceCompassView.Placement.resolve(
+            anchor: CGPoint(x: 600, y: 300), in: bounds).bubbleBelow)
+    }
+
+    /// Near a side the bubble slides inward by exactly the overhang; the compass
+    /// itself (and so the anchor) does not move.
+    func testBubbleSlidesInFromTheSides() {
+        typealias M = VoiceCompassView.Metrics
+        let bounds = CGRect(x: 0, y: 0, width: 1200, height: 800)
+        let left = VoiceCompassView.Placement.resolve(anchor: CGPoint(x: 40, y: 400), in: bounds)
+        XCTAssertEqual(left.bubbleShift, M.bubbleHalfWidth + 8 - 40, accuracy: 0.01,
+                       "shifted right by the overhang")
+        let right = VoiceCompassView.Placement.resolve(anchor: CGPoint(x: 1180, y: 400), in: bounds)
+        XCTAssertEqual(right.bubbleShift, 1200 - 8 - M.bubbleHalfWidth - 1180, accuracy: 0.01,
+                       "shifted left by the overhang")
+        XCTAssertLessThan(right.bubbleShift, 0)
+    }
+
+    /// A window narrower than the bubble: the range inverts, and the shift must
+    /// collapse to zero instead of flinging the bubble somewhere arbitrary.
+    func testPlacementSurvivesAWindowNarrowerThanTheBubble() {
+        let bounds = CGRect(x: 0, y: 0, width: 200, height: 400)
+        let p = VoiceCompassView.Placement.resolve(anchor: CGPoint(x: 100, y: 200), in: bounds)
+        XCTAssertEqual(p.bubbleShift, 0)
+    }
+
     func testPhysicallyImpossibleTextIsRejectedEvenWithoutACorpus() {
         // 200 characters out of a third of a second is not speech, whatever it is.
         XCTAssertTrue(isImplausibleTranscript(String(repeating: "字", count: 200),

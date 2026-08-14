@@ -2,6 +2,7 @@ import BentoTmuxKit
 import BentoFilePreviewKit
 import BentoFoundationKit
 import BentoGhosttyKit
+import BentoVoiceKit   // VoiceCompassView.Metrics / .Placement for the overlay's anchor
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Combine
@@ -502,15 +503,27 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             voiceOverlay = overlay
         }
 
-        // Center the overlay at the press point (screen → host coords), clamped.
+        // Center the overlay at the press point (screen → host coords).
         let size = MacVoiceOverlay.preferredSize
         var local = NSPoint(x: bounds.midX, y: bounds.midY)
         if let window {
             local = convert(window.convertPoint(fromScreen: screenPt), from: nil)
         }
-        let x = min(max(local.x - size.width / 2, 0), max(bounds.width - size.width, 0))
-        let y = min(max(local.y - size.height / 2, 0), max(bounds.height - size.height, 0))
-        overlay.frame = NSRect(x: x, y: y, width: size.width, height: size.height)
+        // Clamp only by what the RING needs. This used to keep the whole
+        // 360x580 frame inside the window, which meant the compass could only be
+        // centered on the cursor in a narrow band through the middle — press
+        // anywhere else and it jumped inward, away from the pointer. The bubble
+        // handles the edges itself now (flips below near the top, slides
+        // sideways near a side), so the anchor barely has to move.
+        let reach = VoiceCompassView.Metrics.ringReach + 8
+        let anchor = NSPoint(
+            x: min(max(local.x, reach), max(bounds.width - reach, reach)),
+            y: min(max(local.y, reach), max(bounds.height - reach, reach)))
+        // `Placement` works in y-down (SwiftUI) space; these are AppKit y-up.
+        overlay.placement = .resolve(anchor: CGPoint(x: anchor.x, y: bounds.height - anchor.y),
+                                     in: CGRect(origin: .zero, size: bounds.size))
+        overlay.frame = NSRect(x: anchor.x - size.width / 2, y: anchor.y - size.height / 2,
+                               width: size.width, height: size.height)
         overlay.isHidden = false
         overlay.needsLayout = true
     }
