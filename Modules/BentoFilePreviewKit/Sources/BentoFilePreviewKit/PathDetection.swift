@@ -287,6 +287,23 @@ public enum PathDetector {
         return "⎿⏺●○◐◑•·▪❯›»>|".contains(ch)
     }
 
+    /// A list bullet standing alone at the head of a line: "-", "*", "+",
+    /// "1.", "2)". Markdown and CLI output put these in front of paths
+    /// constantly ("- docs/技术文档.md"), and unlike ⏺/⎿ they're made of
+    /// characters that are perfectly legal INSIDE a name — so they can't join
+    /// `isDecoration`, which strips leading chrome unconditionally (that would
+    /// eat the "-" of an `ls -l` mode column, and the head of a wrapped
+    /// "-technical.md" fragment).
+    ///
+    /// The head-of-line restriction is what makes this safe: mid-line a lone
+    /// hyphen is ordinary name material ("Report - Final.pdf"), so `before`
+    /// must be all decoration for the run to count as a bullet.
+    static func isLeadingListMarker(_ run: Substring, before: Substring) -> Bool {
+        guard before.allSatisfy({ isDecoration($0) }) else { return false }
+        return run.range(of: #"^(?:[-*+•]|\d{1,3}[.)])$"#,
+                         options: .regularExpression) != nil
+    }
+
     /// First index of real content (after leading decoration).
     static func effectiveStart(of line: String) -> String.Index {
         var i = line.startIndex
@@ -422,7 +439,8 @@ public enum PathDetector {
         var runs: [Range<String.Index>] = [lo..<hi]
         var anchorIdx = 0
         while anchorIdx < maxNeighbors,
-              let r = runEnding(before: runs[0].lowerBound), !isDecorationRun(r) {
+              let r = runEnding(before: runs[0].lowerBound), !isDecorationRun(r),
+              !isLeadingListMarker(line[r], before: line[..<r.lowerBound]) {
             runs.insert(r, at: 0)
             anchorIdx += 1
         }
@@ -633,6 +651,12 @@ public struct PathHitTester {
                   reachesWrapBoundary(lastLine),
                   last.li + 1 < lines.count,
                   let next = PathDetector.headToken(of: lines[last.li + 1]) else { break }
+            // A bullet opening the next line ends the chain: "-" / "1." is the
+            // next list item, not the tail of the path above it.
+            let nextLine = lines[last.li + 1]
+            guard !PathDetector.isLeadingListMarker(nextLine[next],
+                                                    before: nextLine[..<next.lowerBound])
+            else { break }
             pieces.append((last.li + 1, next))
         }
 

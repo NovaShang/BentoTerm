@@ -230,6 +230,41 @@ import BentoFoundationKit
         #expect(hit?.candidate.explicit == false)
     }
 
+    // A markdown / CLI bullet is made of characters that are legal inside a
+    // name, so the left-extension used to swallow it and — being the longest
+    // guess — offer "- docs/…md" as candidate #1, which is the name the panel
+    // then showed.
+    @Test func leadingBulletNeverJoinsIntoName() {
+        #expect(joins("- docs/流程引擎-技术文档.md —— 给接手的人", at: "docs/").isEmpty)
+        #expect(joins("* README.md 是入口", at: "README.md").isEmpty)
+        #expect(joins("1. docs/design.md 先读", at: "docs/").isEmpty)
+        #expect(joins("⏺ - docs/design.md", at: "docs/").isEmpty)
+    }
+
+    @Test func bulletLineTapYieldsCleanPath() {
+        let line = "- docs/流程引擎-技术文档.md —— 给接手的人"
+        let tester = PathHitTester(screenText: line, cols: 200)
+        let col = PathDetector.cellSpan(inLine: line, of: line.range(of: "流程")!).start
+        #expect(tester.tapCandidates(absRow: 0, col: col).map(\.path)
+                == ["docs/流程引擎-技术文档.md"])
+    }
+
+    // The head-of-line restriction: mid-line a lone hyphen is name material.
+    @Test func midLineHyphenStillJoins() {
+        let paths = joins("saved Report - Final v2.pdf ok", at: "Report")
+        #expect(paths.contains("Report - Final v2.pdf"))
+    }
+
+    // A bullet opening the next line is the next list item, not the tail of
+    // the path above it.
+    @Test func wrapChainStopsAtNextBullet() {
+        let line = "见 /Users/nova/code/bento-term/Modules/Kit/Sources/Long"
+        let tester = PathHitTester(screenText: line + "\n- 下一条", cols: 56)
+        let col = PathDetector.cellSpan(inLine: line, of: line.range(of: "/Users")!).start
+        #expect(tester.tapCandidates(absRow: 0, col: col)
+                .allSatisfy { !$0.path.contains("-") || !$0.path.hasSuffix("-") })
+    }
+
     @Test func plainAbsoluteTapKeepsFastPath() {
         let line = "⏺ Read(/Users/nova/code/App.swift)"
         let tester = PathHitTester(screenText: line, cols: 200)
