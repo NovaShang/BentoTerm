@@ -83,7 +83,12 @@ public struct VoiceCompassView: View {
                                    insets: EdgeInsets = EdgeInsets(),
                                    margin: CGFloat = 8) -> Placement {
             let roomAbove = anchor.y - (bounds.minY + insets.top)
-            let below = roomAbove < Metrics.bubbleReach + margin
+            let roomBelow = (bounds.maxY - insets.bottom) - anchor.y
+            // Above unless there is genuinely no room for it there — and even
+            // then, only if below is actually roomier. In a window shorter than
+            // two bubbles, flipping to an even tighter side would just move the
+            // clipping around.
+            let below = roomAbove < Metrics.bubbleReach + margin && roomBelow > roomAbove
             let minX = bounds.minX + insets.leading + margin + Metrics.bubbleHalfWidth
             let maxX = bounds.maxX - insets.trailing - margin - Metrics.bubbleHalfWidth
             var shift: CGFloat = 0

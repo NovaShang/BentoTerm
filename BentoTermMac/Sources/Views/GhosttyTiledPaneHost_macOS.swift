@@ -519,8 +519,11 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         let anchor = NSPoint(
             x: min(max(local.x, reach), max(bounds.width - reach, reach)),
             y: min(max(local.y, reach), max(bounds.height - reach, reach)))
-        // `Placement` works in y-down (SwiftUI) space; these are AppKit y-up.
-        overlay.placement = .resolve(anchor: CGPoint(x: anchor.x, y: bounds.height - anchor.y),
+        // No y-flip here: this host is `isFlipped` (see above), so its coords are
+        // already the y-down space `Placement` works in. Flipping anyway inverted
+        // the rule — a press at the BOTTOM of the window put the bubble below it,
+        // off screen.
+        overlay.placement = .resolve(anchor: CGPoint(x: anchor.x, y: anchor.y),
                                      in: CGRect(origin: .zero, size: bounds.size))
         overlay.frame = NSRect(x: anchor.x - size.width / 2, y: anchor.y - size.height / 2,
                                width: size.width, height: size.height)

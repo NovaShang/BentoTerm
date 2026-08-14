@@ -186,6 +186,27 @@ final class VoiceTests: XCTestCase {
             anchor: CGPoint(x: 600, y: 300), in: bounds).bubbleBelow)
     }
 
+    /// A press at the BOTTOM keeps the bubble above — that is where the room is.
+    /// (The macOS host is `isFlipped`, and flipping its coords a second time on
+    /// the way in inverted exactly this case: the bubble went below the anchor,
+    /// off the bottom of the window.)
+    func testBubbleStaysAboveNearTheBottom() {
+        let bounds = CGRect(x: 0, y: 0, width: 1200, height: 800)
+        XCTAssertFalse(VoiceCompassView.Placement.resolve(
+            anchor: CGPoint(x: 600, y: 780), in: bounds).bubbleBelow)
+    }
+
+    /// Too short for the bubble on either side: stay above rather than flip to a
+    /// side that is even tighter.
+    func testBubbleDoesNotFlipIntoAnEvenTighterSide() {
+        let bounds = CGRect(x: 0, y: 0, width: 1200, height: 300)
+        XCTAssertFalse(VoiceCompassView.Placement.resolve(
+            anchor: CGPoint(x: 600, y: 220), in: bounds).bubbleBelow)
+        XCTAssertTrue(VoiceCompassView.Placement.resolve(
+            anchor: CGPoint(x: 600, y: 60), in: bounds).bubbleBelow,
+            "near the top, below is still the roomier side")
+    }
+
     /// Near a side the bubble slides inward by exactly the overhang; the compass
     /// itself (and so the anchor) does not move.
     func testBubbleSlidesInFromTheSides() {
