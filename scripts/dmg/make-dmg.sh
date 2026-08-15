@@ -23,6 +23,15 @@ trap 'rm -rf "$WORK"' EXIT
 
 [ -d "$APP" ] || { echo "no app at $APP" >&2; exit 1; }
 
+# Absolute from here on. appdmg resolves the paths in its spec against the
+# SPEC FILE's directory — which is the temp dir below, not the caller's — so a
+# relative app path silently resolves to nothing there. (Local runs passed an
+# absolute path and worked; CI passed `build/…` and the first release failed
+# on it.)
+APP="$(cd "$(dirname "$APP")" && pwd)/$(basename "$APP")"
+mkdir -p "$(dirname "$OUT")"
+OUT="$(cd "$(dirname "$OUT")" && pwd)/$(basename "$OUT")"
+
 # One multi-resolution background so Retina gets the 2x image instead of an
 # upscale of the 1x. tiffutil ships with macOS; no extra dependency.
 tiffutil -cathidpicheck "$HERE/background.png" "$HERE/background@2x.png" \
