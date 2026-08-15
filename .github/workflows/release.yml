@@ -232,6 +232,47 @@ jobs:
           echo "::warning::Notarization did not complete in 60m — release ships signed but not stapled. Users right-click → Open on first launch."
 
       # ---- package -------------------------------------------------------
+      # Two artifacts on purpose. The .zip is what the Homebrew cask installs
+      # (`brew` unpacks it; a disk image would only add a mount step). The .dmg
+      # is what a human downloads from the site or the releases page: it opens
+      # to a window showing the app, an Applications alias, and an arrow
+      # between them, which is the install instruction most Mac users already
+      # know. Built AFTER the staple so the app inside carries its ticket, and
+      # before the keychain teardown so the image can be signed.
+      - name: Build disk image
+        run: |
+          set -e
+          mkdir -p artifacts
+          scripts/dmg/make-dmg.sh \
+            build/Build/Products/Release/BentoTerm.app \
+            artifacts/BentoTerm-macos-arm64.dmg \
+            BentoTerm
+
+      # The app inside is already stapled, so Gatekeeper is satisfied once the
+      # user drags it across. This is about the step before that: an
+      # un-notarized disk image throws its own warning when the download is
+      # opened, and the user never reaches the app. Best-effort for the same
+      # reason as the app's notarization — Apple's queue is not ours to
+      # control, and a signed-but-unstapled image still installs.
+      - name: Notarize disk image (best effort)
+        id: notarize_dmg
+        continue-on-error: true
+        if: steps.notarize.outcome == 'success'
+        env:
+          NOTARY_KEY_ID:    ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          NOTARY_KEY_P8:    ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+        run: |
+          set -e
+          p8="${RUNNER_TEMP}/AuthKey-dmg.p8"
+          printf '%s' "${NOTARY_KEY_P8}" > "${p8}"
+          xcrun notarytool submit artifacts/BentoTerm-macos-arm64.dmg \
+            --key "${p8}" --key-id "${NOTARY_KEY_ID}" --issuer "${NOTARY_ISSUER_ID}" \
+            --wait --timeout 60m
+          rm "${p8}"
+          xcrun stapler staple artifacts/BentoTerm-macos-arm64.dmg
+          xcrun stapler validate artifacts/BentoTerm-macos-arm64.dmg
+
       - name: Package
         run: |
           set -e
@@ -239,6 +280,7 @@ jobs:
           mkdir -p artifacts
           ditto -c -k --sequesterRsrc --keepParent "$app" artifacts/BentoTerm-macos-arm64.zip
           (cd artifacts && shasum -a 256 BentoTerm-macos-arm64.zip > BentoTerm-macos-arm64.zip.sha256)
+          (cd artifacts && shasum -a 256 BentoTerm-macos-arm64.dmg > BentoTerm-macos-arm64.dmg.sha256)
 
       - name: Tear down signing keychain
         if: always()
