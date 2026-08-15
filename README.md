@@ -1,68 +1,69 @@
-# Bento — the terminal for AI coding agents
+# Bento Term — a terminal for watching and talking to your agents
 
 English | [简体中文](README_CN.md)
 
-Run a team of coding agents on your own machine. See who needs you at a glance. Answer with your voice — from anywhere.
+[![Release](https://img.shields.io/github/v/release/NovaShang/BentoTerm)](https://github.com/NovaShang/BentoTerm/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-macOS%2014%2B%20·%20iPhone%20·%20iPad-lightgrey)
 
-<!-- hero: drop a screenshot or short GIF here before publishing.
-     Suggested shot: a Parallel window with 4 agent panes in mixed states
-     (working / waiting / done), sidebar visible, voice overlay active.
-<p align="center"><img src="docs/hero-mac.png" width="720" alt="Bento running four agents in parallel"></p>
--->
+<p align="center"><img src="docs/media/hero-parallel.webp" width="820" alt="Bento Term running five agents in parallel, each pane tinted by what its agent is doing"></p>
 
-Modern coding is several agents working in parallel while you review, unblock, and decide. A classic terminal makes that miserable: every pane looks the same, you tab around asking "are you done yet?", and the whole thing dies with your SSH connection. Bento is a native macOS terminal built for exactly this workflow — with an iOS companion on the way, so your agent team follows you out the door.
+Agents run autonomously for forty minutes at a stretch now. Watching one run is a
+waste of you — so you run several, and the problem becomes keeping track of them
+all. Bento Term is a terminal built for exactly that: every agent in its own pane,
+tinted by what it's doing, in one window that reads like a bento box.
 
-## An agent team, at a glance
+**[bentoai.dev/term](https://bentoai.dev/term/)** · `brew install --cask NovaShang/tap/bento-term` · iPhone & iPad: App Store shortly
 
-- **Every pane knows its agent's state** — working, waiting for you, done, or idle — shown as a consistent color-and-glyph language on pane title bars and in the sidebar. No more polling your own terminal.
-- **Ten agents understood out of the box:** Claude Code, Codex, Gemini CLI, OpenCode, Cursor Agent, Copilot CLI, Amp, OpenClaw, Hermes, and Antigravity — plus plain shells and custom commands.
-- **Two readings of the same workspace:** Parallel (every pane tiled, states everywhere) and Focus (one thing full-size, the rest listed). Toggling is lossless — it restructures, never destroys.
+## A whole team, one screen
 
-## Speak instead of type
+- **Every pane knows its agent's state** — 🔵 working, 🟠 waiting for you, 🟢 done-and-unread, ⚪ idle — as a consistent color-and-glyph language on title bars and in the sidebar. You read the room instead of visiting each one.
+- **Ten agents understood out of the box:** Claude Code, Codex, Gemini CLI, OpenCode, Cursor Agent, Copilot CLI, Amp, OpenClaw, Hermes, Antigravity — plus plain shells and any command you type. Every profile is editable, so a tool nobody has heard of yet is one profile away.
+- **Two readings of the same workspace:** Parallel (everything tiled) and Focus (one thing full-size, the rest listed). Switching moves the real panes — it restructures, never destroys.
+- **Nothing in your shell.** No init line, nothing for the agent to cooperate with — states come from what the pane already prints, detected on your device.
 
-- **Hold and speak, anywhere in the terminal.** Release to drop the transcript in; slide to send as-is, refine it with a better model, or turn plain language into a shell command.
-- **Recognition that knows your screen.** Vocabulary is biased by on-screen context, and mixed Chinese/English input just works.
-- **Zero configuration.** Voice works out of the box through the Bento relay. Bring your own API keys if you prefer direct calls — Apple on-device, OpenAI, and Qwen engines are all supported.
+## Say it, don't type it
 
-## Sessions that outlive everything
+- **Hold right-click on a pane and talk.** You speak about three times faster than you type. Release to drop the transcript in; slide up to send, down to cancel — or turn plain language into a shell command.
+- **Recognition that reads the screen.** Vocabulary is biased by on-screen context, so file names, jargon and even identifiers from your code come out right — mixed Chinese/English included.
+- **Three engines, zero configuration.** Apple on-device, Qwen, OpenAI — through the Bento relay out of the box, or direct with your own key.
 
-- Your workspace lives in **persistent tmux sessions** (tmux is bundled — nothing to install). Quit the app; your agents keep working.
-- **Already live in tmux?** Bento attaches straight to your existing tmux server: the sessions, windows, and panes you have right now appear as-is, and every other tmux client stays perfectly in sync.
-- **SSH quick-connect** from your existing `~/.ssh/config`, with full features over plain SSH. The only thing a remote machine needs is `sshd` and `tmux` — no agent, no daemon, nothing to install.
+## Leave the desk, not the work
 
-## A terminal that reads its own output
+- The work lives in **real tmux sessions** on your machine, not in the app. Quit the app, close the laptop, lose Wi-Fi — nothing stops.
+- **Already live in tmux?** Bento attaches to the sessions you have right now via control mode (`-CC`); every other tmux client stays perfectly in sync. Never used tmux? It's bundled and stays out of the way.
+- **Anything with `sshd` and `tmux` works:** your Mac, a Linux server, WSL on a Windows box. Plain SSH from your existing `~/.ssh/config`, nothing of ours installed on the other end.
+- **Same panes on your phone.** The native iPhone and iPad app attaches mid-run — see the same states, answer the amber one, and put the phone back in your pocket.
 
-- **⌘-click any file path** — even ones a TUI wrapped or truncated — for an instant rich preview: syntax highlighting, rendered Markdown, jump-to-line.
-- **⌘-click URLs** to open them.
-- **Drag panes** to split, dock, or swap with VS Code-style drop zones; move panes and windows across sessions.
-- **Light, dark, or follow-system** appearance, terminal themes included.
+## Things you'll use every day
+
+- **See the files, not just the output.** Every pane carries its working directory's file tree — any depth, search included. Click a printed path and it opens with syntax highlighting and a line gutter, even at `:42`, even if a TUI truncated it. PDFs and images go to Quick Look.
+- **Panes move like windows.** Split right or down, drag a pane by its title bar into any drop zone — including another session. Every drop is a real tmux move.
+- **Never type a command again.** Pick a folder, pick an agent, pick a layout — Bento opens the panes and starts the agent in each. Everything else is one <kbd>⌘P</kbd> away.
+- **⌘F in the scrollback** (search runs in the terminal engine, matches highlight in place), any iTerm2 color scheme, any monospaced font you own, light/dark/follow-system.
 
 ## Install
 
 **Requirements:** macOS 14+ on Apple Silicon.
 
-With Homebrew:
-
 ```sh
 brew install --cask NovaShang/tap/bento-term
 ```
 
-Or by hand:
+Or download `BentoTerm-macos-arm64.zip` from the [latest release](https://github.com/NovaShang/BentoTerm/releases/latest) and drag `BentoTerm.app` into `/Applications` — signed and notarized, opens without warnings.
 
-1. Download `BentoTerm-macos-arm64.zip` from the [latest release](https://github.com/NovaShang/BentoTerm/releases/latest).
-2. Unzip and drag `BentoTerm.app` into `/Applications`. The app is signed and notarized — it opens without warnings.
-
-Either way, first run walks you through creating your first agent session, including one-command installers for any agent you don't have yet.
-
-The Mac app is fully self-contained — tmux is bundled, and there is nothing to install alongside it.
-
-To use a remote machine, it needs `sshd` running and `tmux` installed. Getting that machine reachable from yours (NAT, VPN, Tailscale, a jump host) is up to you and your `~/.ssh/config`; Bento does not ship a relay or a host-side component.
+The app is fully self-contained: tmux is bundled, and first run walks you through
+your first agent session, including one-command installers for any agent you don't
+have yet. A remote machine needs only `sshd` and `tmux`; reaching it (NAT, VPN,
+Tailscale, jump hosts) is your `~/.ssh/config`'s business — Bento ships no relay
+and no host-side component.
 
 ## Privacy
 
 - **No accounts.** Nothing to sign up for.
-- **Telemetry is off by default** and strictly opt-in — a closed set of feature counters, no terminal content, ever.
-- **Voice audio** goes to the speech provider through the Bento relay (keys live server-side); with your own key it goes directly to the provider. Terminal output never leaves your machine except to power the features you invoke.
+- **Your terminal output never leaves your machines.** The connection is plain SSH with nothing of ours in between.
+- **Telemetry is off by default** and strictly opt-in — a closed set of event names, never terminal content, commands, paths or hostnames.
+- **Voice audio** goes to the speech provider through the Bento relay (keys live server-side), or directly with your own key. Details: [privacy page](https://bentoai.dev/privacy/).
 
 ## Under the hood
 
