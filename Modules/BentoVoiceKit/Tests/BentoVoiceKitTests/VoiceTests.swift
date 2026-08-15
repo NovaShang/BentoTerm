@@ -164,6 +164,47 @@ final class VoiceTests: XCTestCase {
         XCTAssertFalse(isImplausibleTranscript("anything at all here", clipSeconds: 0, corpus: corpus))
     }
 
+    // MARK: - LLM request portability (voice → shell command)
+
+    /// The exact 400 that broke voice→shell on `gpt-5.6-luna`: newer OpenAI
+    /// models refuse `max_tokens` and name their replacement.
+    func testMaxTokensIsRenamedWhenTheModelAsksFor() {
+        let body: [String: Any] = ["model": "gpt-5.6-luna", "max_tokens": 256, "temperature": 0.2]
+        let next = LLMService.body(body, adaptedTo: "max_tokens",
+                                   message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.")
+        XCTAssertNil(next?["max_tokens"])
+        XCTAssertEqual(next?["max_completion_tokens"] as? Int, 256)
+    }
+
+    /// The other direction: an older model, or a third-party OpenAI-compatible
+    /// endpoint, that only knows `max_tokens`.
+    func testMaxCompletionTokensFallsBackToMaxTokens() {
+        let body: [String: Any] = ["max_completion_tokens": 256]
+        let next = LLMService.body(body, adaptedTo: "max_completion_tokens",
+                                   message: "Unrecognized request argument supplied: max_completion_tokens")
+        XCTAssertEqual(next?["max_tokens"] as? Int, 256)
+        XCTAssertNil(next?["max_completion_tokens"])
+    }
+
+    /// A model that only accepts its default temperature: drop the parameter.
+    func testUnsupportedTemperatureIsDropped() {
+        let body: [String: Any] = ["temperature": 0.2, "max_tokens": 256]
+        let next = LLMService.body(body, adaptedTo: "temperature",
+                                   message: "Unsupported value: 'temperature' does not support 0.2 with this model.")
+        XCTAssertNil(next?["temperature"])
+        XCTAssertEqual(next?["max_tokens"] as? Int, 256, "the rest of the body survives")
+    }
+
+    /// Never retry on a complaint we cannot act on, and never twice on the same
+    /// one — both would just burn round trips before the same fallback.
+    func testUnfixableRejectionsStop() {
+        XCTAssertNil(LLMService.body(["model": "x"], adaptedTo: "model",
+                                     message: "The model `x` does not exist"))
+        XCTAssertNil(LLMService.body(["model": "x"], adaptedTo: "messages", message: "..."))
+        XCTAssertNil(LLMService.body(["model": "x"], adaptedTo: "temperature",
+                                     message: "already gone"))
+    }
+
     // MARK: - Compass placement near the window edges
 
     /// A 1200x800 window, the anchor well away from every edge: the bubble keeps
