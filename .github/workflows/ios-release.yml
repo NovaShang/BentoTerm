@@ -1,0 +1,155 @@
+# Archive the iOS app and upload it to App Store Connect.
+#
+# Why this exists: builds made on this project's dev Mac are rejected with
+# ITMS-90111 ("Unsupported SDK or Xcode version") because that machine runs a
+# beta macOS, and Apple reads the BuildMachineOSBuild stamp — the Xcode and
+# SDK in those builds were fine. GitHub's macos-26 image runs a released OS,
+# so archives made here carry a clean stamp.
+#
+# It also removes the manual step: no Xcode Organizer, no interactive Apple ID
+# session. Signing is manual with a distribution certificate and an App Store
+# profile created through the App Store Connect API; the upload uses the same
+# API key the notarization steps already use.
+#
+# Bump CURRENT_PROJECT_VERSION in project.yml before every run — App Store
+# Connect refuses a build number it has already seen.
+name: iOS Release
+
+on:
+  push:
+    tags: ['ios-v*']
+  workflow_dispatch:
+
+jobs:
+  ios-app:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen
+
+      # Same throwaway-keychain pattern as the Mac release job, with the
+      # distribution certificate instead of the Developer ID one.
+      - name: Set up signing keychain
+        env:
+          IOS_DIST_P12_BASE64:   ${{ secrets.IOS_DIST_P12_BASE64 }}
+          IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+        run: |
+          set -e
+          KEYCHAIN_PATH="${RUNNER_TEMP}/bento-ios.keychain-db"
+          KEYCHAIN_PASS="$(openssl rand -base64 24)"
+          echo "KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "$GITHUB_ENV"
+
+          P12="${RUNNER_TEMP}/dist.p12"
+          echo "${IOS_DIST_P12_BASE64}" | base64 --decode > "${P12}"
+
+          security create-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}"
+          security import "${P12}" \
+            -k "${KEYCHAIN_PATH}" \
+            -P "${IOS_DIST_P12_PASSWORD}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S "apple-tool:,apple:,codesign:" \
+            -s -k "${KEYCHAIN_PASS}" "${KEYCHAIN_PATH}" >/dev/null
+          security list-keychains -d user -s \
+            "${KEYCHAIN_PATH}" $(security list-keychains -d user | tr -d '"')
+          rm "${P12}"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
+
+      # Xcode finds a profile by its UUID in the filename, so decode the
+      # plist inside the .mobileprovision to learn it.
+      - name: Install provisioning profile
+        env:
+          IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+        run: |
+          set -e
+          DIR="${HOME}/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "${DIR}"
+          PROFILE="${RUNNER_TEMP}/profile.mobileprovision"
+          echo "${IOS_PROFILE_BASE64}" | base64 --decode > "${PROFILE}"
+          security cms -D -i "${PROFILE}" > "${RUNNER_TEMP}/profile.plist"
+          UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "${RUNNER_TEMP}/profile.plist")"
+          NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "${RUNNER_TEMP}/profile.plist")"
+          cp "${PROFILE}" "${DIR}/${UUID}.mobileprovision"
+          echo "PROFILE_NAME=${NAME}" >> "$GITHUB_ENV"
+          echo "installed ${NAME} (${UUID})"
+
+      - name: Archive
+        run: |
+          set -e
+          xcodebuild archive \
+            -project BentoTerm.xcodeproj \
+            -scheme BentoTermiOS \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "${RUNNER_TEMP}/BentoTerm.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="${PROFILE_NAME}" \
+            DEVELOPMENT_TEAM=${{ secrets.MACOS_TEAM_ID }} \
+            OTHER_CODE_SIGN_FLAGS="--keychain ${KEYCHAIN_PATH}" \
+            | xcpretty || xcodebuild -version
+
+      - name: Export IPA
+        run: |
+          set -e
+          cat > "${RUNNER_TEMP}/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${{ secrets.MACOS_TEAM_ID }}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.bento.term.app</key><string>${PROFILE_NAME}</string>
+            </dict>
+            <key>uploadSymbols</key><true/>
+            <key>destination</key><string>export</string>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "${RUNNER_TEMP}/BentoTerm.xcarchive" \
+            -exportPath "${RUNNER_TEMP}/export" \
+            -exportOptionsPlist "${RUNNER_TEMP}/ExportOptions.plist"
+          ls -la "${RUNNER_TEMP}/export"
+
+      # altool discovers the key by filename in ~/.appstoreconnect/private_keys.
+      - name: Upload to App Store Connect
+        env:
+          ASC_KEY_ID:    ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          ASC_KEY_P8:    ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+        run: |
+          set -e
+          mkdir -p "${HOME}/.appstoreconnect/private_keys"
+          echo "${ASC_KEY_P8}" > "${HOME}/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          IPA="$(ls "${RUNNER_TEMP}/export"/*.ipa | head -1)"
+          xcrun altool --upload-app --type ios \
+            --file "${IPA}" \
+            --apiKey "${ASC_KEY_ID}" \
+            --apiIssuer "${ASC_ISSUER_ID}"
+          rm -f "${HOME}/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Report build metadata
+        if: always()
+        run: |
+          APP="${RUNNER_TEMP}/BentoTerm.xcarchive/Products/Applications/BentoTerm.app"
+          [ -d "$APP" ] || exit 0
+          # BuildMachineOSBuild is the field that caused ITMS-90111 locally;
+          # print it so a rejection can be diagnosed from the log alone.
+          plutil -p "$APP/Info.plist" | grep -E 'DTXcode|DTSDKName|BuildMachineOSBuild|CFBundleVersion|CFBundleShortVersionString'
+
+      - name: Clean up keychain
+        if: always()
+        run: security delete-keychain "${KEYCHAIN_PATH}" || true
