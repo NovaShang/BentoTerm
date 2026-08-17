@@ -9,7 +9,7 @@
 
 | 渠道 | 状态 |
 |---|---|
-| App Store | **已回复审核**（2026-08-16）：Resolution Center 附 1:55 实体机录屏 `film/out/review-recording.mp4` + 七项答复；备注已整合到 3069 字符（4000 上限）。文案中英双语、截图 16 张（iPhone×5 + iPad×3，双语）均已上传 COMPLETE。等审核结果 |
+| App Store | **CI 已接管构建**（2026-08-17）：本机 macOS 27 beta 会把 BuildMachineOSBuild 打进包里，触发误导性的 ITMS-90111（Xcode 26.6/SDK 26.5 本身没问题）。新增 `.github/workflows/ios-release.yml` 在 macos-26 正式版镜像上归档+签名+上传，build 4 已 VALID 并挂到 0.1.1。文案/截图双语齐备，待网页端 Submit |
 | Show HN | 已发（item 49312011）。首评被新号反垃圾误杀。拍板：**约一周后重发**，先养账号；卡美东周二–四早 8–10 点（北京 20–23 点） |
 | LinkedIn | 已发 |
 | 知乎 | 视频已发；专栏、回答待发 |
