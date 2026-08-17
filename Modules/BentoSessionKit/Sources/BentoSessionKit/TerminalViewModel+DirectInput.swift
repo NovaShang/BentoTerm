@@ -183,6 +183,11 @@ extension TerminalViewModel {
         // service (each send pays the full 10s timeout), and queued %output
         // would still drain onto the torn-down VM.
         pendingTmuxNotifications.withLock { $0.queue.removeAll() }
+        // Drop the per-pane sinks with them. tmux hands out pane ids per server,
+        // so a later attach can produce the SAME id: a surviving sink would feed
+        // the new session's bytes into the torn-down session's view model (which
+        // the UI can still be holding for a moment) instead of the live one.
+        outputSinks.withLock { $0.removeAll() }
         transport.disconnect()
         // Fail any in-flight tmux commands and drop parser state so a later
         // fresh connect on this VM starts clean.

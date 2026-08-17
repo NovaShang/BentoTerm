@@ -184,7 +184,6 @@ struct FilePreviewContentView: View {
     private var iconName: String {
         switch data.content {
         case .directory: return "folder"
-        case .image: return "photo"
         case .quickLook: return "doc.richtext"
         case .binary: return "doc"
         case .text: return "doc.text"
@@ -215,18 +214,6 @@ struct FilePreviewContentView: View {
                         .padding(.vertical, 4)
                         .background(.quaternary.opacity(0.5))
                 }
-            }
-        case .image(let bytes):
-            if let img = NSImage(data: bytes) {
-                ScrollView([.horizontal, .vertical]) {
-                    Image(nsImage: img)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: 1200, maxHeight: 1200)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                unsupported("Couldn't decode this image.")
             }
         case .quickLook(let url):
             // Everything the system draws better than we do. A local file has

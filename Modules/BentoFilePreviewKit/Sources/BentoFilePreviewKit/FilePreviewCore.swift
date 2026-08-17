@@ -180,9 +180,8 @@ public enum PathPreviewSettings {
 
 public enum FilePreviewContent {
     case text(String, truncated: Bool)
-    case image(Data)
-    /// A format the system renders and we don't (PDF, Office, iWork, RTF,
-    /// video, audio, archives, USDZ…) — hand it to Quick Look. The URL is the
+    /// A format the system renders and we don't (pictures, PDF, Office, iWork,
+    /// RTF, video, audio, archives, USDZ…) — hand it to Quick Look. The URL is the
     /// file itself when it already lives on this machine; `nil` when the bytes
     /// are still on the remote host, because Quick Look cannot stream and a
     /// whole-file fetch is a size gate + progress + cancel, i.e. UI, not
@@ -211,13 +210,12 @@ public enum FilePreviewLimits {
     /// Text preview reads only the head — plenty to judge a file, bounded on
     /// slow links.
     public static let textBytes = 256 * 1024
-    /// Full-image cap; beyond this the preview degrades to info-only.
-    public static let imageBytes = 20 * 1024 * 1024
 }
 
-/// Image formats the preview handles, extension → MIME — the single source
-/// of truth for the loader's image gate and the web renderer's
-/// markdown-relative image fill, so the two can never drift.
+/// Image formats, extension → MIME. Two callers: the loader routes these to
+/// Quick Look (rather than letting the type system send `.svg` to the code
+/// renderer), and the web renderer inlines markdown-relative images as data
+/// URIs with this MIME — so the two can never drift.
 public enum FilePreviewImageMIME {
     public static let table: [String: String] = [
         "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
@@ -255,30 +253,30 @@ public enum FilePreviewLoader {
         guard st.isRegular else { throw FilePreviewError.notAFile(resolved) }
         if st.size == 0 { return make(.text("", truncated: false)) }
 
-        let wantsImage = FilePreviewImageMIME.table[(name as NSString).pathExtension.lowercased()] != nil
-        if wantsImage && st.size <= FilePreviewLimits.imageBytes {
-            let data = try await context.source.read(resolvedPath: resolved,
-                                                     maxBytes: FilePreviewLimits.imageBytes)
-            if looksLikeImage(data) { return make(.image(data)) }
-            return make(classify(data, size: st.size))
-        }
-
-        // Before any read: a format the system previews better than we can.
+        // Before any read: a format the system previews better than we can —
+        // which now includes ordinary pictures. We used to decode those
+        // ourselves and draw them, which cost a second renderer to maintain and
+        // still could not animate a GIF; Quick Look does both, plus the zoom and
+        // pan gestures people already know.
+        //
+        // The image extension table stays consulted here because `svg` also
+        // conforms to `public.xml`, and the type-based route would send it to
+        // the code renderer to be read as markup rather than looked at.
+        //
         // Deliberately ahead of the head read — pulling 256KB off a 40MB PDF
         // to decide it's binary is a wasted round trip on a slow link.
-        if QuickLookRouting.prefersQuickLook(fileName: name) {
+        let isImageExtension = FilePreviewImageMIME.table[(name as NSString).pathExtension.lowercased()] != nil
+        if isImageExtension || QuickLookRouting.prefersQuickLook(fileName: name) {
             return make(.quickLook(context.isLocal ? URL(fileURLWithPath: resolved) : nil))
         }
 
         let data = try await context.source.read(resolvedPath: resolved,
                                                  maxBytes: FilePreviewLimits.textBytes)
-        if looksLikeImage(data), st.size <= FilePreviewLimits.imageBytes {
-            // Image without a telling extension: refetch in full only if the
-            // head read didn't already cover it.
-            if data.count >= st.size { return make(.image(data)) }
-            let full = try await context.source.read(resolvedPath: resolved,
-                                                     maxBytes: FilePreviewLimits.imageBytes)
-            return make(.image(full))
+        // An image whose name doesn't say so. Local files hand Quick Look the
+        // path; a remote one goes down the same fetch-then-preview path as any
+        // other system-rendered file.
+        if looksLikeImage(data) {
+            return make(.quickLook(context.isLocal ? URL(fileURLWithPath: resolved) : nil))
         }
         return make(classify(data, size: st.size))
     }

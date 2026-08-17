@@ -1,0 +1,4 @@
+#!/bin/zsh
+set -e
+cd "$(dirname "$0")"
+ffmpeg -y -loglevel error -i audio/vo/zh/line-00.mp3 -i audio/vo/zh/line-01.mp3 -i audio/vo/zh/line-02.mp3 -i audio/vo/zh/line-03.mp3 -i audio/vo/zh/line-04.mp3 -i audio/vo/zh/line-05.mp3 -i audio/vo/zh/line-06.mp3 -i audio/vo/zh/line-07.mp3 -i audio/vo/zh/line-08.mp3 -i audio/vo/zh/line-09.mp3 -i audio/vo/zh/line-10.mp3 -i audio/vo/zh/line-11.mp3 -i audio/vo/zh/line-12.mp3 -filter_complex "[0:a]adelay=1000|1000[d0];[1:a]adelay=5900|5900[d1];[2:a]adelay=7900|7900[d2];[3:a]adelay=13250|13250[d3];[4:a]adelay=18100|18100[d4];[5:a]adelay=21700|21700[d5];[6:a]adelay=27500|27500[d6];[7:a]adelay=32300|32300[d7];[8:a]adelay=35450|35450[d8];[9:a]adelay=44900|44900[d9];[10:a]adelay=48050|48050[d10];[11:a]adelay=52900|52900[d11];[12:a]adelay=57950|57950[d12];[d0][d1][d2][d3][d4][d5][d6][d7][d8][d9][d10][d11][d12]amix=inputs=13:normalize=0,apad=whole_dur=71" -ac 2 -t 71 audio/vo/zh-track.wav

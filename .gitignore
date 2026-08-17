@@ -40,3 +40,4 @@ tests/maestro/*.png
 .dd-mac/
 .dd-ios-device/
 .dd-*/
+film/out/

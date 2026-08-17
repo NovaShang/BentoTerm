@@ -121,16 +121,17 @@ targets:
         # Telemetry (CFBundleShortVersionString). Keep in step with the Mac
         # target's MARKETING_VERSION — bump alongside release tags.
         #
-        # Deliberately still 0.1.1 while the Mac target is on 0.2.0: build 2
-        # is in App Store review as 0.1.1, and a build whose version string
-        # has moved on cannot attach to that version in App Store Connect.
-        # Bump to 0.2.0 (and CURRENT_PROJECT_VERSION to 3) with the next
-        # iOS upload, once 0.1.1 has cleared review.
+        # Deliberately still 0.1.1 while the Mac target has moved on: 0.1.1 was
+        # rejected (guideline 2.1, the reviewer could not reach a host) and is
+        # being resubmitted, and a build whose version string has moved on
+        # cannot attach to that version in App Store Connect. Bump to 0.2.0
+        # once 0.1.1 has cleared review.
         MARKETING_VERSION: "0.1.1"
         # Build number, distinct from MARKETING_VERSION and never reused: App
         # Store Connect rejects an upload whose (version, build) pair it has
-        # already seen. Build 1 was uploaded on 2026-08-03 and superseded.
-        CURRENT_PROJECT_VERSION: 2
+        # already seen. Builds 1 (2026-08-03), 2 (2026-08-06) and 3
+        # (2026-08-14, the one attached to 0.1.1 now) are spent — hence 4.
+        CURRENT_PROJECT_VERSION: 4
 
   BentoTermTests:
     type: bundle.unit-test

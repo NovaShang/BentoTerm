@@ -30,16 +30,25 @@ public final class CommandPaletteController {
     /// The panel then drops from THAT control rather than the window's launcher
     /// position — a panel appearing somewhere other than what you just clicked
     /// reads as a different feature.
+    /// `openingHost` starts the panel already inside an ssh host's session
+    /// list — what "New Remote tmux Session → dev" now means, since picking the
+    /// machine is only half the question.
     public func present(fileContext: PathPreviewContext?,
                         hostLabel: String, staticSpecs: [PaletteSectionSpec],
-                        from anchorView: NSView? = nil) {
-        // A second ⌘P while open just closes it (toggle).
-        if panel != nil { dismiss(); return }
+                        from anchorView: NSView? = nil,
+                        openingHost: String? = nil) {
+        // A second ⌘P while open just closes it (toggle) — but a request to
+        // open a specific host is not a toggle, it is a different question.
+        if panel != nil {
+            guard openingHost != nil else { dismiss(); return }
+            dismiss()
+        }
         self.anchorView = anchorView
 
         let model = PaletteViewModel(
             fileContext: fileContext, hostLabel: hostLabel,
-            staticSpecs: staticSpecs, onClose: { [weak self] in self?.dismiss() })
+            staticSpecs: staticSpecs, openingHost: openingHost,
+            onClose: { [weak self] in self?.dismiss() })
         self.model = model
 
         let host = NSHostingController(rootView: CommandPaletteView(model: model))
@@ -150,9 +159,32 @@ final class PaletteViewModel: ObservableObject {
     private let staticSpecs: [PaletteSectionSpec]
     private let onClose: () -> Void
 
-    /// Browse roots pushed by drilling into directories; last = current root.
-    private var rootStack: [String] = []
+    /// Where a drill can take the palette. Files browse a directory tree; an
+    /// ssh host shows the tmux sessions on it. One stack, because the back
+    /// gesture (Esc, backspace on an empty query, the `..` row) has to mean the
+    /// same thing wherever you are.
+    enum Scope: Equatable {
+        case directory(String)
+        case sshHost(String)
+    }
+
+    /// Pushed by drilling; last = where we are now.
+    private var stack: [Scope] = []
+    /// True when the panel was opened directly into a host scope — see the
+    /// initializer. Popping out of that scope closes rather than empties.
+    private var openedAtHostScope = false
     private var seq = 0
+
+    /// The directory being browsed, or nil when a host scope owns the panel.
+    private var browseRoot: String? {
+        if case .directory(let dir) = stack.last { return dir }
+        return stack.isEmpty ? nil : nil
+    }
+
+    private var hostScope: String? {
+        if case .sshHost(let alias) = stack.last { return alias }
+        return nil
+    }
 
     /// The pane cwd, resolved once (one tmux round trip) and memoized so the
     /// panel can open before it lands.
@@ -164,14 +196,22 @@ final class PaletteViewModel: ObservableObject {
     private var fileSearchTask: Task<PaletteFileResult, Never>?
 
     init(fileContext: PathPreviewContext?, hostLabel: String,
-         staticSpecs: [PaletteSectionSpec], onClose: @escaping () -> Void) {
+         staticSpecs: [PaletteSectionSpec], openingHost: String? = nil,
+         onClose: @escaping () -> Void) {
         self.fileContext = fileContext
         self.hostLabel = hostLabel
         self.staticSpecs = staticSpecs
         self.onClose = onClose
+        if let openingHost {
+            stack = [.sshHost(openingHost)]
+            // Opened straight into a host, so there is no level below it: the
+            // menu that asked for it did not want a general palette, and popping
+            // to one would leave an empty panel where the answer used to be.
+            openedAtHostScope = true
+        }
     }
 
-    var canPop: Bool { !rootStack.isEmpty }
+    var canPop: Bool { !stack.isEmpty }
 
     private var flatItems: [PaletteItem] { sections.flatMap(\.items) }
 
@@ -197,6 +237,22 @@ final class PaletteViewModel: ObservableObject {
         Task { @MainActor in
             var built: [PaletteSection] = []
 
+            // Inside an ssh host the panel is that host's sessions and nothing
+            // else. Files here would be this Mac's files, and Commands would
+            // act on this Mac — both read as belonging to the host you just
+            // drilled into, and neither does.
+            if let alias = hostScope {
+                let section = await hostSection(alias: alias, query: q, seq: mySeq)
+                guard mySeq == seq else { return }
+                if let section { built.append(section) }
+                self.sections = built
+                if selectedID == nil || !flatItems.contains(where: { $0.id == selectedID }) {
+                    selectedID = flatItems.first?.id
+                    requestScroll(to: selectedID)
+                }
+                return
+            }
+
             // Recent Files spec first (empty-state only), then New Pane, so the
             // most "resume where I was" rows sit at the top when idle.
             for spec in staticSpecs where spec.emptyStateOnly {
@@ -205,7 +261,7 @@ final class PaletteViewModel: ObservableObject {
 
             // Live File section (browse current root / fuzzy over its subtree).
             let root: String?
-            if let drilled = rootStack.last { root = drilled } else { root = await base() }
+            if let drilled = browseRoot { root = drilled } else { root = await base() }
             if let ctx = fileContext, let root {
                 // The walk runs in its own task so the next keystroke can
                 // cancel it; the seq guard below still discards stale results.
@@ -263,6 +319,112 @@ final class PaletteViewModel: ObservableObject {
         selectedID = id
     }
 
+    // MARK: An ssh host's sessions
+
+    /// The rows for a host scope: what is running there, then the ways in.
+    ///
+    /// The list is fetched, so this section can be slow in a way no other
+    /// section is. It shows a row saying so rather than an empty panel, and the
+    /// two "open something" rows are present from the first frame — a host you
+    /// cannot list is still a host you can connect to.
+    private func hostSection(alias: String, query q: String, seq mySeq: Int) async -> PaletteSection? {
+        var rows: [PaletteItem] = [backRow(label: alias)]
+
+        let cached = RemoteTmuxSessions.cached(alias)
+        if cached == nil {
+            // Show the pending state immediately, then fill in.
+            self.sections = [PaletteSection(id: "host", title: "On \(alias)", items: rows + [
+                PaletteItem(id: "host:loading", title: "Listing sessions on \(alias)…",
+                            systemImage: "ellipsis", matchText: "", action: .run {}),
+            ] + openRows(alias: alias))]
+        }
+        let result: Result<[RemoteTmuxSessions.Session], RemoteTmuxSessions.Failure>
+        if let cached {
+            result = cached
+        } else {
+            result = await RemoteTmuxSessions.list(alias: alias)
+        }
+        guard mySeq == seq else { return nil }
+
+        switch result {
+        case .success(let sessions):
+            rows += sessions.map { session in
+                let windows = session.windows == 1 ? "1 window" : "\(session.windows) windows"
+                return PaletteItem(
+                    id: "host:\(alias):session:\(session.name)",
+                    title: session.name,
+                    subtitle: session.attached ? "\(windows) · attached" : windows,
+                    systemImage: session.attached ? "record.circle" : "rectangle.stack",
+                    matchText: session.name,
+                    action: .run { [onClose] in
+                        onClose()
+                        RemoteTmuxSessions.invalidate(alias)
+                        BentoTerminalWindow.focusOrOpen(
+                            TmuxSessionID(server: .ssh(host: alias), name: session.name))
+                    })
+            }
+        case .failure(let why):
+            rows.append(PaletteItem(id: "host:\(alias):why", title: why.message,
+                                    systemImage: "exclamationmark.triangle",
+                                    matchText: "", action: .run {}))
+        }
+        rows += openRows(alias: alias)
+
+        // Rank only the session rows: the back row and the two verbs are
+        // navigation, and a list that loses its exit when you type is a trap.
+        guard !q.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return PaletteSection(id: "host", title: "On \(alias)", items: rows)
+        }
+        let fixedIDs = Set(rows.map(\.id).filter {
+            $0.hasSuffix(":new") || $0.hasSuffix(":shell") || $0 == "host:back"
+        })
+        let fixed = rows.filter { fixedIDs.contains($0.id) }
+        let ranked = PaletteFuzzy.rank(query: q,
+                                       items: rows.filter { !fixedIDs.contains($0.id) },
+                                       limit: 12)
+        return PaletteSection(id: "host", title: "On \(alias)", items: ranked + fixed)
+    }
+
+    /// The two things you can always do with a host, listed or not.
+    private func openRows(alias: String) -> [PaletteItem] {
+        [
+            PaletteItem(id: "host:\(alias):new", title: "New session…",
+                        subtitle: "Create a tmux session on \(alias)",
+                        systemImage: "plus.rectangle.on.rectangle", matchText: "new session",
+                        action: .run { [onClose] in
+                            onClose()
+                            RemoteTmuxSessions.invalidate(alias)
+                            BentoTerminalWindow.focusOrOpen(
+                                TmuxSessionID(server: .ssh(host: alias),
+                                              name: BentoTerminalWindow.nextSessionName()))
+                        }),
+            PaletteItem(id: "host:\(alias):shell", title: "Shell (no tmux)",
+                        subtitle: "ssh \(alias)",
+                        systemImage: "terminal", matchText: "shell ssh no tmux",
+                        action: .run { [onClose] in
+                            onClose()
+                            BentoTerminalWindow.newSSHWindow(host: alias)
+                        }),
+        ]
+    }
+
+    private func backRow(label: String) -> PaletteItem {
+        PaletteItem(id: "host:back", title: "..", subtitle: "Back",
+                    systemImage: "arrow.up.left", matchText: "..",
+                    action: .popScope)
+    }
+
+    /// Pop one level. `.run` closes the panel first, which is why the back row
+    /// has its own action instead.
+    private func popScope() {
+        guard canPop else { return }
+        if openedAtHostScope, stack.count == 1 { onClose(); return }
+        stack.removeLast()
+        query = ""
+        selectedID = nil
+        recompute()
+    }
+
     private func parentRow(from root: String) -> PaletteItem {
         let parent = (root as NSString).deletingLastPathComponent
         return PaletteItem(id: "file:..", title: "..", subtitle: abbreviate(parent),
@@ -301,10 +463,17 @@ final class PaletteViewModel: ObservableObject {
             onClose()
             fn()
         case .drill(let dir):
-            rootStack.append(dir)
+            stack.append(.directory(dir))
             query = ""
             selectedID = nil
             recompute()
+        case .drillHost(let alias):
+            stack.append(.sshHost(alias))
+            query = ""
+            selectedID = nil
+            recompute()
+        case .popScope:
+            popScope()
         case .preview(let path, let line):
             onClose()
             preview(path: path, line: line)
@@ -317,13 +486,10 @@ final class PaletteViewModel: ObservableObject {
         PaletteRecents.shared.recordFile(path: path, host: hostLabel)
     }
 
-    /// Esc / backspace-on-empty: pop a browse level, or close at the top.
+    /// Esc / backspace-on-empty: pop a level, or close at the top.
     func escapeOrPop() {
         if canPop {
-            rootStack.removeLast()
-            query = ""
-            selectedID = nil
-            recompute()
+            popScope()
         } else {
             onClose()
         }

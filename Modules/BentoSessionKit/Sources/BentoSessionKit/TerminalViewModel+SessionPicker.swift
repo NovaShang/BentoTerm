@@ -270,7 +270,10 @@ extension TerminalViewModel {
         // sleep: commands sent before tmux attaches would be typed into the
         // plain shell. Faster than 1s when the shell is quick, tolerant when
         // it's slow (fresh login shell runs the full zshrc first).
-        let sawGreeting = await tmuxService.awaitControlMode(timeout: .seconds(12))
+        // 12s is the right patience for "tmux isn't coming" and the wrong
+        // patience for "ssh is asking for a password" — the second one waits on
+        // a person. See `awaitGreetingAllowingAuthPrompts`.
+        let sawGreeting = await awaitGreetingAllowingAuthPrompts(timeout: .seconds(12))
         if !sawGreeting {
             // No greeting, and the transport IS the tmux invocation: there is
             // no shell on the far side to have been slow, so tmux is not coming

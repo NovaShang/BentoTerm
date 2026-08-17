@@ -19,14 +19,23 @@ let paletteLog = Logger(subsystem: "com.novashang.bento", category: "CommandPale
 
 // MARK: - Item model
 
-/// What activating a row does. `drill` navigates the palette into a directory
-/// (no dismiss); the others act and dismiss. Sendable — rows cross the
+/// What activating a row does. The `drill` cases navigate the palette one level
+/// deeper (no dismiss); the others act and dismiss. Sendable — rows cross the
 /// file-search task boundary.
 public enum PaletteAction: Sendable {
     /// Run an action (split pane, switch window, create pane…) and close.
     case run(@MainActor () -> Void)
     /// Navigate the file browser into this absolute directory.
     case drill(dir: String)
+    /// Navigate into an ssh host and list the tmux sessions on it.
+    ///
+    /// A host row cannot act on its own the way a session row can: "open dev"
+    /// has no answer until you know whether you mean the session already
+    /// running there or a new one. So it drills, and the list answers it.
+    case drillHost(alias: String)
+    /// Go back up one level. A row, not just a key, because the panel is
+    /// mouse-navigable and Esc is not discoverable inside a drilled list.
+    case popScope
     /// Resolve `path` against the pane and open the preview panel.
     case preview(path: String, line: Int?)
 }

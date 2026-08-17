@@ -1141,12 +1141,19 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             specs.append(PaletteSectionSpec(id: "sessions", title: "Sessions", items: sessions, limit: 8))
         }
 
-        // SSH hosts from ~/.ssh/config → a plain `ssh <host>` tab. There is
-        // deliberately no "connect with tmux" variant here: remote tmux needs
-        // session-key namespacing and fixes to the `TmuxCLI` call sites that
-        // all target the LOCAL server, so the option would look right and drive
-        // the wrong machine.
-        let hosts = targets.sshTargets().map(row)
+        // SSH hosts from ~/.ssh/config. The row drills into the host's tmux
+        // sessions (`.drillHost`) rather than acting, for the reason the
+        // launcher's copy of this explains — and the plain `ssh <host>` tab is
+        // a row inside it. (This used to open the plain shell directly, on the
+        // grounds that remote tmux would drive the local server; session keys
+        // are `TmuxSessionID`s now, so that no longer holds.)
+        let hosts = targets.sshTargets().map { target -> PaletteItem in
+            guard case .sshHost(let alias) = target.kind else { return row(target) }
+            return PaletteItem(id: target.id, title: target.title,
+                               subtitle: "tmux sessions on \(alias)",
+                               systemImage: target.systemImage, matchText: target.matchText,
+                               action: .drillHost(alias: alias))
+        }
         if !hosts.isEmpty {
             specs.append(PaletteSectionSpec(id: "sshHosts", title: "SSH Hosts", items: hosts, limit: 8))
         }

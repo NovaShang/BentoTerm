@@ -73,7 +73,15 @@ extension TerminalViewModel {
     /// host-key complaint, `Permission denied`) — a tmux suggestion under one
     /// of those is just noise on top of the real answer.
     var tmuxStartupHint: String? {
-        let remote = tmuxService.outputBeforeControlMode.lowercased()
+        // Judge on the RAW tail, not the line-buffered lines: a connection stuck
+        // on `host's password: ` has no newline to make that text a line, so the
+        // line view reads as "the remote said nothing" and this hint used to
+        // blame tmux for an unanswered password prompt. (That prompt now gets
+        // its own sheet, so reaching here means it went unanswered.)
+        let remote = tmuxService.rawTextBeforeControlMode.lowercased()
+        if let prompt = detectSSHAuthPrompt(inTailOf: tmuxService.rawTextBeforeControlMode) {
+            return "\(host.name) is still waiting on: \(prompt.text)"
+        }
         guard remote.isEmpty || remote.contains("tmux") else { return nil }
         return """
             Check that tmux is installed on \(host.name) and on the PATH your \

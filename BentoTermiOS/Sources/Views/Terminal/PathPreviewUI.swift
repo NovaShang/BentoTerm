@@ -200,18 +200,6 @@ struct FilePreviewSheet: View {
                         .background(Color(BentoBrand.border).opacity(0.35))
                 }
             }
-        case .image(let bytes):
-            if let img = UIImage(data: bytes) {
-                ScrollView([.horizontal, .vertical]) {
-                    Image(uiImage: img)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: UIScreen.main.bounds.width)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                unsupported("Couldn't decode this image.", icon: "photo")
-            }
         case .quickLook(let url):
             // PDF, Office, iWork, video, audio… — the system renders these; on
             // a phone every one of them is remote, so the panel downloads

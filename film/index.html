@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BentoTerm — film stage</title>
+<style>
+  /* The stage is a fixed 2560×1440 canvas, scaled to fit the window for
+     preview. At capture time the window IS 2560×1440 (Chrome --kiosk on the
+     external display), so scale = 1 and what screencapture sees is the master.
+     Typography borrows the site's font files so film and page are one voice. */
+  @font-face { font-family:"Geist"; src:url("assets/site/fonts/geist-sans-500.woff2") format("woff2"); font-weight:500; }
+  @font-face { font-family:"Geist"; src:url("assets/site/fonts/geist-sans-600.woff2") format("woff2"); font-weight:600; }
+  @font-face { font-family:"Geist Mono"; src:url("assets/site/fonts/geist-mono-400.woff2") format("woff2"); font-weight:400; }
+
+  html, body { margin:0; height:100%; background:#000; overflow:hidden; cursor:none; }
+  #stage {
+    position:absolute; left:50%; top:50%; width:2560px; height:1440px;
+    transform-origin:center; background:#0A0B0D;
+    font-family:"Geist", system-ui, sans-serif;
+  }
+  .layer { position:absolute; inset:0; display:grid; place-items:center; }
+  .layer video { will-change:opacity; }        /* compositing only — fine here:
+     we never screenshot this page, the OS recorder sees the composited frame */
+
+  /* cards */
+  .card { position:absolute; opacity:0; }
+  .open  { left:0; right:0; top:590px; text-align:center; font-size:76px; font-weight:600;
+           letter-spacing:-0.03em; color:#F4F5F7; }
+  .open2 { top:700px; color:#9EA2AB; }
+  .chapter { left:120px; top:96px; font-size:54px; font-weight:600; letter-spacing:-0.028em;
+             color:#F4F5F7; text-shadow:0 2px 24px rgba(0,0,0,0.8); }
+  .note { right:120px; bottom:110px; font-family:"Geist Mono"; font-size:30px;
+          color:#9EA2AB; text-shadow:0 2px 18px rgba(0,0,0,0.9); }
+  .states { left:0; right:0; bottom:110px; text-align:center; font-size:34px; font-weight:600; }
+  .states span { margin:0 26px; }
+  .states .w{color:#0A84FF} .states .a{color:#FF9F0A} .states .d{color:#30D158} .states .i{color:#8A8F99}
+  .credo { left:0; right:0; text-align:center; font-size:52px; font-weight:500;
+           letter-spacing:-0.02em; color:#9EA2AB; }
+  .credo    { top:560px; }
+  .credo.c2 { top:660px; }
+  .credo.c3 { top:760px; color:#F4F5F7; }
+  .claim    { left:0; right:0; top:620px; text-align:center; font-size:64px; font-weight:600;
+              letter-spacing:-0.03em; color:#F4F5F7; }
+  .claim.c2 { top:730px; font-size:44px; color:#4ADE80; }
+  .end { left:0; right:0; top:0; bottom:0; display:flex; flex-direction:column;
+         align-items:center; justify-content:center; gap:34px; text-align:center; }
+  .end img { width:150px; }
+  .end h1 { margin:0; font-size:64px; font-weight:600; letter-spacing:-0.035em; color:#F4F5F7; max-width:22ch; }
+  .end h1 em { font-style:normal; color:#4ADE80; }
+  .end code { font-family:"Geist Mono"; font-size:26px; color:#9EA2AB;
+              border:1px solid rgba(255,255,255,0.14); border-radius:12px; padding:14px 26px; }
+  .end p { margin:0; font-family:"Geist Mono"; font-size:20px; color:#676B74; }
+
+  /* animatic furniture — slates describe missing footage, chips flag footage
+     that will be re-shot, subs carry the whole VO. None of this survives into
+     the real cut; it exists so the film can be judged before it exists. */
+  .slate { inset:180px 240px; display:grid; place-items:center; text-align:center;
+           border:2px dashed rgba(255,255,255,0.22); border-radius:24px;
+           font-family:"Geist Mono"; font-size:31px; line-height:1.7; color:#676B74;
+           padding:40px 70px; }
+  .slate b { display:block; margin-bottom:18px; font-size:24px; letter-spacing:0.12em;
+             color:#9EA2AB; }
+  .chip { top:36px; right:40px; max-width:760px; font-family:"Geist Mono"; font-size:21px;
+          line-height:1.55; color:#8A8F99; background:rgba(0,0,0,0.62);
+          border:1px dashed rgba(255,255,255,0.25); border-radius:12px; padding:14px 20px; }
+  .chip b { color:#C8CCD4; margin-right:10px; }
+  #subs { position:absolute; left:0; right:0; bottom:52px; text-align:center; z-index:5; }
+  #subs span { display:inline-block; max-width:1900px; font-size:35px; font-weight:500;
+               line-height:1.45; color:#F4F5F7; background:rgba(0,0,0,0.58);
+               border-radius:12px; padding:10px 26px; }
+
+  #flash { position:absolute; inset:0; background:#fff; opacity:0; pointer-events:none; }
+  #hud { position:fixed; left:12px; bottom:10px; font:13px "Geist Mono", monospace;
+         color:#555; z-index:9; cursor:default; }
+  body.capture #hud { display:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <!-- footage layers are created per shot at boot — one <video> each, all
+       preloaded. Pooling two elements meant swapping src mid-film, and the
+       load+seek stall ate short shots whole (the lid shot played black). -->
+  <div class="layer" id="cards"></div>
+  <div id="subs"><span></span></div>
+  <div id="flash"></div>
+</div>
+<div id="hud">space play/pause · ←/→ ±1s · r restart · c capture mode</div>
+
+<script type="module">
+import { shots, vo, TOTAL, W, H } from './timeline.js';
+
+const stage = document.getElementById('stage');
+const hud = document.getElementById('hud');
+const cardsHost = document.getElementById('cards');
+const flash = document.getElementById('flash');
+// One <video> per footage shot, created up front and preloaded — no element
+// ever changes src. Layers are inserted before the cards layer in shot order,
+// so later shots paint above earlier ones during a crossfade and text stays
+// on top of everything.
+const footage = shots.filter(s => s.src);
+for (const s of footage) {
+  const layer = document.createElement('div');
+  layer.className = 'layer';
+  layer.style.opacity = 0;                 // hidden until its shot arrives
+  const v = document.createElement('video');
+  v.muted = true; v.preload = 'auto'; v.src = s.src;
+  layer.appendChild(v);
+  stage.insertBefore(layer, cardsHost);
+  s.vid = v;
+}
+
+for (const s of shots) {
+  s.cardEls = (s.cards || []).map(c => {
+    const el = document.createElement('div');
+    el.className = 'card ' + c.cls;
+    el.innerHTML = c.html;
+    cardsHost.appendChild(el);
+    return el;
+  });
+}
+
+function fitScale() {
+  const s = Math.min(innerWidth / W, innerHeight / H);
+  stage.style.transform = `translate(-50%,-50%) scale(${s})`;
+}
+addEventListener('resize', fitScale); fitScale();
+
+// ---- the frame function ---------------------------------------------------
+// Everything below is stateless in T except the video elements, which are
+// nudged rather than seeked: within a playing shot the element free-runs (that
+// is what makes live playback smooth), and we correct only if it drifts past
+// 50 ms — a cut is never off by more than that, and no correction is visible.
+const FADE = 0.4;
+const clamp01 = v => Math.max(0, Math.min(1, v));
+
+function frame(T, playing) {
+  flash.style.opacity = T < 0.034 ? 1 : 0;   // clapper: two white frames at t=0
+
+  for (const s of shots) {
+    const local = T - s.start;
+    const xin = s.xfade || 0;
+    // a shot is visible from (start - 0) to end; opacity ramps over its xfade
+    let vis = local >= -0.001 && local < s.dur;
+    let alpha = vis ? (xin ? clamp01(local / xin) : 1) : 0;
+    // the PREVIOUS shot stays up underneath during our fade — handled by paint
+    // order (later shots' layers sit above) plus not hiding it until it ends.
+
+    if (s.src) {
+      const v = s.vid;
+      if (vis) {
+        if (v.dataset.owner !== String(s.start)) {         // first frame of this shot
+          v.dataset.owner = String(s.start);
+          v.currentTime = s.in + Math.max(0, local);
+        }
+        // Clamp to the clip: a shot cut longer than its source must freeze on
+        // the last frame, not let the element hit `ended` (play() after ended
+        // rewinds to zero and the drift corrector then fights it forever).
+        const end = (v.duration || 1e9) - 0.06;
+        const want = Math.min(s.in + local, end);
+        const atEnd = want >= end;
+        if (Math.abs(v.currentTime - want) > 0.05 && v.readyState >= 2) v.currentTime = want;
+        if (playing && v.paused && !atEnd) v.play().catch(() => {});
+        if ((!playing || atEnd) && !v.paused) v.pause();
+
+        // geometry: crop rectangle scaled to fill width (or portrait-fit)
+        const st = v.style, cr = s.crop;
+        if (s.fit === 'portrait') {
+          st.height = H + 'px'; st.width = 'auto'; st.transform = '';
+        } else if (cr) {
+          const sc0 = W / cr.w;
+          let x = 0, y = 0, sc = 1;
+          if (s.push) {
+            const k = clamp01(local / s.dur);
+            x = s.push.from[0] + (s.push.to[0] - s.push.from[0]) * k;
+            y = s.push.from[1] + (s.push.to[1] - s.push.from[1]) * k;
+            sc = s.push.from[2] + (s.push.to[2] - s.push.from[2]) * k;
+          }
+          st.width = 'auto'; st.height = 'auto';
+          st.transform = `translate(${x}px,${y}px) scale(${sc0 * sc}) translate(${-cr.x}px,${-cr.y}px)`;
+          st.transformOrigin = '0 0';
+          st.position = 'absolute'; st.left = '0'; st.top = ((H - cr.h * sc0) / 2 * 0) + 'px';
+          // vertical centering of the cropped strip:
+          st.top = ((H - cr.h * sc0) / 2) + 'px';
+        } else {
+          st.width = W + 'px'; st.height = 'auto'; st.transform = '';
+        }
+        v.parentElement.style.opacity = alpha;
+        v.parentElement.style.visibility = 'visible';
+      } else {
+        // unconditionally hidden outside its shot — layers now exist from
+        // boot, so "was ever played" is no longer a proxy for "should hide"
+        v.parentElement.style.opacity = 0;
+        if (!v.paused) v.pause();
+      }
+    }
+
+    // cards: trapezoid opacity — FADE in, hold, FADE out
+    (s.cards || []).forEach((c, i) => {
+      const el = s.cardEls[i];
+      const ct = local - c.at;
+      let o = 0;
+      if (ct > 0 && ct < c.dur) o = Math.min(clamp01(ct / FADE), clamp01((c.dur - ct) / FADE));
+      el.style.opacity = o;
+    });
+  }
+
+  // subtitles: the active VO line, verbatim
+  const line = vo.find(v => T >= v.at && T < v.at + v.dur);
+  subsSpan.textContent = line ? line.text : '';
+  subsSpan.style.opacity = line ? 1 : 0;
+
+  // VO audio, from the same table. Each line free-runs once started (that is
+  // what keeps playback clean); the clock only starts, stops, and corrects
+  // drift after a seek. The final master still mixes from the wavs in post —
+  // this is the same sync contract the videos use, applied to sound.
+  vo.forEach((v, i) => {
+    const a = voAudio[i];
+    if (!a) return;
+    const local = T - v.at;
+    if (playing && local >= 0 && local < v.dur) {
+      if (a.paused) { a.currentTime = Math.max(0, local); a.play().catch(() => {}); }
+      else if (Math.abs(a.currentTime - local) > 0.25) a.currentTime = local;
+    } else if (!a.paused) { a.pause(); }
+  });
+}
+const subsSpan = document.querySelector('#subs span');
+const voAudio = vo.map((v, i) => {
+  const a = new Audio(`audio/vo/line-${String(i).padStart(2, '0')}.mp3`);
+  a.preload = 'auto';
+  return a;
+});
+
+// ---- transport ------------------------------------------------------------
+let playing = false, T = 0, wall = 0;
+
+// Debug rig: `?t=30` boots paused at T=30 (headless screenshots, poster
+// grabs); any runtime exception paints a red bar so a screenshot can't hide a
+// crashed frame loop.
+addEventListener('error', e => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99;background:#a00;color:#fff;font:16px monospace;padding:8px';
+  d.textContent = `ERR ${e.message} @ ${e.filename?.split('/').pop()}:${e.lineno}`;
+  document.body.appendChild(d);
+});
+const qt = new URLSearchParams(location.search).get('t');
+if (qt !== null) T = parseFloat(qt);
+function tick(now) {
+  if (playing) {
+    T += (now - wall) / 1000;
+    if (T >= TOTAL) { T = TOTAL; playing = false; }
+  }
+  wall = now;
+  frame(T, playing);
+  // diagnostic line: which shot, and what its video element believes
+  const cur = shots.find(sh => T >= sh.start && T < sh.start + sh.dur);
+  let d = `T=${T.toFixed(1)} shot#${shots.indexOf(cur)}`;
+  if (cur?.vid) d += ` ct=${cur.vid.currentTime.toFixed(1)} rs=${cur.vid.readyState} ${cur.vid.paused ? 'PAUSED' : 'playing'} ${cur.vid.error ? 'ERR:' + cur.vid.error.code : ''}`;
+  hud.dataset.diag = d; hud.textContent = d;
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); playing = !playing; }
+  if (e.key === 'r') { T = 0; playing = false; }
+  if (e.key === 'ArrowLeft')  T = Math.max(0, T - 1);
+  if (e.key === 'ArrowRight') T = Math.min(TOTAL, T + 1);
+  if (e.key === 'c') document.body.classList.toggle('capture');
+});
+
+// capture.sh drives this: navigate with #capture, film starts itself after the
+// videos are ready, so the recording only ever needs to be trimmed at the flash.
+if (location.hash === '#capture') {
+  document.body.classList.add('capture');
+  Promise.all(footage.map(s => new Promise(res => {
+    if (s.vid.readyState >= 3) return res();
+    s.vid.addEventListener('canplaythrough', res, { once: true });
+    setTimeout(res, 4000);                       // belt: never hang the take
+  }))).then(() => setTimeout(() => { T = 0; playing = true; }, 1000));
+}
+</script>
+</body>
+</html>

@@ -184,12 +184,40 @@ final class PreviewDockModel: ObservableObject {
                 : (tabs.last?.id ?? Self.treeTabID)
         }
     }
+
+    /// Close every preview tab but `keep` (nil = all of them). Each one is
+    /// `stop()`ped rather than dropped, so a file being watched stops being
+    /// watched — closing twenty tabs must not leave twenty reloaders running.
+    func closeAll(except keep: String?) {
+        for index in tabs.indices where tabs[index].id != keep {
+            tabs[index].stop()
+        }
+        tabs.removeAll { $0.id != keep }
+        if selectedID != keep {
+            selectedID = keep ?? Self.treeTabID
+        }
+    }
 }
 
 // MARK: - Dock view
 
+/// Widths of the tab strip's content and of the space it has to live in. Two
+/// keys rather than one measurement because the answer we want — "is anything
+/// hidden?" — is a comparison between them.
+private struct ContentWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct StripWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct PreviewDock: View {
     @ObservedObject var model: PreviewDockModel
+    @State private var contentWidth: CGFloat = 0
+    @State private var stripWidth: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -204,30 +232,116 @@ struct PreviewDock: View {
     // Hiding the panel lives in the window chrome (the toolbar toggle / ⌥⌘P),
     // not in the panel itself — the tab bar is tabs only. The tree tab is
     // permanent and uncloseable; preview tabs follow it.
+    //
+    // The dock is narrow by design, so this strip overflows after a handful of
+    // files. It has always scrolled, which is not the same as being reachable:
+    // with the indicators hidden nothing said there was more, a plain mouse
+    // wheel does not scroll a horizontal strip, and opening a file selected a
+    // tab that could be off-screen. So: the strip scrolls itself to the
+    // selection, and a chevron appears — only when something is actually
+    // hidden — listing every tab.
     private var tabBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                PreviewDockTab(
-                    title: "Files",
-                    icon: "folder",
-                    active: model.selected == nil,
-                    closable: false,
-                    onSelect: { model.selectedID = PreviewDockModel.treeTabID },
-                    onClose: {})
-                ForEach(model.tabs) { tab in
-                    PreviewDockTab(
-                        title: tab.title,
-                        icon: "doc.text",
-                        active: tab.id == model.selectedID,
-                        closable: true,
-                        onSelect: { model.selectedID = tab.id },
-                        onClose: { model.close(tab.id) })
+        HStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        PreviewDockTab(
+                            title: "Files",
+                            icon: "folder",
+                            active: model.selected == nil,
+                            closable: false,
+                            onSelect: { model.selectedID = PreviewDockModel.treeTabID },
+                            onClose: {})
+                            .id(PreviewDockModel.treeTabID)
+                        ForEach(model.tabs) { tab in
+                            PreviewDockTab(
+                                title: tab.title,
+                                icon: "doc.text",
+                                active: tab.id == model.selectedID,
+                                closable: true,
+                                onSelect: { model.selectedID = tab.id },
+                                onClose: { model.close(tab.id) })
+                                .id(tab.id)
+                                .contextMenu { closeMenuItems(for: tab) }
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(widthReporter(ContentWidthKey.self))
+                }
+                .background(widthReporter(StripWidthKey.self))
+                .onPreferenceChange(ContentWidthKey.self) { contentWidth = $0 }
+                .onPreferenceChange(StripWidthKey.self) { stripWidth = $0 }
+                // Opening a file selects its tab; if that tab is off to the
+                // right, selecting it silently is the bug this fixes.
+                .onChange(of: model.selectedID) { _, id in
+                    guard let id else { return }
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            if overflowing {
+                overflowMenu
+            }
         }
         .frame(height: 36)
+    }
+
+    /// True when the strip is wider than the space it has — i.e. some tab is
+    /// off-screen right now. The 1pt slack keeps rounding from flickering the
+    /// chevron on and off at the exact fit.
+    private var overflowing: Bool { contentWidth > stripWidth + 1 }
+
+    /// Every tab, reachable without scrolling — plus the two ways out of having
+    /// too many, which is how most people arrive at this menu.
+    private var overflowMenu: some View {
+        Menu {
+            Button {
+                model.selectedID = PreviewDockModel.treeTabID
+            } label: {
+                Label("Files", systemImage: model.selected == nil ? "checkmark" : "folder")
+            }
+            Divider()
+            ForEach(model.tabs) { tab in
+                Button {
+                    model.selectedID = tab.id
+                } label: {
+                    // A checkmark on the current one; the rest keep the file
+                    // icon so the list does not jump as the selection moves.
+                    Label(tab.title, systemImage: tab.id == model.selectedID ? "checkmark" : "doc.text")
+                }
+            }
+            Divider()
+            Button("Close Other Files") { model.closeAll(except: model.selectedID) }
+                .disabled(model.tabs.count < 2)
+            Button("Close All Files") { model.closeAll(except: nil) }
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 24)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.trailing, 6)
+        .help("\(model.tabs.count) open files")
+    }
+
+    @ViewBuilder
+    private func closeMenuItems(for tab: PinnedPreview) -> some View {
+        Button("Close") { model.close(tab.id) }
+        Button("Close Others") { model.closeAll(except: tab.id) }
+        Button("Close All") { model.closeAll(except: nil) }
+    }
+
+    private func widthReporter<K: PreferenceKey>(_ key: K.Type) -> some View
+    where K.Value == CGFloat {
+        GeometryReader { geo in
+            Color.clear.preference(key: key, value: geo.size.width)
+        }
     }
 
     /// Pop the tab out into the floating window (the optional detached surface)

@@ -1,0 +1,93 @@
+{
+  "voice": "English_Trustworth_Man",
+  "lines": [
+    {
+      "i": 0,
+      "file": "line-00.mp3",
+      "at": 7.4,
+      "slot": 3.4,
+      "actual": 3.192744,
+      "text": "Bento Term shows all of your agents on one screen."
+    },
+    {
+      "i": 1,
+      "file": "line-01.mp3",
+      "at": 12.2,
+      "slot": 7.4,
+      "actual": 8.881438,
+      "text": "Each pane is tinted by what it’s doing. Blue means working. Amber means it’s waiting for you. Green means it finished."
+    },
+    {
+      "i": 2,
+      "file": "line-02.mp3",
+      "at": 21,
+      "slot": 4,
+      "actual": 3.320454,
+      "text": "You answer the one that needs you. The rest keep running."
+    },
+    {
+      "i": 3,
+      "file": "line-03.mp3",
+      "at": 27.5,
+      "slot": 4.4,
+      "actual": 4.94585,
+      "text": "You can talk to a pane instead of typing. Hold right click, and speak."
+    },
+    {
+      "i": 4,
+      "file": "line-04.mp3",
+      "at": 33.2,
+      "slot": 7,
+      "actual": 7.465215,
+      "text": "Speaking is about three times faster than typing. Bento reads the screen, so file names and technical words come out right."
+    },
+    {
+      "i": 5,
+      "file": "line-05.mp3",
+      "at": 40.8,
+      "slot": 2,
+      "actual": 2.171066,
+      "text": "Mixed languages are fine too."
+    },
+    {
+      "i": 6,
+      "file": "line-06.mp3",
+      "at": 43.5,
+      "slot": 5.6,
+      "actual": 5.15483,
+      "text": "Everything runs in tmux on your machine, not inside the app. You can quit the app,"
+    },
+    {
+      "i": 7,
+      "file": "line-07.mp3",
+      "at": 50.2,
+      "slot": 1.6,
+      "actual": 1.404807,
+      "text": "and nothing stops."
+    },
+    {
+      "i": 8,
+      "file": "line-08.mp3",
+      "at": 53.5,
+      "slot": 5,
+      "actual": 4.435011,
+      "text": "The phone app connects to the same session. Same panes, still running."
+    },
+    {
+      "i": 9,
+      "file": "line-09.mp3",
+      "at": 59.5,
+      "slot": 3,
+      "actual": 2.217506,
+      "text": "You can answer from wherever you are."
+    },
+    {
+      "i": 10,
+      "file": "line-10.mp3",
+      "at": 83.8,
+      "slot": 4.6,
+      "actual": 4.89941,
+      "text": "Bento Term is free and open source, for Mac, iPhone and iPad."
+    }
+  ]
+}

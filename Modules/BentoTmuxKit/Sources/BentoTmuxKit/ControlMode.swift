@@ -91,6 +91,9 @@ public final class TmuxControlMode: @unchecked Sendable {
         /// without limit (a chatty MOTD, a shell that drops to an interactive
         /// prompt); the diagnosis is in the first few lines either way.
         var preGreetingLines: [String] = []
+
+        /// Raw pre-greeting tail — see `rawTextBeforeControlMode`.
+        var preGreetingRaw: String = ""
     }
 
     /// Lines received before control mode started — see `preGreetingLines`.
@@ -102,6 +105,26 @@ public final class TmuxControlMode: @unchecked Sendable {
     /// Cap on `preGreetingLines`, in lines and in characters per line.
     private static let maxPreGreetingLines = 12
     private static let maxPreGreetingLineLength = 200
+
+    /// Everything the far end has said before the greeting, RAW — including the
+    /// half-line it is still sitting on.
+    ///
+    /// `preGreetingLines` cannot serve this: it is fed by the line splitter, and
+    /// the text that matters most here (`reviewer@host's password: `) carries no
+    /// newline, so it never becomes a line. A connection stuck on a password
+    /// prompt therefore looked, from up here, exactly like a connection that had
+    /// said nothing at all.
+    ///
+    /// Bounded to the tail, which is where a prompt lives.
+    public var rawTextBeforeControlMode: String {
+        responseLock.withLock { $0.preGreetingRaw }
+    }
+    private static let maxPreGreetingRawChars = 1024
+
+    /// Called on the parse queue whenever pre-greeting bytes arrive, with the
+    /// accumulated tail. The session layer uses it to notice an auth prompt
+    /// while there is still someone waiting to answer it.
+    public var onPreGreetingText: (@Sendable (String) -> Void)?
 
     private struct PendingBoolEntry {
         let id: UInt64
@@ -227,6 +250,7 @@ public final class TmuxControlMode: @unchecked Sendable {
         bufferLock.withLock { buffer in
             buffer.append(data)
         }
+        if !data.isEmpty { notePreGreetingBytes(data) }
         if !data.isEmpty {
             let waiters = responseLock.withLock { state -> [PendingBoolEntry] in
                 guard !state.sawAnyOutput else { return [] }
@@ -392,6 +416,9 @@ public final class TmuxControlMode: @unchecked Sendable {
             state.sawAnyOutput = false
             state.outputWaiters.removeAll()
             state.preGreetingLines.removeAll()
+            // A reconnect asks its own auth questions; carrying the last
+            // connection's prompt text over would answer the wrong one.
+            state.preGreetingRaw = ""
             return (o, w, outW)
         }
         if !orphans.isEmpty || !waiters.isEmpty {
@@ -703,6 +730,23 @@ public final class TmuxControlMode: @unchecked Sendable {
 
         recordIfBeforeControlMode(cleaned)
         parseLine(cleaned)
+    }
+
+    /// Accumulate the raw pre-greeting tail and hand it to whoever is watching
+    /// for an auth prompt. Cheap and short-lived: once tmux greets, this is a
+    /// single bool check per chunk for the rest of the session.
+    private func notePreGreetingBytes(_ data: Data) {
+        let tail: String? = responseLock.withLock { state in
+            guard !state.greetingConsumed else { return nil }
+            guard let text = String(data: data, encoding: .utf8) else { return nil }
+            state.preGreetingRaw += text
+            if state.preGreetingRaw.count > Self.maxPreGreetingRawChars {
+                state.preGreetingRaw = String(state.preGreetingRaw.suffix(Self.maxPreGreetingRawChars))
+            }
+            return state.preGreetingRaw
+        }
+        guard let tail else { return }
+        onPreGreetingText?(tail)
     }
 
     /// Keep non-protocol lines that arrive before the greeting, so a connection

@@ -88,8 +88,13 @@ public extension TerminalTransport {
 public struct TerminalEnvironment {
     /// Best-effort initial PTY size (before the surface has laid out).
     public var idealTerminalSize: () -> (cols: Int, rows: Int)
-    /// Load a stored password for unlocking a remote keychain (nil if none).
+    /// Load a stored secret (nil if none). Keys are namespaced by their caller:
+    /// `macKeychain:<host id>` for the remote-unlock password, `sshPassword:` /
+    /// `sshPassphrase:` for what `ssh` itself asks for.
     public var loadKeychainPassword: (_ key: String) async -> String?
+    /// Store a secret under the same namespaced key. Default is a no-op, so a
+    /// platform that has nowhere safe to put it simply never offers to.
+    public var saveKeychainPassword: (_ key: String, _ value: String) async -> Void
     /// Fired when a pane transitions into awaiting-input (iOS: haptic).
     public var onAwaitingTriggered: () -> Void
     /// Fired on each state poll so the host can update aggregate UI
@@ -100,11 +105,13 @@ public struct TerminalEnvironment {
     public init(
         idealTerminalSize: @escaping () -> (cols: Int, rows: Int) = { (80, 24) },
         loadKeychainPassword: @escaping (_ key: String) async -> String? = { _ in nil },
+        saveKeychainPassword: @escaping (_ key: String, _ value: String) async -> Void = { _, _ in },
         onAwaitingTriggered: @escaping () -> Void = {},
         onSessionUpdate: @escaping (_ hostID: UUID, _ tmuxSessionName: String, _ awaitingPanes: Int, _ latestPrompt: String) -> Void = { _, _, _, _ in }
     ) {
         self.idealTerminalSize = idealTerminalSize
         self.loadKeychainPassword = loadKeychainPassword
+        self.saveKeychainPassword = saveKeychainPassword
         self.onAwaitingTriggered = onAwaitingTriggered
         self.onSessionUpdate = onSessionUpdate
     }

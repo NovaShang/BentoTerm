@@ -52,6 +52,7 @@
 		6E18A222389C3A2FDC1870C4 /* BentoFoundationKit in Frameworks */ = {isa = PBXBuildFile; productRef = 39EB79202F55AFFF3B77D4DF /* BentoFoundationKit */; };
 		6ED0F617C09996750B4458A9 /* BentoSessionKit in Frameworks */ = {isa = PBXBuildFile; productRef = B3AF69254920FB7051CAEC59 /* BentoSessionKit */; };
 		7092D16C3A8FDB9DCD1CDDE4 /* BentoTmuxKit in Frameworks */ = {isa = PBXBuildFile; productRef = A250BE2157FB492A858A3974 /* BentoTmuxKit */; };
+		717EFF5EF6601382EDA82A1A /* MacKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = B06F422BAC36C23B8F22B665 /* MacKeychain.swift */; };
 		75C91E91FFD4D63CDDB272A5 /* HostListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB216D478BA58A44F2461265 /* HostListView.swift */; };
 		75CEFD2DE90805D3B668596E /* BentoTmuxKit in Frameworks */ = {isa = PBXBuildFile; productRef = 00DBBAFF2CD49BC5C1889E22 /* BentoTmuxKit */; };
 		793AA15295E0E10B8EAD0EBC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 65672D777444AB77E35217FF /* Assets.xcassets */; };
@@ -63,10 +64,12 @@
 		870E930C9DDB0A987B78CCF7 /* GhosttyTerminalWindow_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7364E154E2E25F681044EB28 /* GhosttyTerminalWindow_macOS.swift */; };
 		8A1E631CA77891E808D0BC64 /* LocalPtyTransportExitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 672660AE602A5D3F45E5260C /* LocalPtyTransportExitTests.swift */; };
 		8D06A1B9804219BBF4939268 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982A590D038A77CF72EBB363 /* HostStore.swift */; };
+		8E1A7CA5E091F53589826753 /* RemoteTmuxSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51918C4AC8CF9ACABD49D465 /* RemoteTmuxSessions.swift */; };
 		8EB8D27D2F52E88835BD7F5C /* TerminalContainerVC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0946E5B1A8FBCF38BBA45A6A /* TerminalContainerVC.swift */; };
 		8EF9A124CF1B9795FA23F840 /* BentoGhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = B6380E8B2F64FB56F1ECE25C /* BentoGhosttyKit */; };
 		8F01FB3963E94CA8B2F2BB2B /* BentoFilePreviewKit in Frameworks */ = {isa = PBXBuildFile; productRef = 319A52309BFA3E7016C52DC9 /* BentoFilePreviewKit */; };
 		91853B3C0F57DF67D6A28F1A /* AgentWizardWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = C457641AFF45E7019B2FA344 /* AgentWizardWindow.swift */; };
+		918F6CE6C34D9D282F317765 /* RemoteTmuxSessionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D474D020DBC9FFCE14875D1 /* RemoteTmuxSessionsTests.swift */; };
 		931467E6D3C6192C5D0649F6 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 913BEC53E4BC77D1DA0971DD /* GhosttyKit */; };
 		93CDD1F21AB0D362454751FE /* SessionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = B75E58A2AE8BB259D1E2A63A /* SessionsMenu.swift */; };
 		94815DBFF71E8BF1E3FC403D /* HapticService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C7096EA4BFE9BD6C81ACB83 /* HapticService.swift */; };
@@ -91,6 +94,7 @@
 		D91A2F0B90BCAE4198E80791 /* BentoTermMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BF84CFBF93345463C8E1B86 /* BentoTermMacApp.swift */; };
 		D93760E8F2BD1A183B59EB9C /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E804089DD209F7C46B4099B9 /* KeychainService.swift */; };
 		DBE9099B783192484E965E16 /* OpenTargetsMacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6BF81C6F8E8DCF8DF46D418 /* OpenTargetsMacTests.swift */; };
+		DC68501D8E3453C185AFCAD2 /* PreviewDockModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3D1B826E7150998CF4FA1BB /* PreviewDockModelTests.swift */; };
 		DC746D154B99790BB2FFCF75 /* PathPreviewUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102885B6FD321B6E25DBCD33 /* PathPreviewUI.swift */; };
 		E0CD97D124406DAE6C45B836 /* BentoActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A693863C6D52F06F0603A405 /* BentoActivity.swift */; };
 		E12CFE5D3ECE943195DDA85C /* FilePreviewPanel_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D2E1051A5DBA07DF8687860 /* FilePreviewPanel_macOS.swift */; };
@@ -147,7 +151,9 @@
 		4803E3F5247DDE54AEFD2E4B /* HostStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStoreTests.swift; sourceTree = "<group>"; };
 		4B6C52CD52BC257E2AAFF715 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		4BE19F47270497DB48FCEFEA /* SetupPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupPanels.swift; sourceTree = "<group>"; };
+		4D474D020DBC9FFCE14875D1 /* RemoteTmuxSessionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTmuxSessionsTests.swift; sourceTree = "<group>"; };
 		4F42A4B4AE7104B7199E93DA /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		51918C4AC8CF9ACABD49D465 /* RemoteTmuxSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTmuxSessions.swift; sourceTree = "<group>"; };
 		63C733E0B0191574B49B869E /* TmuxSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmuxSession.swift; sourceTree = "<group>"; };
 		65672D777444AB77E35217FF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		657CBA69B22D6D31ABE4AEBA /* SSHFailureMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHFailureMessage.swift; sourceTree = "<group>"; };
@@ -175,6 +181,7 @@
 		AE75853EE67ACF330BAA0F2F /* LauncherWindow_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherWindow_macOS.swift; sourceTree = "<group>"; };
 		AF9DBB6D03D227C62D3B9816 /* WelcomeFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeFlowView.swift; sourceTree = "<group>"; };
 		AFC9DC7181C02E39D9EC5D6B /* GestureOnboardingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GestureOnboardingOverlay.swift; sourceTree = "<group>"; };
+		B06F422BAC36C23B8F22B665 /* MacKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacKeychain.swift; sourceTree = "<group>"; };
 		B2FD9EC7C56ACAE8C00B21DC /* AggregateLiveActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AggregateLiveActivityController.swift; sourceTree = "<group>"; };
 		B73561C6F88999D2ABEF2F0B /* GhosttyKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GhosttyKit; path = Modules/GhosttyKit; sourceTree = SOURCE_ROOT; };
 		B75E58A2AE8BB259D1E2A63A /* SessionsMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsMenu.swift; sourceTree = "<group>"; };
@@ -201,6 +208,7 @@
 		EE3AC6060FFAB3C9C7CE00B8 /* TerminalWrapperView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalWrapperView.swift; sourceTree = "<group>"; };
 		F35E03AE25280C4A43FB382C /* BentoTermMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BentoTermMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F395B14D115E93286EBBD7B7 /* BentoFilePreviewKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BentoFilePreviewKit; path = Modules/BentoFilePreviewKit; sourceTree = SOURCE_ROOT; };
+		F3D1B826E7150998CF4FA1BB /* PreviewDockModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewDockModelTests.swift; sourceTree = "<group>"; };
 		F4693B562DE216FFEEFDC6C7 /* BentoTermMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BentoTermMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F48438B4652DD480581513DC /* SSHConfigHosts_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHConfigHosts_macOS.swift; sourceTree = "<group>"; };
 		F6BF81C6F8E8DCF8DF46D418 /* OpenTargetsMacTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenTargetsMacTests.swift; sourceTree = "<group>"; };
@@ -403,6 +411,8 @@
 				015810BD0D9FE818A1D554F1 /* LauncherModelTests.swift */,
 				672660AE602A5D3F45E5260C /* LocalPtyTransportExitTests.swift */,
 				F6BF81C6F8E8DCF8DF46D418 /* OpenTargetsMacTests.swift */,
+				F3D1B826E7150998CF4FA1BB /* PreviewDockModelTests.swift */,
+				4D474D020DBC9FFCE14875D1 /* RemoteTmuxSessionsTests.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -519,9 +529,11 @@
 			children = (
 				17153E75F17F00881A8B94BC /* LocalPty_macOS.swift */,
 				0643C3C972EA2C012C63767A /* LocalPtyTransport_macOS.swift */,
+				B06F422BAC36C23B8F22B665 /* MacKeychain.swift */,
 				E50BD4A397CDDEC4A178A944 /* MacTerminalNotifier_macOS.swift */,
 				E4E4566DBC1CA2E6668378EF /* MacVoiceController_macOS.swift */,
 				037698AF7E6B1096A0C55B73 /* OpenTargets.swift */,
+				51918C4AC8CF9ACABD49D465 /* RemoteTmuxSessions.swift */,
 				F48438B4652DD480581513DC /* SSHConfigHosts_macOS.swift */,
 				C924A57EB55D22991ED5C268 /* TmuxCLI.swift */,
 				290C740D8E9D4EB5520195EF /* TmuxResolver.swift */,
@@ -783,6 +795,8 @@
 				2F37EC36D0687C906A1A74F4 /* LauncherModelTests.swift in Sources */,
 				8A1E631CA77891E808D0BC64 /* LocalPtyTransportExitTests.swift in Sources */,
 				DBE9099B783192484E965E16 /* OpenTargetsMacTests.swift in Sources */,
+				DC68501D8E3453C185AFCAD2 /* PreviewDockModelTests.swift in Sources */,
+				918F6CE6C34D9D282F317765 /* RemoteTmuxSessionsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -841,10 +855,12 @@
 				E45B8D18D99331FC13C1248B /* LauncherWindow_macOS.swift in Sources */,
 				C1C668B1149BED34D8244DB0 /* LocalPtyTransport_macOS.swift in Sources */,
 				F26D562072F2FB5A879D27E2 /* LocalPty_macOS.swift in Sources */,
+				717EFF5EF6601382EDA82A1A /* MacKeychain.swift in Sources */,
 				80286A765E00BB52E3632F4A /* MacTerminalNotifier_macOS.swift in Sources */,
 				62C8DF9ED83DD7EF87ABC311 /* MacVoiceController_macOS.swift in Sources */,
 				C3036EB47E2D809250D2C350 /* OpenTargets.swift in Sources */,
 				0134653A60C317674A77BA89 /* PreviewDock_macOS.swift in Sources */,
+				8E1A7CA5E091F53589826753 /* RemoteTmuxSessions.swift in Sources */,
 				33FEF1503938876E1E5CFAC2 /* SSHConfigHosts_macOS.swift in Sources */,
 				93CDD1F21AB0D362454751FE /* SessionsMenu.swift in Sources */,
 				3950D8BD2F972C35BDB2A658 /* SettingsView.swift in Sources */,
@@ -923,7 +939,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BentoTermiOS/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
@@ -1042,7 +1058,7 @@
 				CODE_SIGN_ENTITLEMENTS = BentoTermMac/Resources/BentoTermMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -1053,7 +1069,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.3.0;
+				MARKETING_VERSION = 0.3.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.mac;
 				PRODUCT_NAME = BentoTerm;
 				SDKROOT = macosx;
@@ -1131,7 +1147,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BentoTermiOS/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
@@ -1158,7 +1174,7 @@
 				CODE_SIGN_ENTITLEMENTS = BentoTermMac/Resources/BentoTermMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -1169,7 +1185,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.3.0;
+				MARKETING_VERSION = 0.3.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.mac;
 				PRODUCT_NAME = BentoTerm;
 				SDKROOT = macosx;

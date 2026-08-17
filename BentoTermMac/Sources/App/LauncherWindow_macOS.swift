@@ -304,7 +304,17 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
             specs.append(PaletteSectionSpec(id: "launches", title: "Recent Launches",
                                             items: launches, limit: 6))
         }
-        let hosts = targets.sshTargets().map(row)
+        // A host row drills rather than acts: "open dev" has no answer until you
+        // know whether you mean the session already running there or a new one,
+        // and that list only exists on the host. The drill lists it, with the
+        // plain `ssh dev` shell still one row away.
+        let hosts = targets.sshTargets().map { target -> PaletteItem in
+            guard case .sshHost(let alias) = target.kind else { return row(target) }
+            return PaletteItem(id: target.id, title: target.title,
+                               subtitle: "tmux sessions on \(alias)",
+                               systemImage: target.systemImage, matchText: target.matchText,
+                               action: .drillHost(alias: alias))
+        }
         if !hosts.isEmpty {
             specs.append(PaletteSectionSpec(id: "sshHosts", title: "SSH Hosts",
                                             items: hosts, limit: 8))
@@ -364,8 +374,13 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         fill { BentoTerminalWindow.fill($0, plainTitle: host, command: ["ssh", host]); return true }
     }
 
+    /// The launcher's "New Remote tmux Session → dev" opens the palette on that
+    /// host's session list rather than creating a session sight unseen: the
+    /// list is the part that only exists on the far end.
     private func openRemoteTmux(_ host: String) {
-        fill { BentoTerminalWindow.fill($0, tmuxHost: host) }
+        CommandPaletteController.shared.present(
+            fileContext: nil, hostLabel: host, staticSpecs: [],
+            from: toolbar.searchAnchor, openingHost: host)
     }
 
     // MARK: The SSH menu

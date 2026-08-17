@@ -146,6 +146,27 @@ public final class TerminalViewModel: ObservableObject {
     public var isPlainSession: Bool { kind == .plain }
 
     /// Sessions discovered via `tmux ls` after SSH is up.
+    /// The question ssh is sitting on, if any — a password, a key passphrase, or
+    /// a 2FA code. Non-nil means the connection is waiting on a person, not on
+    /// the network. See `TerminalViewModel+AuthPrompt`.
+    @Published public internal(set) var authPrompt: SSHAuthPrompt?
+
+    /// The last answer was refused. Drives the "that didn't work" note so a
+    /// retried prompt doesn't look like the first one.
+    @Published public internal(set) var authPromptRejected = false
+
+    /// Set once ssh has said an answer was wrong, so a stored secret that has
+    /// gone stale is asked about instead of replayed into a lockout.
+    var storedSecretRejected = false
+
+    /// The prompt text already acted on. The same question arrives in as many
+    /// chunks as the network splits it into; this makes it one question.
+    var lastSeenAuthPrompt: SSHAuthPrompt?
+
+    /// How many prompts this connection has answered. The greeting wait watches
+    /// it to tell "nobody is home" from "someone is typing".
+    var authPromptsAnswered = 0
+
     @Published public var availableTmuxSessions: [String] = []
     @Published public var sessionsLoading: Bool = false
 
@@ -227,6 +248,13 @@ public final class TerminalViewModel: ObservableObject {
     /// nonisolated) can read it — all real access happens on MainActor.
     nonisolated(unsafe) var rawHistory = Data()
     static let maxRawHistoryBytes = 256 * 1024
+    /// Let raw history overshoot the cap by this much before trimming, then drop
+    /// a whole slab at once — the same amortization `PaneViewModel` already
+    /// carries, and for the same reason. Removing from the front of `Data` is
+    /// O(n); trimming on every chunk once at the cap makes heavy output an O(n²)
+    /// memmove storm, and this one runs ON THE MAIN ACTOR (`routeIncomingData`),
+    /// so it lands directly on keystroke latency in plain-shell sessions.
+    static let rawHistorySlackBytes = 256 * 1024
 
     /// Push predicted keystrokes (Mosh-style local echo) to the surface as a
     /// preedit overlay. Set by the host wiring (raw/no-tmux path only) to the
@@ -332,6 +360,15 @@ public final class TerminalViewModel: ObservableObject {
     struct PendingTmuxNotifications {
         var queue: [TmuxNotification] = []
         var drainScheduled = false
+        /// True while `drainTmuxNotifications` is WALKING a batch on the main
+        /// actor. The batch is taken under the lock but handled outside it, and
+        /// handling it is not quick — `applyLayoutGeometry` re-tiles every
+        /// surface synchronously. Without this flag the fast path below sees an
+        /// empty queue with no drain scheduled during exactly that window and
+        /// delivers straight to the surface, overtaking the output still sitting
+        /// in the batch (and the `%layout-change` ahead of it) — the one thing
+        /// the emptiness test exists to prevent.
+        var draining = false
     }
     nonisolated let pendingTmuxNotifications = OSAllocatedUnfairLock(initialState: PendingTmuxNotifications())
 
@@ -353,12 +390,13 @@ public final class TerminalViewModel: ObservableObject {
         // The emptiness test is what preserves ordering. tmux's `%layout-change`
         // must still be applied before the `%output` that follows it (resize
         // correctness depends on it); the moment anything is queued or a drain
-        // is scheduled, output goes back through the queue and stays behind it.
-        // Both the test and the append happen under the same lock, so output
-        // cannot slip past a notification enqueued concurrently.
+        // is scheduled — or a drain is still walking its batch — output goes back
+        // through the queue and stays behind it. Both the test and the append
+        // happen under the same lock, so output cannot slip past a notification
+        // enqueued concurrently.
         if case .output(let pane, let data) = notification {
             let sink: (@Sendable (Data) -> Void)? = pendingTmuxNotifications.withLockUnchecked { state in
-                guard state.queue.isEmpty, !state.drainScheduled else { return nil }
+                guard state.queue.isEmpty, !state.drainScheduled, !state.draining else { return nil }
                 return outputSinks.withLock { $0[pane] }
             }
             if let sink {
@@ -382,10 +420,15 @@ public final class TerminalViewModel: ObservableObject {
     func drainTmuxNotifications() {
         let batch = pendingTmuxNotifications.withLockUnchecked { state -> [TmuxNotification] in
             state.drainScheduled = false
+            state.draining = true
             let queue = state.queue
             state.queue.removeAll(keepingCapacity: true)
             return queue
         }
+        // Anything that arrives while this batch is being handled queues behind
+        // it and schedules its own drain (drainScheduled is already false), which
+        // runs after this one returns — so clearing the flag here can't strand it.
+        defer { pendingTmuxNotifications.withLockUnchecked { $0.draining = false } }
 
         // Merge consecutive .output runs for the same pane into a single
         // feed; everything else is handled in arrival order.
@@ -433,6 +476,8 @@ public final class TerminalViewModel: ObservableObject {
             guard let data = string.data(using: .utf8) else { return }
             self?.transport.write(data)
         }
+
+        watchForAuthPrompts()
     }
 
     /// Entry point for every byte arriving from the transport, on whatever
@@ -504,10 +549,10 @@ public final class TerminalViewModel: ObservableObject {
 
     func appendRawHistory(_ data: Data) {
         rawHistory.append(data)
-        let overflow = rawHistory.count - Self.maxRawHistoryBytes
-        if overflow > 0 {
-            rawHistory.removeSubrange(0..<overflow)
-        }
+        // Trim only after overshooting by a slab, then trim back to the cap in
+        // one shot (see rawHistorySlackBytes) — never per chunk.
+        guard rawHistory.count > Self.maxRawHistoryBytes + Self.rawHistorySlackBytes else { return }
+        rawHistory.removeSubrange(0..<(rawHistory.count - Self.maxRawHistoryBytes))
     }
 
     /// Synchronous hook invoked right after `%layout-change` geometry is applied,

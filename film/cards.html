@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: Geist; src: url(assets/site/fonts/geist-sans-400.woff2) format('woff2'); font-weight: 400; }
+  @font-face { font-family: Geist; src: url(assets/site/fonts/geist-sans-500.woff2) format('woff2'); font-weight: 500; }
+  @font-face { font-family: Geist; src: url(assets/site/fonts/geist-sans-600.woff2) format('woff2'); font-weight: 600; }
+  @font-face { font-family: GeistMono; src: url(assets/site/fonts/geist-mono-400.woff2) format('woff2'); }
+  * { margin: 0; box-sizing: border-box; }
+  body { width: 2560px; height: 1440px; background: #0b0d10; color: #e8eaed;
+         font-family: Geist, -apple-system, sans-serif; overflow: hidden; }
+  .card { width: 2560px; height: 1440px; display: flex; flex-direction: column;
+          align-items: center; justify-content: center; text-align: center; }
+
+  /* claim: the three words in their chapter state colors, then the line */
+  .triad { display: flex; gap: 96px; font-size: 110px; font-weight: 600; letter-spacing: -0.02em; }
+  .triad .w { color: #4ea1ff; }
+  .triad .v { color: #34c98e; }
+  .triad .r { color: #f5a623; }
+  .claimline { margin-top: 90px; font-size: 64px; font-weight: 500; color: #e8eaed; }
+  .claimsub { margin-top: 28px; font-size: 44px; color: #8a919b; }
+
+  /* endcard */
+  .end img { width: 200px; height: 200px; border-radius: 22.4%; }
+  .end h1 { margin-top: 64px; font-size: 88px; font-weight: 600; letter-spacing: -0.02em; max-width: 1700px; line-height: 1.15; }
+  .end h1 em { font-style: normal; color: #34c98e; }
+  .end .url { margin-top: 84px; font-size: 96px; font-weight: 600; letter-spacing: -0.01em; color: #34c98e; }
+  .end p { margin-top: 40px; font-size: 34px; color: #8a919b; }
+</style>
+
+<div class="card" id="claim">
+  <div class="triad"><span class="w">Parallel</span><span class="v">Voice</span><span class="r">Remote</span></div>
+  <div class="claimline">One way of working.</div>
+  <div class="claimsub">And the gains multiply.</div>
+</div>
+
+<div class="card end" id="end">
+  <img src="assets/site/bento-icon.svg" alt="">
+  <h1>A terminal for watching and <em>talking</em> to your agents</h1>
+  <div class="url">bentoai.dev</div>
+  <p>Free &amp; open source &nbsp;·&nbsp; macOS 14+ &nbsp;·&nbsp; iPhone &amp; iPad</p>
+</div>

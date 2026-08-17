@@ -44,11 +44,11 @@ public enum QuickLookRouting {
         "ts", "mts", "cts", "dts", "dtsi", "bin",
     ]
 
-    /// Families the system draws: pictures we don't decode ourselves (RAW,
-    /// PSD…), anything that plays, 3D scenes, fonts (Quick Look lays out a
-    /// specimen sheet — every weight and the glyph table — where we had only
-    /// the "binary" card), and archives (whose Quick Look at least names and
-    /// sizes the contents instead of our flat "binary").
+    /// Families the system draws: pictures (all of them now — the app's own
+    /// image view is gone), anything that plays, 3D scenes, fonts (Quick Look
+    /// lays out a specimen sheet, every weight and the glyph table, where we
+    /// had only the "binary" card), and archives (whose Quick Look at least
+    /// names and sizes the contents instead of our flat "binary").
     private static let previewableFamilies: [UTType] = [
         .image, .movie, .audio, .audiovisualContent, .threeDContent, .font, .archive, .pdf,
     ]
@@ -66,8 +66,8 @@ public enum QuickLookRouting {
             || type.conforms(to: .html)
     }
 
-    /// Called only after the inline paths declined — so an image reaching here
-    /// is one we can't decode, or one over `FilePreviewLimits.imageBytes`.
+    /// Consulted by the loader before any read. Pictures reach here too now —
+    /// the app no longer decodes any image itself.
     public static func prefersQuickLook(fileName: String) -> Bool {
         let ext = (fileName as NSString).pathExtension.lowercased()
         guard !ext.isEmpty else { return false }

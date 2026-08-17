@@ -1,0 +1,33 @@
+[Script Info]
+; Subtitles + chapter titles for the square cut. Times = audio boundaries
+; (silencedetect on full.mp3) + the 1.0s film lead. Regenerate if the VO
+; is resynthesized.
+ScriptType: v4.00+
+PlayResX: 2160
+PlayResY: 2160
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Sub,Helvetica Neue,64,&H00EDEAE8,&H00FFFFFF,&H00101010,&H96000000,0,0,0,0,100,100,0,0,1,2,10,2,140,140,110,1
+Style: Chap,Helvetica Neue,58,&H00B0A99F,&H00FFFFFF,&H00101010,&H00000000,1,0,0,0,100,100,6,0,1,0,0,8,140,140,120,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+
+Dialogue: 0,0:00:01.00,0:00:05.70,Sub,,0,0,0,,Your agent is working. So what are you doing?
+Dialogue: 0,0:00:05.90,0:00:07.80,Sub,,0,0,0,,You could be running more of them.
+Dialogue: 0,0:00:07.90,0:00:13.10,Sub,,0,0,0,,In Bento Term, all of your agents run in one window, like a bento box.
+Dialogue: 0,0:00:13.25,0:00:17.95,Sub,,0,0,0,,You watch every one of them at once, instead of switching from task to task.
+Dialogue: 0,0:00:18.10,0:00:21.55,Sub,,0,0,0,,When one needs your attention, its color tells you.
+Dialogue: 0,0:00:21.70,0:00:27.35,Sub,,0,0,0,,Talking is about three times faster than typing. So voice is the main way you give input.
+Dialogue: 0,0:00:27.50,0:00:32.80,Sub,,0,0,0,,You can drive the shell by voice. More importantly, you can direct your agents.
+Dialogue: 0,0:00:32.95,0:00:39.30,Sub,,0,0,0,,Bento hears the context, so technical terms, even names from your code, come out right.
+Dialogue: 0,0:00:39.40,0:00:42.40,Sub,,0,0,0,,Your agents don't stop when you leave the desk.
+Dialogue: 0,0:00:42.55,0:00:45.80,Sub,,0,0,0,,On the sofa, the iPad gives you the whole setup.
+Dialogue: 0,0:00:45.95,0:00:49.30,Sub,,0,0,0,,On the road, your phone can finish anything.
+Dialogue: 0,0:00:49.45,0:00:56.70,Sub,,0,0,0,,Parallel, voice, remote. It's one way of working. And the gains multiply.
+
+Dialogue: 0,0:00:05.90,0:00:21.70,Chap,,0,0,0,,A WHOLE TEAM, ONE SCREEN
+Dialogue: 0,0:00:21.70,0:00:39.40,Chap,,0,0,0,,SAY IT, DON'T TYPE IT
+Dialogue: 0,0:00:39.40,0:00:49.40,Chap,,0,0,0,,LEAVE THE DESK, NOT THE WORK

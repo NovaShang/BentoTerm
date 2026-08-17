@@ -672,6 +672,9 @@ final class SessionTab {
         let storedKey = id.key
         let env = TerminalEnvironment(
             idealTerminalSize: { (120, 30) },
+            // What `ssh` asks for, when the user asked us to remember it.
+            loadKeychainPassword: { key in MacKeychain.load(key) },
+            saveKeychainPassword: { key, value in MacKeychain.save(key, value) },
             onSessionUpdate: { _, session, awaiting, prompt in
                 // The VM reports the session NAME; the notifier keys on
                 // IDENTITY. On a remote session those differ, and passing the
@@ -864,6 +867,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// One failure alert per window — the view model can re-publish `showError`
     /// and the sheet must not stack.
     private var failureAlertShown = false
+
+    /// The auth sheet currently up, if any. One at a time: ssh asks its next
+    /// question only after this one is answered.
+    private var authPromptAlert: NSAlert?
     /// Per-tab subscriptions (agent dots + tab titles), keyed by tab identity.
     private var tabCancellables: [ObjectIdentifier: Set<AnyCancellable>] = [:]
 
@@ -993,7 +1000,13 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onNewTerminal = { BentoTerminalWindow.newSessionTab() }
         toolbar.onNewPlainShell = { BentoTerminalWindow.newWindowNoTmux() }
         toolbar.onNewSSHHost = { BentoTerminalWindow.newSSHWindow(host: $0) }
-        toolbar.onNewRemoteTmuxHost = { BentoTerminalWindow.newTmuxWindow(host: $0) }
+        // Picking the machine is half the question; the palette answers the
+        // other half (which session) with what is actually running there.
+        toolbar.onNewRemoteTmuxHost = { [weak self] host in
+            CommandPaletteController.shared.present(
+                fileContext: nil, hostLabel: host, staticSpecs: [],
+                from: self?.toolbar.searchAnchor, openingHost: host)
+        }
         toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
         toolbar.onCloseWindow = { [weak self] in self?.activeTab?.viewModel.closeWindow() }
         toolbar.onSetSizingMode = { [weak self] mode in
@@ -1451,7 +1464,66 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
                 self.presentSessionFailure(tab: tab)
             }
             .store(in: &bag)
+        // `ssh` asking for something. Until this existed, the question went into
+        // the control-mode stream where nothing rendered it and nothing could
+        // answer it, so a password-authenticated host simply timed out after
+        // twelve seconds — and blamed tmux, which was innocent.
+        tab.viewModel.$authPrompt
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self, weak tab] prompt in
+                guard let prompt, let self, let tab else { return }
+                self.presentAuthPrompt(tab: tab, prompt: prompt)
+            }
+            .store(in: &bag)
         tabCancellables[ObjectIdentifier(tab)] = bag
+    }
+
+    /// Ask for the password / passphrase / code that `ssh` is waiting on, and
+    /// type it into the connection.
+    ///
+    /// The prompt is shown verbatim: which of several 2FA methods a host is
+    /// asking for is exactly the thing a paraphrase would lose.
+    private func presentAuthPrompt(tab: SessionTab, prompt: SSHAuthPrompt) {
+        guard let window, authPromptAlert == nil else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "\(tab.viewModel.host.name) is asking for \(prompt.kind.noun)"
+        alert.informativeText = tab.viewModel.authPromptRejected
+            ? "That didn’t work. \(prompt.text)"
+            : prompt.text
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Connect")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 22))
+        let remember = NSButton(checkboxWithTitle: "Remember in Keychain", target: nil, action: nil)
+        remember.state = .on
+        let accessory = NSStackView(views: prompt.isStorable ? [field, remember] : [field])
+        accessory.orientation = .vertical
+        accessory.alignment = .leading
+        accessory.spacing = 8
+        accessory.frame = NSRect(x: 0, y: 0, width: 260, height: prompt.isStorable ? 52 : 22)
+        alert.accessoryView = accessory
+        // Without this the sheet opens with the buttons focused and the first
+        // thing typed goes nowhere.
+        alert.window.initialFirstResponder = field
+
+        authPromptAlert = alert
+        alert.beginSheetModal(for: window) { [weak self, weak tab] response in
+            guard let self else { return }
+            self.authPromptAlert = nil
+            guard let tab else { return }
+            if response == .alertFirstButtonReturn {
+                tab.viewModel.submitAuthPrompt(field.stringValue,
+                                               remember: prompt.isStorable && remember.state == .on)
+            } else {
+                // Cancelling an auth prompt cancels the connection: there is no
+                // session behind this window to fall back to.
+                tab.viewModel.cancelAuthPrompt()
+                self.window?.close()
+            }
+        }
     }
 
     /// Show why a session never came up, and close the window with it — there

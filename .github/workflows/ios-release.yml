@@ -94,8 +94,10 @@ jobs:
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="${PROFILE_NAME}" \
             DEVELOPMENT_TEAM=${{ secrets.MACOS_TEAM_ID }} \
-            OTHER_CODE_SIGN_FLAGS="--keychain ${KEYCHAIN_PATH}" \
-            | xcpretty || xcodebuild -version
+            OTHER_CODE_SIGN_FLAGS="--keychain ${KEYCHAIN_PATH}"
+          # No log prettifier here: it hides the compiler/codesign error and
+          # its exit code, which turned a failed archive into a green step.
+          test -d "${RUNNER_TEMP}/BentoTerm.xcarchive"
 
       - name: Export IPA
         run: |
