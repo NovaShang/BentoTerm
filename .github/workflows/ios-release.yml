@@ -1,15 +1,15 @@
 # Archive the iOS app and upload it to App Store Connect.
 #
-# Why this exists: builds made on this project's dev Mac are rejected with
+# Why this exists: builds archived on this project's dev Mac are rejected with
 # ITMS-90111 ("Unsupported SDK or Xcode version") because that machine runs a
-# beta macOS, and Apple reads the BuildMachineOSBuild stamp — the Xcode and
-# SDK in those builds were fine. GitHub's macos-26 image runs a released OS,
-# so archives made here carry a clean stamp.
+# beta macOS and Apple reads the BuildMachineOSBuild stamp — the Xcode (26.6)
+# and SDK (iphoneos26.5) in those builds were already correct. The macos-26
+# runner has a released OS, so its archives carry a clean stamp.
 #
 # It also removes the manual step: no Xcode Organizer, no interactive Apple ID
 # session. Signing is manual with a distribution certificate and an App Store
-# profile created through the App Store Connect API; the upload uses the same
-# API key the notarization steps already use.
+# profile created through the App Store Connect API; the upload reuses the API
+# key the notarization steps already use.
 #
 # Bump CURRENT_PROJECT_VERSION in project.yml before every run — App Store
 # Connect refuses a build number it has already seen.
@@ -28,9 +28,6 @@ jobs:
 
       - name: Install xcodegen
         run: brew install xcodegen
-
-      - name: Generate Xcode project
-        run: xcodegen
 
       # Same throwaway-keychain pattern as the Mac release job, with the
       # distribution certificate instead of the Developer ID one.
@@ -81,22 +78,48 @@ jobs:
           echo "PROFILE_NAME=${NAME}" >> "$GITHUB_ENV"
           echo "installed ${NAME} (${UUID})"
 
+      # Signing has to be scoped to the app target. Passing CODE_SIGN_STYLE and
+      # friends on the xcodebuild command line applies them to every target in
+      # the build, and SPM package targets (swift-crypto, swift-nio, our own
+      # Modules/) then fail outright with "does not support provisioning
+      # profiles". Patching project.yml before generation keeps the settings
+      # where they belong and leaves the committed file — which uses Automatic
+      # signing for local device builds — untouched.
+      - name: Switch the iOS target to manual signing
+        env:
+          TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+        run: |
+          set -e
+          python3 - <<'PY'
+          import os, re, pathlib
+          p = pathlib.Path('project.yml')
+          s = p.read_text()
+          block = (
+            '        CODE_SIGN_STYLE: Manual\n'
+            '        CODE_SIGN_IDENTITY: "Apple Distribution"\n'
+            f'        PROVISIONING_PROFILE_SPECIFIER: "{os.environ["PROFILE_NAME"]}"\n'
+            f'        DEVELOPMENT_TEAM: "{os.environ["TEAM_ID"]}"\n'
+          )
+          s, n = re.subn(r'^        CODE_SIGN_STYLE: Automatic\n', block, s, count=1, flags=re.M)
+          assert n == 1, 'iOS CODE_SIGN_STYLE anchor not found in project.yml'
+          p.write_text(s)
+          PY
+          grep -A3 'CODE_SIGN_STYLE: Manual' project.yml
+
+      - name: Generate Xcode project
+        run: xcodegen
+
       - name: Archive
         run: |
           set -e
+          # No log prettifier: it hides the compiler/codesign error and its
+          # exit code, which once turned a failed archive into a green step.
           xcodebuild archive \
             -project BentoTerm.xcodeproj \
             -scheme BentoTermiOS \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "${RUNNER_TEMP}/BentoTerm.xcarchive" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="${PROFILE_NAME}" \
-            DEVELOPMENT_TEAM=${{ secrets.MACOS_TEAM_ID }} \
-            OTHER_CODE_SIGN_FLAGS="--keychain ${KEYCHAIN_PATH}"
-          # No log prettifier here: it hides the compiler/codesign error and
-          # its exit code, which turned a failed archive into a green step.
+            -archivePath "${RUNNER_TEMP}/BentoTerm.xcarchive"
           test -d "${RUNNER_TEMP}/BentoTerm.xcarchive"
 
       - name: Export IPA
