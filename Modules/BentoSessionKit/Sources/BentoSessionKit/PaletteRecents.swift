@@ -58,6 +58,29 @@ public enum RecentLaunchPolicy {
         raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
+    /// Whether a remembered command can actually be run again.
+    ///
+    /// Builds through 0.3.1 also stored tmux's `#{pane_current_command}` as a
+    /// row's program. On Darwin that format is the kernel's accounting name
+    /// (`p_comm` — the exec'd FILE's name, not argv[0], capped at 16 chars), so
+    /// a versioned install like Claude Code's
+    /// `~/.local/share/claude/versions/2.1.234` wrote rows whose "command" is
+    /// `2.1.234`. Nothing on `PATH` is called that: replaying such a row opens a
+    /// pane that exits the instant it appears. Nothing writes them any more (see
+    /// `TerminalViewModel.recordActivePaneLaunch`), but users have them on disk
+    /// today, so `PaletteRecents` repairs the store when it loads it — the
+    /// directory is still good, so the row survives as a plain shell.
+    ///
+    /// Deliberately narrow: it rejects what CANNOT be a program name, not what
+    /// merely looks unlikely. A version token is digits and dots, nothing else.
+    public static func isReplayableCommand(_ command: String) -> Bool {
+        let name = normalizedCommand(command)
+        guard !name.isEmpty else { return true }  // "" is a plain shell, always fine
+        let program = name.split(separator: " ").first.map(String.init) ?? name
+        let versionLike = program.contains(".") && program.allSatisfy { $0.isNumber || $0 == "." }
+        return !versionLike
+    }
+
     /// nil = don't remember this one.
     public static func record(dir: String?, command: String?, host: String? = nil) -> LaunchRecord? {
         guard let dir = normalizedDir(dir) else { return nil }
@@ -95,8 +118,29 @@ public final class PaletteRecents {
         let d = UserDefaults.standard
         files = (try? JSONDecoder().decode([FileEntry].self,
             from: d.data(forKey: filesKey) ?? Data())) ?? []
-        launches = (try? JSONDecoder().decode([LaunchEntry].self,
+        let stored = (try? JSONDecoder().decode([LaunchEntry].self,
             from: d.data(forKey: launchesKey) ?? Data())) ?? []
+        launches = Self.repaired(stored)
+        // Write the repair straight back, so a row an older build poisoned is
+        // gone from the store rather than filtered on every read.
+        if launches != stored { persist(launches, key: launchesKey) }
+    }
+
+    /// Load-time repair of rows earlier builds wrote (see
+    /// `RecentLaunchPolicy.isReplayableCommand`): a row whose command can never
+    /// be run keeps its directory and loses the command, the result is put back
+    /// through the noise rule — a repaired row can become the plain-shell-in-
+    /// `$HOME` default, which is exactly what that rule drops — and deduped, so
+    /// the repair cannot leave two identical rows behind.
+    static func repaired(_ stored: [LaunchEntry]) -> [LaunchEntry] {
+        var out: [LaunchEntry] = []
+        for entry in stored {
+            let command = RecentLaunchPolicy.isReplayableCommand(entry.command) ? entry.command : ""
+            guard let kept = RecentLaunchPolicy.record(
+                dir: entry.dir, command: command, host: entry.host) else { continue }
+            if !out.contains(kept) { out.append(kept) }
+        }
+        return out
     }
 
     /// Most-recent-first, deduped on path.

@@ -38,7 +38,7 @@ extension TerminalViewModel {
     /// why recents stayed empty on the split path even though `resolveSeed`
     /// records — `.duplicateCurrent` is only reached from the *Duplicate*
     /// menu item, not from the split every user actually presses. So ask for
-    /// the pair here, purely to remember it.
+    /// the directory here, purely to remember it.
     ///
     /// Fire-and-forget, no seed — the seeded variant (`splitPane(horizontal:seed:)`,
     /// in Structure.swift) awaits and resolves a seed; pick by whether you need one.

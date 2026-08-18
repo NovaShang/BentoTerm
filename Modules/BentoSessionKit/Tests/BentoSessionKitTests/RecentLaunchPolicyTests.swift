@@ -34,6 +34,41 @@ import Testing
         #expect(RecentLaunchPolicy.record(dir: "  ", command: "claude") == nil)
     }
 
+    /// The "Duplicate Current" bug, seen from the store's side: a version
+    /// number is what tmux reports as the *command* of a pane running a
+    /// versioned install, and it is not a command at all.
+    @Test func aVersionNumberIsNotAReplayableCommand() {
+        #expect(!RecentLaunchPolicy.isReplayableCommand("2.1.234"))
+        #expect(!RecentLaunchPolicy.isReplayableCommand("2.1.228"))
+        #expect(!RecentLaunchPolicy.isReplayableCommand(" 0.3.1 "))
+        // Real launches must survive: the rule rejects what cannot be a program
+        // name, not what looks unusual.
+        #expect(RecentLaunchPolicy.isReplayableCommand("claude"))
+        #expect(RecentLaunchPolicy.isReplayableCommand("claude --resume"))
+        #expect(RecentLaunchPolicy.isReplayableCommand("python3"))
+        #expect(RecentLaunchPolicy.isReplayableCommand("./run.sh"))
+        #expect(RecentLaunchPolicy.isReplayableCommand(""))  // plain shell
+    }
+
+    @Test func loadingRepairsRowsPoisonedByAnOlderBuild() {
+        // Verbatim shapes from a shipped 0.3.1 store.
+        let stored = [
+            LaunchRecord(dir: home + "/Work", command: "2.1.234"),
+            LaunchRecord(dir: home, command: "2.1.228"),
+            LaunchRecord(dir: home + "/code", command: "claude"),
+            LaunchRecord(dir: home + "/Work", command: ""),
+        ]
+        let clean = PaletteRecents.repaired(stored)
+
+        // The version rows keep their directory and lose the bogus command; the
+        // one at $HOME becomes the plain default and drops out entirely; the
+        // real launch is untouched; and the repair does not duplicate the row it
+        // now collides with.
+        #expect(clean == [LaunchRecord(dir: home + "/Work", command: ""),
+                          LaunchRecord(dir: home + "/code", command: "claude")])
+        #expect(!clean.contains { $0.command.contains("2.1.") })
+    }
+
     @Test func directoriesNormalizeSoOneFolderIsOneRow() {
         let a = RecentLaunchPolicy.record(dir: "~/code/foo/", command: "vim")
         let b = RecentLaunchPolicy.record(dir: " " + NSHomeDirectory() + "/code/foo ", command: " vim ")

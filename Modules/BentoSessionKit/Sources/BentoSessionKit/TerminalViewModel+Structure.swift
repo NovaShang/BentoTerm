@@ -277,6 +277,12 @@ public extension TerminalViewModel {
         DIAG("[DUP] newListWindow seed=\(seed) path=\(path ?? "nil") cmd=\(String(describing: command)) panesBefore=\(sessionPanes.map { "\($0.id)" }.joined(separator: ","))")
         let resp = await tmuxService.send(.newWindow(path: path, command: command))
         DIAG("[DUP] new-window resp err=\(resp.isError) out=[\(resp.output.trimmingCharacters(in: .whitespacesAndNewlines))]")
+        // DIAG is an opt-in file trace (BENTO_DIAG=1), so a duplicate that fails
+        // for a user is otherwise invisible. A refusal is rare and worth one
+        // always-on line in the unified log.
+        if resp.isError {
+            dlog("[DUP] new-window refused: \(resp.output.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
         await refreshWindows()
         await refreshPanes()
         DIAG("[DUP] newListWindow done panesAfter=\(sessionPanes.map { "\($0.id)" }.joined(separator: ",")) windows=\(windows.map { "\($0.id)" }.joined(separator: ","))")
@@ -291,25 +297,41 @@ public extension TerminalViewModel {
         let resp = await tmuxService.send(.splitWindow(
             target: activePaneID, horizontal: horizontal, path: path, command: command))
         DIAG("[DUP] split-window resp err=\(resp.isError) out=[\(resp.output.trimmingCharacters(in: .whitespacesAndNewlines))]")
+        if resp.isError {
+            dlog("[DUP] split-window refused: \(resp.output.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
         await refreshPanes()
         DIAG("[DUP] splitPane done panesAfter=\(sessionPanes.map { "\($0.id)" }.joined(separator: ","))")
     }
 
     /// Resolve a seed to (path, command). "Duplicate current" reads the active
-    /// pane's live cwd and program from tmux.
+    /// pane's live working directory from tmux, plus a command ONLY when tmux
+    /// itself knows one.
     ///
-    /// Program resolution, in order:
+    /// Program resolution:
     ///  1. `#{pane_start_command}` — the command tmux itself launched the pane
     ///     with (an Agent-wizard pane, or List's "Path & Command…"). Comes back
     ///     in tmux's own quoting → spliced VERBATIM (`.tmuxSyntax`); re-escaping
     ///     it nests the quotes and the new pane exits at once (see `SpawnCommand`).
-    ///  2. If empty (the program was TYPED into a shell — the common case for an
-    ///     agent), fall back to `#{pane_current_command}`, the live foreground
-    ///     program, so duplicating a running claude/codex/vim relaunches IT rather
-    ///     than dropping you at a bare shell. It's a plain program name (no args),
-    ///     so it's shell-quoted (`.shell`).
-    ///  3. A bare shell prompt (zsh/bash/…) means nothing is running → no command,
-    ///     i.e. a plain shell in the same directory (no pointless nested shell).
+    ///  2. Empty — the program was TYPED into a shell, which is the common case
+    ///     for an agent — means NO command: the duplicate is a plain shell in the
+    ///     same directory, i.e. tmux's `default-command`/`default-shell`, which
+    ///     is the same LOGIN shell the source pane got.
+    ///
+    /// It deliberately does NOT fall back to `#{pane_current_command}`, which is
+    /// not a command line at all. On Darwin tmux reports the kernel's accounting
+    /// name for the foreground process (`p_comm`, what `ps -o ucomm` prints):
+    /// the name of the exec'd FILE, not argv[0], truncated to 16 characters.
+    /// Claude Code installs versioned — `~/.local/share/claude/versions/2.1.234`
+    /// — so a pane running it reported `2.1.234`; duplicating sent
+    /// `split-window -c <dir> '2.1.234'`, the spawned shell said "command not
+    /// found" and exited within milliseconds, tmux destroyed the pane, and when
+    /// it was the window's only pane the window went with it — which read as the
+    /// app losing your window. Every program whose exec name differs from its
+    /// command name has the same shape (`grep` caught mid-pipeline, node-based
+    /// agents, anything with a long name). Duplicating copies the working
+    /// ENVIRONMENT — the directory — not the name of whatever process happened
+    /// to be in the foreground at that instant.
     func resolveSeed(_ seed: WindowSeed) async -> (String?, SpawnCommand?) {
         switch seed {
         case .custom(let path, let command):
@@ -320,8 +342,8 @@ public extension TerminalViewModel {
             return (blankToNil(path), blankToNil(command).map(SpawnCommand.shell))
         case .duplicateCurrent:
             guard let pane = activePaneID else { return (nil, nil) }
+            let path = await displayValue("#{pane_current_path}", pane: pane)
             if let start = await displayValue("#{pane_start_command}", pane: pane) {
-                let path = await displayValue("#{pane_current_path}", pane: pane)
                 DIAG("[DUP] resolveSeed src=\(pane) start_command=[\(start)] path=[\(path ?? "nil")]")
                 // Deliberately NOT recorded: `start_command` comes back in
                 // tmux's own quoting and is only safe spliced verbatim, while a
@@ -330,30 +352,13 @@ public extension TerminalViewModel {
                 // start command was created by a path that already recorded it.
                 return (path, .tmuxSyntax(start))
             }
-            let (path, cmd) = await recordableLaunch(of: pane)
-            DIAG("[DUP] resolveSeed src=\(pane) start=nil → cmd=[\(cmd ?? "nil→shell")] path=[\(path ?? "nil")]")
-            // The fallback is a bare program name with no arguments, so it
-            // survives the round trip — and duplicating a running agent is
-            // exactly the launch worth offering back.
-            PaletteRecents.shared.recordLaunchIfUseful(dir: path, command: cmd)
-            return (path, cmd.map(SpawnCommand.shell))
+            DIAG("[DUP] resolveSeed src=\(pane) start=nil → plain shell path=[\(path ?? "nil")]")
+            // The directory is worth remembering — it is a place the user works.
+            // The foreground program is not: see above, there is no truthful
+            // command to be had from tmux here.
+            PaletteRecents.shared.recordLaunchIfUseful(dir: path, command: nil)
+            return (path, nil)
         }
-    }
-
-    /// What a pane looks like as a *recents row*: its live directory, and the
-    /// program running in it (nil for a bare shell).
-    ///
-    /// One resolution, shared by everything that remembers a launch — the
-    /// duplicate-current seed above, a plain split, and attaching to a session.
-    /// It reads `#{pane_current_command}` and never `#{pane_start_command}`:
-    /// see the seed's comment — a start command is tmux-quoted and only safe
-    /// spliced verbatim, whereas a recents row is replayed through shell
-    /// quoting, so round-tripping one nests its quotes. `pane_current_command`
-    /// is a bare program name with no arguments, which survives the trip.
-    internal func recordableLaunch(of pane: TmuxPaneID) async -> (String?, String?) {
-        let path = await displayValue("#{pane_current_path}", pane: pane)
-        let current = await displayValue("#{pane_current_command}", pane: pane)
-        return (path, current.flatMap { Self.isShellName($0) ? nil : $0 })
     }
 
     /// Remember where the active pane is working, if it says anything the
@@ -364,18 +369,19 @@ public extension TerminalViewModel {
     /// off live panes — the list is "places I have worked", and a timer would
     /// turn it into "where I happen to be sitting", which the Sessions list
     /// already says.
+    ///
+    /// The DIRECTORY is all it records. It used to store
+    /// `#{pane_current_command}` as the row's program too, which is where
+    /// `palette_recent_launches` got rows like `2.1.234` and `grep`: that value
+    /// is the kernel's accounting name for whatever sat in the foreground at
+    /// that instant (see `resolveSeed`), not a command anyone asked to run, and
+    /// replaying such a row opens a pane that exits at once. A row's program now
+    /// comes only from a launch the user spelled out — the Agent wizard, "Path &
+    /// Command…", the directory panel — and those replay truthfully.
     internal func recordActivePaneLaunch() async {
         guard usingTmux, let pane = activePaneID else { return }
-        let (dir, cmd) = await recordableLaunch(of: pane)
-        PaletteRecents.shared.recordLaunchIfUseful(dir: dir, command: cmd)
-    }
-
-    /// Whether a `#{pane_current_command}` value is just a login/interactive
-    /// shell (so "duplicate" should open a plain shell, not re-run the shell as
-    /// a program). tmux reports the leaf name, sometimes with a login `-` prefix.
-    static func isShellName(_ command: String) -> Bool {
-        let name = command.hasPrefix("-") ? String(command.dropFirst()) : command
-        return ["zsh", "bash", "sh", "fish", "dash", "tcsh", "csh", "ksh"].contains(name)
+        let dir = await displayValue("#{pane_current_path}", pane: pane)
+        PaletteRecents.shared.recordLaunchIfUseful(dir: dir, command: nil)
     }
 
     func displayValue(_ format: String, pane: TmuxPaneID) async -> String? {

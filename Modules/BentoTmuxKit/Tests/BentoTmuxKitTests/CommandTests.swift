@@ -40,6 +40,20 @@ struct CommandTests {
         #expect(cmd.commandString == "split-window -h -t %0 -c '#{pane_current_path}' nano \"a b.txt\"")
     }
 
+    @Test func duplicateWithoutAStartCommandCarriesOnlyTheDirectory() {
+        // "Duplicate Current" on a pane the user TYPED their program into:
+        // tmux knows no start command, so we send none and it opens its
+        // default (login) shell in the same directory. Seeding it with
+        // #{pane_current_command} instead is what shipped `2.1.234` — the exec
+        // name of a versioned Claude Code install — as the program, and the new
+        // pane died on spawn.
+        #expect(TmuxCommand.splitWindow(
+            target: TmuxPaneID(0), horizontal: true, path: "/tmp/work", command: nil)
+            .commandString == "split-window -h -t %0 -c /tmp/work")
+        #expect(TmuxCommand.newWindow(path: "/tmp/work", command: nil)
+            .commandString == "new-window -c /tmp/work")
+    }
+
     @Test func sendKeysLiteral() {
         let cmd = TmuxCommand.sendKeys(pane: TmuxPaneID(1), keys: "hello", literal: true)
         #expect(cmd.commandString == "send-keys -t %1 -l hello")
