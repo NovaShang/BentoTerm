@@ -1114,7 +1114,9 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
         if event.modifierFlags.contains(.command) {
             let p = convert(event.locationInWindow, from: nil)
             if let url = linkURL(at: p) {
-                pendingLinkClick = url
+                // ⌘⇧-click is the way out to the system browser; plain ⌘-click
+                // goes wherever the preference says (the side dock by default).
+                pendingLinkClick = (url, event.modifierFlags.contains(.shift))
                 bentoConsumedPress = true
                 return
             }
@@ -1165,9 +1167,9 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
         leftButtonForwarded = false
         bentoConsumedPress = false
         guard let surface else { return }
-        if let url = pendingLinkClick {
+        if let click = pendingLinkClick {
             pendingLinkClick = nil
-            GhosttyRuntime.openExternalURL(url)
+            LinkRouter.open(click.url, from: linkOrigin, forceSystem: click.forceSystem)
             return
         }
         if wasForwarded {
@@ -1662,7 +1664,12 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// URL under the pointer (nil when not over a link) → surface tooltip.
     /// A ⌘-mouseDown that hit a URL, resolved (opened) or cancelled (drag) at
     /// mouseUp — standard button semantics.
-    private var pendingLinkClick: String?
+    private var pendingLinkClick: (url: String, forceSystem: Bool)?
+
+    /// Which machine this pane's `localhost` means — see the iOS surface's copy.
+    public var linkOriginProvider: (@MainActor () -> LinkOrigin?)?
+
+    public var linkOrigin: LinkOrigin? { linkOriginProvider?() }
 
     /// The engine re-reports the hovered link on EVERY mouse-position update
     /// (not just when it changes), so a slow drag across one link fires this
@@ -1795,7 +1802,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
                 // Nothing exists by that name and it's host-shaped
                 // ("github.com/NovaShang/…"): it was a link all along. Checked
                 // AFTER resolution so a real file of that name still wins.
-                GhosttyRuntime.openExternalURL(url)
+                LinkRouter.open(url, from: self.linkOrigin)
             } else {
                 // Nothing stat'd. Open the best guess anyway so the panel says
                 // "not found" — a ⌘click that resolves to silence is

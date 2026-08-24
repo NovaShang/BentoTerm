@@ -178,10 +178,12 @@ public final class FilePreviewWebView: WKWebView, WKNavigationDelegate {
             decisionHandler(.allow)
             return
         }
-        // A tapped link opens outside; nothing else navigates, ever.
+        // A tapped link leaves this WebView; nothing else navigates, ever.
+        // Where it lands is the router's call, not ours — this renderer's
+        // invariant is only that IT never goes online.
         if navigationAction.navigationType == .linkActivated,
            let url = navigationAction.request.url {
-            openExternalURL(url.absoluteString)
+            LinkRouter.open(url.absoluteString)
         }
         decisionHandler(.cancel)
     }

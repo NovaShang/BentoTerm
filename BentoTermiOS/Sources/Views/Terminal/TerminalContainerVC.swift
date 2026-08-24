@@ -132,6 +132,9 @@ final class TerminalContainerVC: UIViewController {
     /// parent (it owns the session VM / transport, which can reconnect and
     /// swap under us). nil = feature unavailable for this pane.
     var pathPreviewContext: (() -> PathPreviewContext?)?
+    /// Which machine this pane means by `localhost`. Set by the wrapper before
+    /// the surface exists, so it is read through rather than copied.
+    var linkOriginProvider: (@MainActor () -> LinkOrigin?)?
 
     /// Tiled mode: the container owns sizing (it computes one tmux client size
     /// for the whole viewport and sizes each surface to its exact tmux cell
@@ -195,7 +198,7 @@ final class TerminalContainerVC: UIViewController {
     /// (the display link keeps drawing into a half-freed Metal layer → crash).
     func teardown() {
         stopMomentum()
-        hidePathChip()
+        hideTapChip()
         surface?.teardown()
     }
 
@@ -323,6 +326,7 @@ final class TerminalContainerVC: UIViewController {
         surface.onInput = { [weak self] data in
             self?.handleSurfaceInput(data)
         }
+        surface.linkOriginProvider = { [weak self] in self?.linkOriginProvider?() }
         surface.onSizeChanged = { [weak self] size in
             guard let self else { return }
             // Tiled mode: the container owns the tmux client size; a pane never
@@ -448,60 +452,120 @@ final class TerminalContainerVC: UIViewController {
         set { UserDefaults.standard.set(newValue, forKey: "input_prefers_raw_keyboard") }
     }
 
-    // MARK: - Path preview (tap a file path → chip → sheet)
+    // MARK: - Tap chips (tap a file path or a URL → chip → open)
 
-    private var pathChip: PathPreviewChip?
-    private var pathChipHighlight: PathHighlightUIView?
-    private var pathChipDismissWork: DispatchWorkItem?
+    private var tapChip: TapConfirmChip?
+    private var tapChipHighlight: PathHighlightUIView?
+    private var tapChipDismissWork: DispatchWorkItem?
     /// Serial number so a slow stat can't surface a chip for a superseded tap.
     private var pathTapSeq = 0
 
-    /// Detect a path under the tap. A self-contained explicit token (`/…`,
-    /// `~/…`, `./…`, quoted) shows the chip immediately; everything else —
-    /// bare relatives, TUI wrap-chain joins, `…`-truncated suffixes — resolves
-    /// through `SmartPathResolver` (direct stat → tree search → ancestors)
-    /// first, so prose can't produce phantom chips and incomplete paths still
-    /// find their file.
-    private func maybeShowPathChip(at point: CGPoint) {
+    /// Whether a path candidate could be offered at all — the preference is on
+    /// AND this pane knows where to read files from.
+    private var canPreviewPaths: Bool {
+        PathPreviewSettings.isEnabled && pathPreviewContext != nil
+    }
+
+    /// Verify the tap's path candidates and show a chip if one of them exists:
+    /// bare relatives, TUI wrap-chain joins, `…`-truncated suffixes all go
+    /// through `SmartPathResolver` (direct stat → tree search → ancestors), so
+    /// prose can't produce phantom chips and incomplete paths still find their
+    /// file.
+    ///
+    /// Runs AFTER the tap has been routed, never before: the stat is remote on
+    /// a phone, and nothing about the tap may wait on it.
+    private func resolvePathChip(_ hits: [SurfacePathHitEngine.TapHit],
+                                 rootHints: [String], at point: CGPoint) {
         pathTapSeq += 1
         let seq = pathTapSeq
-        hidePathChip()
-        guard PathPreviewSettings.isEnabled, pathPreviewContext != nil else { return }
-        let scan = surface.pathTapHits(at: point, wrapCols: paneVM?.pane.width)
-        let hits = scan.hits
-        guard !hits.isEmpty else { return }
-
-        if hits[0].fastPath {
-            showPathChip(hits[0], at: point)
-        } else {
-            Task { [weak self] in
-                guard let self, let context = self.pathPreviewContext?() else { return }
-                guard let res = try? await SmartPathResolver.resolveFirst(
-                    paths: hits.map(\.path), rootHints: scan.rootHints, context: context),
-                      self.pathTapSeq == seq else { return }
-                self.showPathChip(hits[res.index], at: point, resolvedPath: res.resolvedPath)
-            }
+        hideTapChip()
+        guard canPreviewPaths, !hits.isEmpty else { return }
+        Task { [weak self] in
+            guard let self, let context = self.pathPreviewContext?() else { return }
+            guard let res = try? await SmartPathResolver.resolveFirst(
+                paths: hits.map(\.path), rootHints: rootHints, context: context),
+                  self.pathTapSeq == seq else { return }
+            self.showPathChip(hits[res.index], at: point, resolvedPath: res.resolvedPath)
         }
+    }
+
+    /// The no-I/O half: a self-contained explicit token (`/…`, `~/…`, `./…`,
+    /// quoted) is its own proof, so the chip goes up in the same run loop turn
+    /// the tap arrived in.
+    private func showFastPathChip(_ hit: SurfacePathHitEngine.TapHit, at point: CGPoint) {
+        pathTapSeq += 1
+        hideTapChip()
+        showPathChip(hit, at: point)
     }
 
     private func showPathChip(_ hit: SurfacePathHitEngine.TapHit, at point: CGPoint,
                               resolvedPath: String? = nil) {
-        let off = surface.frame.origin
-
-        let highlight = pathChipHighlight ?? PathHighlightUIView(frame: .zero)
+        let highlight = tapChipHighlight ?? PathHighlightUIView(frame: .zero)
         highlight.frame = surface.frame
         highlight.rects = hit.rects
         view.addSubview(highlight)
-        pathChipHighlight = highlight
+        tapChipHighlight = highlight
 
-        let chip = pathChip ?? PathPreviewChip(frame: .zero)
-        pathChip = chip
+        let chip = tapChip ?? TapConfirmChip(frame: .zero)
+        tapChip = chip
         let name = ((resolvedPath ?? hit.path) as NSString).lastPathComponent
         chip.configure(fileName: name, maxWidth: view.bounds.width - 32)
         chip.onTap = { [weak self] in
-            self?.hidePathChip()
+            self?.hideTapChip()
             self?.presentPathPreviewSheet(path: resolvedPath ?? hit.path, line: hit.line)
         }
+        presentTapChip(chip, at: point)
+    }
+
+    /// Ports already offered in this pane. A dev server reprints its banner on
+    /// every restart, and an agent restarts it all day — offering the same port
+    /// each time would be a popup that never stops.
+    private var devServerOffers = DevServerOffers()
+
+    /// A dev server announced itself in this pane. Offer it; never open it.
+    private func noticeDevServer(in data: Data) {
+        guard let text = String(data: data, encoding: .utf8),
+              let found = DevServerDetector.detect(in: text) else { return }
+        let paneKey = paneVM.map { "\($0.paneID)" } ?? "single"
+        guard devServerOffers.shouldOffer(port: found.port, inPane: paneKey) else { return }
+        showDevServerChip(found)
+    }
+
+    /// Bottom-centre of the pane rather than under a finger: nobody touched
+    /// anything, so there is no point to anchor to.
+    private func showDevServerChip(_ found: DevServerAnnouncement) {
+        pathTapSeq += 1
+        hideTapChip()
+        let chip = tapChip ?? TapConfirmChip(frame: .zero)
+        tapChip = chip
+        chip.configure(devServerPort: found.port, maxWidth: view.bounds.width - 32)
+        chip.onTap = { [weak self] in
+            self?.hideTapChip()
+            let origin = self?.surface?.linkOrigin
+            WebSheetPresenter.present(url: found.url, origin: origin)
+        }
+        presentTapChip(chip, at: CGPoint(x: surface.bounds.midX,
+                                         y: surface.bounds.maxY - 24))
+    }
+
+    /// Link chip: the URL is shown and opens only on a second, deliberate tap.
+    /// Terminal output is dense and a finger is wide — going straight to the
+    /// browser off one tap sent people out of the app by accident.
+    private func showLinkChip(_ url: String, at point: CGPoint) {
+        pathTapSeq += 1   // a stat still in flight must not replace this chip
+        hideTapChip()
+        let chip = tapChip ?? TapConfirmChip(frame: .zero)
+        tapChip = chip
+        chip.configure(link: url, maxWidth: view.bounds.width - 32)
+        chip.onTap = { [weak self] in
+            self?.hideTapChip()
+            LinkRouter.open(url, from: self?.surface.linkOrigin)
+        }
+        presentTapChip(chip, at: point)
+    }
+
+    private func presentTapChip(_ chip: TapConfirmChip, at point: CGPoint) {
+        let off = surface.frame.origin
         // Above the finger, clamped inside the pane.
         var center = CGPoint(x: off.x + point.x, y: off.y + point.y - 44)
         let half = chip.bounds.width / 2
@@ -519,19 +583,19 @@ final class TerminalContainerVC: UIViewController {
         }
         HapticService.shared.sent()
 
-        pathChipDismissWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.hidePathChip(animated: true) }
-        pathChipDismissWork = work
+        tapChipDismissWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.hideTapChip(animated: true) }
+        tapChipDismissWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0, execute: work)
     }
 
-    private func hidePathChip(animated: Bool = false) {
-        pathChipDismissWork?.cancel()
-        pathChipDismissWork = nil
-        guard let chip = pathChip else { return }
-        let highlight = pathChipHighlight
-        pathChip = nil
-        pathChipHighlight = nil
+    private func hideTapChip(animated: Bool = false) {
+        tapChipDismissWork?.cancel()
+        tapChipDismissWork = nil
+        guard let chip = tapChip else { return }
+        let highlight = tapChipHighlight
+        tapChip = nil
+        tapChipHighlight = nil
         if animated {
             UIView.animate(withDuration: 0.18, animations: {
                 chip.alpha = 0
@@ -625,6 +689,12 @@ final class TerminalContainerVC: UIViewController {
     func bindToPaneVM(_ vm: PaneViewModel) {
         self.paneVM = vm
         vm.onDataReceived = { [weak self] data in
+            // Watch for `Local: http://localhost:5173/`. The byte prefilter runs
+            // HERE, before the main hop — the output path is not allowed to
+            // cost anything, and almost no chunk contains "://".
+            if DevServerDetector.mightAnnounce(data) {
+                Task { @MainActor [weak self] in self?.noticeDevServer(in: data) }
+            }
             // Deferred so a bind that runs before the surface exists still lands
             // once it's ready. feedProgressively slices a large replay blob so the
             // main thread isn't frozen by one synchronous ghostty parse (BUG-011).
@@ -789,7 +859,7 @@ extension TerminalContainerVC {
             name: .terminalFontChanged, object: nil)
         // Self-heal for the post-unlock resume race: if this pane was rebuilt
         // while the font-size default transiently read empty (see
-        // STTheme.terminalFontSize), the surface came up at the fallback size.
+        // ThemeStore.fontSize), the surface came up at the fallback size.
         // Re-applying on foreground re-reads the (now readable) value; the
         // surface only recreates when the size actually differs.
         NotificationCenter.default.addObserver(
@@ -815,9 +885,10 @@ extension TerminalContainerVC {
         let t = ThemeStore.shared.current
         let fontSize = Double(STTheme.terminalFontSize)
         // Trace the size EVERY build: the user-reported "font grows after
-        // app-switch resume" means some surface picks up a theme whose size
-        // isn't the stored one (iPad's no-stored-value fallback is 14) — this
-        // line plus [surface] created… in debug.log pins which and when.
+        // app-switch resume" was two fallbacks disagreeing (this path created
+        // surfaces at 10, the engine's config reload pushed 12/14 to the live
+        // ones); both now resolve through ThemeStore. This line plus
+        // [surface] created… in debug.log pins any recurrence.
         dlog("[theme] terminal theme fontSize=\(fontSize) (stored=\(UserDefaults.standard.double(forKey: "terminal_font_size")))")
         return TerminalTheme(
             background: t.bg,
@@ -951,49 +1022,72 @@ extension TerminalContainerVC {
             hideSelectionHandles()
             return
         }
+        // Selecting the pane happens no matter who ends up with the tap: focus
+        // is always Bento's, even when the tap itself belongs to a link or to
+        // the program.
         onSelectPaneTapped?()
-        let p = gesture.location(in: surface)
-        // A program that turned on mouse tracking gets the tap as a click. Until
-        // now only the WHEEL was forwarded, so an alt-screen TUI could be
-        // scrolled but never pressed — and pressing things is most of what
-        // Claude Code's fullscreen mode is. Selecting the pane still happens
-        // first: focus is Bento's, the click is the program's.
-        //
-        // This takes the single-finger tap away from Bento's own handlers, which
-        // is why they move to the two-finger tap below — the same trade the Mac
-        // makes by checking ⌘-click before forwarding.
-        if surface.forwardTap(at: p) {
-            noteMouseGrabbed()
-            return
-        }
-        // Tap on a URL opens it in the browser (after pane selection — both are
-        // what the user means). Load-bearing for onboarding: a remote agent's
-        // sign-in prints an OAuth URL that must open on THIS device.
-        // A URL miss falls through to the file-path chip (disjoint detectors).
-        if surface.openLinkIfPresent(at: p, wrapCols: paneVM?.pane.width) {
-            return
-        }
-        maybeShowPathChip(at: p)
+        routeTap(at: gesture.location(in: surface), mayForward: true)
     }
 
-    /// Two-finger tap = Bento's own tap, even when a program owns the mouse:
-    /// open a link, preview a file path. The touch stand-in for ⌘-click, which
-    /// the Mac surface checks before it forwards for exactly this reason.
-    /// Harmless when nothing owns the mouse — it just does what one finger did.
+    /// Two-finger tap = Bento's own tap, no matter what: open a link, preview a
+    /// file path, never forward. The touch stand-in for ⌘-click, and the way out
+    /// when single-finger detection misses what the user meant.
     @objc private func handleLocalTap(_ gesture: UITapGestureRecognizer) {
         onSelectPaneTapped?()
-        let p = gesture.location(in: surface)
-        if surface.openLinkIfPresent(at: p, wrapCols: paneVM?.pane.width) { return }
-        maybeShowPathChip(at: p)
+        routeTap(at: gesture.location(in: surface), mayForward: false)
     }
 
-    /// Say it once, the first time a pane swallows a tap. A program grabbing the
-    /// mouse is invisible — the user just finds that tapping a path stopped
-    /// previewing it — and the Mac has the same problem, which is why it shows
-    /// "hold ⇧ to select" the moment the grab bites.
-    private func noteMouseGrabbed() {
+    /// Decide who gets one tap, then act on it.
+    ///
+    /// Detection runs BEFORE forwarding. An alt-screen TUI (Claude Code's
+    /// fullscreen mode, htop, less) turns mouse reporting on for the whole
+    /// pane, so a tap handed to the program first can never reach a link or a
+    /// path again for as long as that program is up — which is how tapping the
+    /// agent's own output stopped working at all.
+    ///
+    /// What the tap is allowed to WAIT for is the other half of this: only the
+    /// screen snapshot (cached ~0.4s) and the fast-path token test run before
+    /// the program sees the click. A candidate that needs the stat oracle —
+    /// a remote round-trip on a phone — is forwarded first and gets its chip
+    /// late, so a TUI never pays filesystem latency for a press.
+    private func routeTap(at p: CGPoint, mayForward: Bool) {
+        let cols = paneVM?.pane.width
+        let link = surface.linkTapHit(at: p, wrapCols: cols)
+        let scan: SurfacePathHitEngine.TapScan =
+            canPreviewPaths ? surface.pathTapHits(at: p, wrapCols: cols) : .empty
+        switch TerminalTapRouter.route(linkURL: link,
+                                       hasFastPathHit: scan.hits.first?.fastPath == true) {
+        case .link(let url):
+            // Load-bearing for onboarding: a remote agent's sign-in prints an
+            // OAuth URL that must open on THIS device.
+            showLinkChip(url, at: p)
+        case .path:
+            showFastPathChip(scan.hits[0], at: p)
+        case .forward:
+            let forwarded = mayForward && surface.forwardTap(at: p)
+            if forwarded { noteTapForwarded() }
+            // The program owns the mouse, so most taps here are presses on ITS
+            // interface. Verifying every one of them would put a filesystem
+            // round-trip — remote, over the session's own channel — behind each
+            // button press, so only tokens that look like a file are worth it.
+            // Two fingers still verifies whatever was tapped.
+            let hits = forwarded ? scan.hits.filter(Self.looksLikeAFile) : scan.hits
+            resolvePathChip(hits, rootHints: scan.rootHints, at: p)
+        }
+    }
+
+    /// Cheap local pre-filter, not a decision: the stat oracle still referees.
+    private static func looksLikeAFile(_ hit: SurfacePathHitEngine.TapHit) -> Bool {
+        hit.path.contains("/") || hit.path.contains(".")
+    }
+
+    /// Say it once, the first time a tap goes to the program instead of the app.
+    /// Nothing on screen shows that a program has taken the mouse, so the user
+    /// otherwise just finds that some taps do nothing — and the two-finger tap
+    /// that gets them back is undiscoverable.
+    private func noteTapForwarded() {
         guard TipCenter.shared.consume(.mouseGrabbed) else { return }
-        showToast("This app is using taps — two fingers for BentoTerm")
+        showToast("Tap sent to the app — two fingers if you meant to open a link or file")
     }
 
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
@@ -1093,7 +1187,7 @@ extension TerminalContainerVC {
         switch g.state {
         case .began:
             stopMomentum()
-            hidePathChip()   // rows shift under the chip; a stale anchor lies
+            hideTapChip()   // rows shift under the chip; a stale anchor lies
             lastScrollPoint = p
         case .changed:
             let dy = p.y - lastScrollPoint.y

@@ -31,8 +31,9 @@ public struct AppearancePanel<Advanced: View>: View {
 
     @ObservedObject private var themeStore = ThemeStore.shared
 
-    @AppStorage(SettingsKey.fontSize) private var fontSize: Double = 12
+    @AppStorage(SettingsKey.fontSize) private var fontSize: Double = ThemeStore.defaultFontSize
     @AppStorage(SettingsKey.fontFamily) private var fontFamily: String = MonospacedFonts.bundledDefault
+    @AppStorage(SettingsKey.openLinksIn) private var openLinksIn: String = LinkOpenPreference.inApp.rawValue
 
     @State private var families: [String] = []
     @State private var showThemeImporter = false
@@ -47,7 +48,9 @@ public struct AppearancePanel<Advanced: View>: View {
     ///     rows labelled "Advanced" one under the other on the first page.
     public init(
         context: PanelContext,
-        defaultFontSize: Double = 12,
+        // The stepper must show what an untouched install actually RENDERS at,
+        // so the default comes from the same constant the engine falls back to.
+        defaultFontSize: Double = ThemeStore.defaultFontSize,
         preview: AnyView? = nil,
         @ViewBuilder advanced: () -> Advanced = { EmptyView() }
     ) {
@@ -91,6 +94,19 @@ public struct AppearancePanel<Advanced: View>: View {
                 if themeStore.appearanceMode == .system {
                     PanelNote("Bento switches between these two with the system.")
                 }
+            }
+
+            Section {
+                Picker("Open links in", selection: $openLinksIn) {
+                    Text("Bento").tag(LinkOpenPreference.inApp.rawValue)
+                    Text("Default browser").tag(LinkOpenPreference.system.rawValue)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: openLinksIn) { _, raw in
+                    LinkRouter.preference = LinkOpenPreference(rawValue: raw) ?? .inApp
+                }
+            } footer: {
+                PanelNote("A page opened in Bento sits beside the terminal, and a localhost address from a remote session is tunnelled there for you. Individual links can still be sent out with ⇧⌘-click.")
             }
 
             Section {

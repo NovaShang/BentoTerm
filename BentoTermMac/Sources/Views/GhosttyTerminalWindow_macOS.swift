@@ -225,6 +225,25 @@ public enum BentoTerminalWindow {
         frontmostManager()?.openPreview(path: path, line: line, context: context)
     }
 
+    /// The machine the focused pane is on. A `localhost` address typed into
+    /// ⌘P means THAT box — the same thing it means in the terminal in front of
+    /// you — rather than always this one.
+    static func focusedLinkOrigin() -> LinkOrigin? {
+        guard let m = frontmostManager() else { return nil }
+        return m.tab.paneHost?.activeLinkOrigin ?? m.tab.plainSurface?.linkOrigin
+    }
+
+    /// Open a page in the focused window's side dock — the destination
+    /// `LinkRouter` sends web links to. Returns false when there is no window
+    /// to put it in, which is the router's cue to fall back to the system
+    /// browser rather than swallow the click.
+    @discardableResult
+    static func openWeb(url: URL, origin: LinkOrigin?) -> Bool {
+        guard let manager = frontmostManager() else { return false }
+        manager.openWeb(url: url, origin: origin)
+        return true
+    }
+
     /// Show/hide the preview dock (pins survive a hide). ⌥⌘P and the palette.
     public static func togglePreviewDock() { frontmostManager()?.togglePreviewDock() }
 
@@ -644,6 +663,10 @@ final class SessionTab {
     var sessionKey: String { id.key }
     let choice: TmuxStartChoice
     let windowTitle: String
+    /// The ssh control socket this session keeps open, so a clicked
+    /// `localhost:5173` can be tunnelled without a second login. Released in
+    /// `teardown` — a forward never outlives the session that carries it.
+    private var controlSocket: (alias: String, path: String?)?
 
     /// A plain tab has no tmux behind it: no panes/windows/agents, and closing it
     /// destroys it (it isn't persisted or reconnected).
@@ -688,6 +711,7 @@ final class SessionTab {
             }
         )
         let transport: LocalPtyTransport
+        var adopted: (alias: String, path: String?)?
         if let sshHost = server.sshHost, choice != .noTmux {
             // The tmux invocation goes in as ssh's ARGUMENT rather than being
             // typed at a shell afterwards.
@@ -704,10 +728,23 @@ final class SessionTab {
             // `-t` forces a pty, which tmux requires; ssh otherwise allocates
             // none when it is given a command to run.
             let launch = Self.remoteLaunchCommand(for: choice, name: id.name)
+            // Keep a control socket on this connection. A port forward added
+            // later rides it (`ssh -O forward`) instead of opening a second
+            // connection and asking for the password — or the 2FA code — again.
+            let socket = SSHControlSockets.adopt(alias: sshHost)
+            adopted = (sshHost, socket.controlPath)
             transport = LocalPtyTransport(
-                command: ["ssh", "-t", sshHost, launch],
+                command: ["ssh", "-t"] + socket.options + [sshHost, launch],
                 isLocalLink: false,
                 startsInTmuxControlMode: true)
+        } else if let command, command.first == "ssh", command.count >= 2 {
+            // Quick-connect (`ssh <alias>`, no tmux) gets the same treatment —
+            // it is still a machine whose ports a link can point at.
+            let alias = command[1]
+            let socket = SSHControlSockets.adopt(alias: alias)
+            adopted = (alias, socket.controlPath)
+            transport = LocalPtyTransport(
+                command: ["ssh"] + socket.options + Array(command.dropFirst()))
         } else {
             transport = LocalPtyTransport(command: command)
         }
@@ -716,6 +753,13 @@ final class SessionTab {
             transport: transport,
             environment: env)
         self.viewModel = vm
+        self.controlSocket = adopted
+        // Computed from the local `adopted` rather than from `self.linkHost`:
+        // the surfaces below are stored properties that are not set yet, so
+        // `self` is still off limits here.
+        let tabLinkHost: LinkHost = adopted
+            .map { LinkHost(remoteID: $0.alias, label: $0.alias) }
+            ?? .local(label: "This Mac")
         if choice == .noTmux {
             // No tmux → a single raw surface (no tiling host); the VM streams
             // bytes straight to/from it.
@@ -747,8 +791,11 @@ final class SessionTab {
             vm.onPredictionText = { [weak surface] text in surface?.setPredictedText(text) }
             self.plainSurface = surface
             self.paneHost = nil
+            surface.linkOriginProvider = { LinkOrigin(paneID: nil, host: tabLinkHost) }
         } else {
-            self.paneHost = GhosttyTiledPaneHost(viewModel: vm, theme: theme)
+            let tiled = GhosttyTiledPaneHost(viewModel: vm, theme: theme)
+            tiled.linkHost = tabLinkHost
+            self.paneHost = tiled
             self.plainSurface = nil
         }
     }
@@ -766,6 +813,18 @@ final class SessionTab {
         plainSurface?.teardown()
         viewModel.disconnect()
         MacAwaitingNotifier.shared.clear(sessionKey: sessionKey)
+        if let controlSocket {
+            // The session is what the tunnels ride on: when it goes, they go.
+            PortForwarders.current?.closeAll(on: linkHost)
+            SSHControlSockets.release(alias: controlSocket.alias, controlPath: controlSocket.path)
+            self.controlSocket = nil
+        }
+    }
+
+    /// Which machine this tab's panes mean by `localhost`.
+    var linkHost: LinkHost {
+        guard let alias = controlSocket?.alias else { return .local(label: "This Mac") }
+        return LinkHost(remoteID: alias, label: alias)
     }
 
     static func id(for choice: TmuxStartChoice, on server: TmuxServer) -> TmuxSessionID {
@@ -914,8 +973,13 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
         let contentVC = NSViewController()
         contentVC.view = contentRoot
+        let contentItem = NSSplitViewItem(viewController: contentVC)
+        // The terminal's floor. The dock has no ceiling (see below), so this is
+        // what stops a dock drag from squeezing the terminal to nothing and
+        // resizing tmux to a pathological column count.
+        contentItem.minimumThickness = 400
         splitVC.addSplitViewItem(sidebar)
-        splitVC.addSplitViewItem(NSSplitViewItem(viewController: contentVC))
+        splitVC.addSplitViewItem(contentItem)
 
         // Trailing preview dock: collapsed until something is pinned. The
         // dock's content starts BELOW the title bar (safe-area top) — unlike
@@ -936,7 +1000,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         let dock = NSSplitViewItem(viewController: dockVC)
         dock.canCollapse = true
         dock.minimumThickness = 300
-        dock.maximumThickness = 720
+        // No maximum. A 720pt cap is fine on a laptop and absurd on a 27" —
+        // reading a long markdown file there wants half the window. How wide
+        // the dock should be is the user's call; the terminal's floor
+        // (contentItem.minimumThickness) is the only thing we insist on.
         dock.isCollapsed = true
         dock.holdingPriority = NSLayoutConstraint.Priority(251)  // terminal flexes, dock holds
         dockItem = dock
@@ -1068,6 +1135,14 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         previewDock.open(path: path, line: line, context: context)
         dockItem?.animator().isCollapsed = false
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Same, for a page. The window comes forward but focus stays where it is —
+    /// clicking a link in a terminal must not take the keyboard away from it.
+    func openWeb(url: URL, origin: LinkOrigin?) {
+        previewDock.openWeb(url: url, origin: origin)
+        dockItem?.animator().isCollapsed = false
+        window?.orderFront(nil)
     }
 
     /// Show/hide the dock without touching its tabs.

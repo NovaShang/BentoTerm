@@ -17,6 +17,7 @@ enum SettingsKey {
     static let llmKey = "llm_api_key"
     static let llmModel = "llm_model"
     static let llmEndpoint = "llm_endpoint"
+    static let openLinksIn = "open_links_in"
 }
 
 /// The one surviving free-standing section: About.

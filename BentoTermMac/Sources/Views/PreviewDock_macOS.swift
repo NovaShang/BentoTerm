@@ -1,4 +1,5 @@
 import BentoFilePreviewKit
+import BentoUISharedKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import SwiftUI
@@ -142,6 +143,64 @@ final class PinnedPreview: ObservableObject, Identifiable {
 
 // MARK: - Dock model
 
+/// One tab in the dock. A file the agent is writing and a page the agent has
+/// built are the same question — "what did that just do?" — so they are two
+/// kinds of the same tab rather than two panels.
+///
+/// Main-actor isolated because both payloads are: these are live view models,
+/// not values.
+@MainActor
+enum DockTab: @preconcurrency Identifiable {
+    case file(PinnedPreview)
+    case web(WebTab)
+
+    /// File tabs key on their resolved path (a file tab never becomes a
+    /// different file). Web tabs carry a synthetic id, because a browser tab
+    /// DOES become a different URL and keying on that would rebuild the
+    /// WKWebView — losing scroll, forms and login — on every click.
+    var id: String {
+        switch self {
+        case .file(let p): return p.id
+        case .web(let w): return w.id
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .file(let p): return p.title
+        case .web(let w): return w.title
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .file: return "doc.text"
+        case .web: return "globe"
+        }
+    }
+
+    /// Which machine this tab is showing. Nil for local files, where the
+    /// question does not arise.
+    var hostLabel: String? {
+        switch self {
+        case .file: return nil
+        case .web(let w): return w.host.isLocal ? nil : w.host.label
+        }
+    }
+
+    var fileTab: PinnedPreview? {
+        if case .file(let p) = self { return p }
+        return nil
+    }
+
+    func stop() {
+        switch self {
+        case .file(let p): p.stop()
+        case .web(let w): w.stop()
+        }
+    }
+}
+
 /// The window's side dock: a permanent file-tree tab (the focused pane's
 /// working directory) + an ordered set of preview tabs. One per window (owned
 /// by `TerminalWindowManager`); persists across terminal tab switches.
@@ -150,7 +209,7 @@ final class PreviewDockModel: ObservableObject {
     /// The permanent, uncloseable first tab: the active pane's directory tree.
     static let treeTabID = "bento://tree"
 
-    @Published private(set) var tabs: [PinnedPreview] = []
+    @Published private(set) var tabs: [DockTab] = []
     @Published var selectedID: String? = PreviewDockModel.treeTabID
 
     /// Resolves the CURRENT focused pane's file context at load time (set once
@@ -160,19 +219,32 @@ final class PreviewDockModel: ObservableObject {
     @Published private(set) var treeGeneration = 0
     func refreshTree() { treeGeneration &+= 1 }
 
-    var selected: PinnedPreview? { tabs.first { $0.id == selectedID } }
+    var selected: DockTab? { tabs.first { $0.id == selectedID } }
 
     /// Open a preview as a dock tab (`path` already resolved). Re-opening a
     /// docked file just focuses + reloads its tab.
     func open(path: String, line: Int?, context: PathPreviewContext) {
-        if let existing = tabs.first(where: { $0.id == path }) {
+        if let existing = tabs.first(where: { $0.id == path })?.fileTab {
             existing.reload()
             selectedID = existing.id
             return
         }
         let tab = PinnedPreview(path: path, line: line, context: context, initial: nil)
-        tabs.append(tab)
+        tabs.append(.file(tab))
         selectedID = tab.id
+    }
+
+    /// Open a page in the dock.
+    ///
+    /// Unlike a file, the same URL twice is two legitimate tabs (two states of
+    /// one app), so this never dedupes — the browser convention, and the one
+    /// that does not silently throw away what you were looking at.
+    @discardableResult
+    func openWeb(url: URL, origin: LinkOrigin?) -> WebTab {
+        let tab = WebTab(url: url, origin: origin)
+        tabs.append(.web(tab))
+        selectedID = tab.id
+        return tab
     }
 
     func close(_ id: String) {
@@ -248,6 +320,7 @@ struct PreviewDock: View {
                         PreviewDockTab(
                             title: "Files",
                             icon: "folder",
+                            hostLabel: nil,
                             active: model.selected == nil,
                             closable: false,
                             onSelect: { model.selectedID = PreviewDockModel.treeTabID },
@@ -256,7 +329,8 @@ struct PreviewDock: View {
                         ForEach(model.tabs) { tab in
                             PreviewDockTab(
                                 title: tab.title,
-                                icon: "doc.text",
+                                icon: tab.icon,
+                                hostLabel: tab.hostLabel,
                                 active: tab.id == model.selectedID,
                                 closable: true,
                                 onSelect: { model.selectedID = tab.id },
@@ -281,11 +355,29 @@ struct PreviewDock: View {
                     }
                 }
             }
+            newTabButton
             if overflowing {
                 overflowMenu
             }
         }
         .frame(height: 36)
+    }
+
+    /// "+" opens the palette rather than an empty tab: a blank browser tab has
+    /// nothing to show and nowhere to type, and ⌘P already knows how to take an
+    /// address. This is the discoverable door to the same room.
+    private var newTabButton: some View {
+        Button {
+            BentoTerminalWindow.presentCommandPalette()
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open a file or address (⌘P)")
     }
 
     /// True when the strip is wider than the space it has — i.e. some tab is
@@ -307,15 +399,18 @@ struct PreviewDock: View {
                 Button {
                     model.selectedID = tab.id
                 } label: {
-                    // A checkmark on the current one; the rest keep the file
+                    // A checkmark on the current one; the rest keep their kind's
                     // icon so the list does not jump as the selection moves.
-                    Label(tab.title, systemImage: tab.id == model.selectedID ? "checkmark" : "doc.text")
+                    // The host is part of the label because with three agents on
+                    // three boxes, ":5173" alone names three different pages.
+                    Label(tab.hostLabel.map { "\(tab.title) · \($0)" } ?? tab.title,
+                          systemImage: tab.id == model.selectedID ? "checkmark" : tab.icon)
                 }
             }
             Divider()
-            Button("Close Other Files") { model.closeAll(except: model.selectedID) }
+            Button("Close Other Tabs") { model.closeAll(except: model.selectedID) }
                 .disabled(model.tabs.count < 2)
-            Button("Close All Files") { model.closeAll(except: nil) }
+            Button("Close All Tabs") { model.closeAll(except: nil) }
         } label: {
             Image(systemName: "chevron.down")
                 .font(.system(size: 10, weight: .semibold))
@@ -327,11 +422,11 @@ struct PreviewDock: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .padding(.trailing, 6)
-        .help("\(model.tabs.count) open files")
+        .help("\(model.tabs.count) open tabs")
     }
 
     @ViewBuilder
-    private func closeMenuItems(for tab: PinnedPreview) -> some View {
+    private func closeMenuItems(for tab: DockTab) -> some View {
         Button("Close") { model.close(tab.id) }
         Button("Close Others") { model.closeAll(except: tab.id) }
         Button("Close All") { model.closeAll(except: nil) }
@@ -356,8 +451,16 @@ struct PreviewDock: View {
 
     @ViewBuilder private var content: some View {
         if let tab = model.selected {
-            PreviewDockContent(tab: tab, onDetach: { detach(tab) })
-                .id(tab.id)   // stable per tab → WebView reuse preserves scroll
+            switch tab {
+            case .file(let file):
+                PreviewDockContent(tab: file, onDetach: { detach(file) })
+                    .id(file.id)   // stable per tab → WebView reuse preserves scroll
+            case .web(let web):
+                // Keyed on the tab's synthetic id, NOT its URL: navigating must
+                // not rebuild the WKWebView.
+                WebBrowserView(tab: web)
+                    .id(web.id)
+            }
         } else {
             // The shared lazy tree (same view as the iOS Files sheet) —
             // `treeGeneration` maps onto reloadKey so pane switches re-root it.
@@ -395,6 +498,9 @@ private struct PreviewDockContent: View {
 private struct PreviewDockTab: View {
     let title: String
     let icon: String
+    /// Which machine, when it is not this one. A dev server tab reads ":5173",
+    /// which names nothing on its own once two boxes are in play.
+    let hostLabel: String?
     let active: Bool
     let closable: Bool
     let onSelect: () -> Void
@@ -414,6 +520,12 @@ private struct PreviewDockTab: View {
                         .font(.system(size: 11))
                         .lineLimit(1)
                         .foregroundStyle(active ? .primary : .secondary)
+                    if let hostLabel {
+                        Text(hostLabel)
+                            .font(.system(size: 9))
+                            .lineLimit(1)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 .padding(.leading, 9)
                 .padding(.trailing, closable ? 0 : 9)

@@ -188,7 +188,8 @@ struct TerminalWrapperView: View {
                 Text(viewModel.errorMessage ?? "Unknown error")
             }
             .sheet(isPresented: $showSplitSheet) {
-                NewWindowSheet(title: "Split — Path & Command") { path, command in
+                NewWindowSheet(title: "Split — Path & Command",
+                               pathContextProvider: { paneBridge.container?.focusedPathPreviewContext() }) { path, command in
                     Task { await viewModel.splitPane(horizontal: true, seed: .custom(path: path, command: command)) }
                 }
             }
@@ -482,7 +483,8 @@ struct TerminalWrapperView: View {
             VStack(spacing: 0) {
                 terminalSurface
                 if showsWindowTabs {
-                    WindowTabBar(viewModel: viewModel)
+                    WindowTabBar(viewModel: viewModel,
+                                 pathContextProvider: { paneBridge.container?.focusedPathPreviewContext() })
                 }
             }
             // Landscape (compact vertical size class): the terminal — and in
@@ -1582,6 +1584,15 @@ final class PaneContainerVC: UIViewController {
         present(host, animated: true)
     }
 
+    /// The focused pane's file context for SwiftUI chrome that needs to browse
+    /// (the new-window / split sheet's directory picker). Same provider the
+    /// preview uses, so the picker can never read a different disk. nil when
+    /// there is nothing to browse (no pane, or no reachable source) — callers
+    /// fall back to a typed path.
+    func focusedPathPreviewContext() -> PathPreviewContext? {
+        focusedOrActiveVC?.pathPreviewContext?()
+    }
+
     // MARK: - Non-tmux single pane
 
     func setupSinglePane() {
@@ -1591,6 +1602,7 @@ final class PaneContainerVC: UIViewController {
         vc.pathPreviewContext = { [weak self, weak vc] in
             self?.makePathPreviewContext(paneVM: nil, vc: vc)
         }
+        vc.linkOriginProvider = { [weak self] in self?.makeLinkOrigin(paneID: nil) }
         vc.titleBar.isActivePane = true
         vc.onFindRequested = { [weak self] prefill in self?.showFindBar(prefill: prefill) }
         addChild(vc)
@@ -1643,6 +1655,9 @@ final class PaneContainerVC: UIViewController {
         let paneID = paneVM.paneID
         let vc = makeContainerVC()
         vc.bindToPaneVM(paneVM)
+        vc.linkOriginProvider = { [weak self, weak paneVM] in
+            self?.makeLinkOrigin(paneID: paneVM.map { "\($0.pane.id)" })
+        }
         vc.pathPreviewContext = { [weak self, weak vc, weak paneVM] in
             self?.makePathPreviewContext(paneVM: paneVM, vc: vc)
         }
@@ -1727,6 +1742,18 @@ final class PaneContainerVC: UIViewController {
         })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         present(alert, animated: true)
+    }
+
+    /// Every pane on iOS lives on the other end of an ssh connection, so a
+    /// `localhost` URL printed in one points at that machine — never at this
+    /// phone. The host id is what the forwarder keys its tunnels on, so it has
+    /// to be the same id `SSHService` registered under.
+    private func makeLinkOrigin(paneID: String?) -> LinkOrigin? {
+        guard let viewModel else { return nil }
+        return LinkOrigin(
+            paneID: paneID,
+            host: LinkHost(remoteID: viewModel.host.id.uuidString,
+                           label: viewModel.host.displayName))
     }
 
     /// Path preview: build the fetch context at tap time — the transport can
@@ -2604,6 +2631,9 @@ extension PaneContainerVC {
 /// long-press gesture would have to fight that menu for the same touch.
 struct WindowTabBar: View {
     @ObservedObject var viewModel: TerminalViewModel
+    /// Handed to the "New Window" sheet so its working directory can be
+    /// browsed; nil = typed-path only.
+    var pathContextProvider: (() -> PathPreviewContext?)? = nil
     @State private var pendingClose: TmuxWindowID?
     @State private var showCustomSheet = false
     @State private var pendingMove: TmuxWindowID?
@@ -2707,7 +2737,8 @@ struct WindowTabBar: View {
             Text("The processes running in it will be terminated.")
         }
         .sheet(isPresented: $showCustomSheet) {
-            NewWindowSheet(title: "New Window") { path, command in
+            NewWindowSheet(title: "New Window",
+                           pathContextProvider: pathContextProvider) { path, command in
                 Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
             }
         }
@@ -2820,22 +2851,63 @@ struct WindowTabBar: View {
 /// The "specify path + command" mini-sheet, shared by List's "+" menu and
 /// Tiled's "Split — Path & Command…". Empty command = plain shell; empty path
 /// = inherit the current pane's directory.
+///
+/// The directory is BROWSED (a pushed `FileTreeBrowserView` over the pane's
+/// own remote file source) whenever there is one to browse — typing a path on
+/// a phone is not a real affordance. The text field survives as the escape
+/// hatch, and is the whole section when no source is reachable.
 struct NewWindowSheet: View {
     var title: String
+    /// Reaches the focused pane's REMOTE file source, so the directory can be
+    /// browsed instead of typed. nil — or a provider that returns nil (no
+    /// tmux, SSH down) — degrades the section to the plain text field.
+    var pathContextProvider: (() -> PathPreviewContext?)? = nil
     var onCreate: (String?, String?) -> Void
 
     @State private var path = ""
     @State private var agentPreset: AgentPreset = .none
     @State private var customCommand = ""
+    @State private var showPicker = false
+    /// The tree needs room: browsing pushes the sheet to .large and coming
+    /// back drops it to .medium, so the form stays the compact thing it was.
+    @State private var detent: PresentationDetent = .medium
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Working Directory") {
-                    // The path lives on the remote host, so it stays typed —
-                    // a local file picker would point at the wrong machine.
-                    TextField("Empty = current directory", text: $path)
+                    // Browsable when the pane has a reachable file source —
+                    // on a phone a path is chosen, never typed. The field
+                    // stays as the escape hatch (jump anywhere) and is the
+                    // ONLY control when there's nothing to browse.
+                    if browsableContext != nil {
+                        Button {
+                            showPicker = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "folder")
+                                    .foregroundStyle(Color.accentColor)
+                                Text(path.isEmpty ? "Current directory" : path)
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(path.isEmpty ? .secondary : .primary)
+                                    .lineLimit(1)
+                                    .truncationMode(.head)
+                                Spacer(minLength: 4)
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        if !path.isEmpty {
+                            Button("Use Current Directory") { path = "" }
+                        }
+                    }
+                    TextField(browsableContext == nil ? "Empty = current directory"
+                                                      : "Or type a path",
+                              text: $path)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }
@@ -2855,6 +2927,7 @@ struct NewWindowSheet: View {
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(isPresented: $showPicker) { directoryPicker }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -2868,7 +2941,30 @@ struct NewWindowSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large], selection: $detent)
+        .onChange(of: showPicker) { _, browsing in
+            detent = browsing ? .large : .medium
+        }
+    }
+
+    /// The pane's file context right now — re-asked on every body pass because
+    /// the transport reconnects (and the answer flips to nil when it's down).
+    private var browsableContext: PathPreviewContext? {
+        pathContextProvider?()
+    }
+
+    /// Pushed, not a second sheet: a sheet-over-sheet at .medium would have
+    /// left the tree a few rows tall.
+    @ViewBuilder private var directoryPicker: some View {
+        DirectoryPickerView(
+            contextProvider: { pathContextProvider?() },
+            confirmTitle: "Use This Folder",
+            onPick: { picked in
+                path = picked
+                showPicker = false
+            })
+            .navigationTitle("Choose Folder")
+            .navigationBarTitleDisplayMode(.inline)
     }
 
     /// nil = plain shell (no agent); otherwise the chosen agent's launch command

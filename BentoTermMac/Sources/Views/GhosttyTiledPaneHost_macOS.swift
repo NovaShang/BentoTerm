@@ -242,10 +242,41 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 
     /// Surface ↔ view-model wiring: output/input, selection, voice, split, size.
     /// Extracted from `makeCell`.
+    /// Which machine these panes' `localhost` means. Set by the owning tab;
+    /// local until told otherwise, which is what a local tmux server is.
+    var linkHost: LinkHost = .local(label: "This Mac")
+
+    /// Ports already offered, so a restart does not re-offer the same server.
+    private var devServerOffers = DevServerOffers()
+
+    /// Output from `paneID` might have announced a dev server. Called from
+    /// whatever thread produced the bytes — the cheap byte prefilter runs
+    /// there and the main hop only happens on an actual hit, so the output
+    /// path pays a scan and nothing else.
+    nonisolated private func noticeDevServer(in data: Data, paneID: TmuxPaneID) {
+        guard DevServerDetector.mightAnnounce(data) else { return }
+        guard let text = String(data: data, encoding: .utf8),
+              let found = DevServerDetector.detect(in: text) else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard self.devServerOffers.shouldOffer(port: found.port, inPane: "\(paneID)") else { return }
+            let host = self.linkHost
+            self.cells[paneID]?.container.offerDevServer(port: found.port) {
+                BentoTerminalWindow.openWeb(
+                    url: found.url,
+                    origin: LinkOrigin(paneID: "\(paneID)", host: host))
+            }
+        }
+    }
+
     private func wireSurfaceCallbacks(_ surface: GhosttyTerminalSurface,
                                       paneVM: PaneViewModel,
                                       paneID: TmuxPaneID) {
-        paneVM.onDataReceived = { [weak surface] data in
+        paneVM.onDataReceived = { [weak surface, weak self] data in
+            // Watch for `Local: http://localhost:5173/` going past. Byte-level
+            // prefilter first: this is the output path and it is not allowed
+            // to cost anything.
+            self?.noticeDevServer(in: data, paneID: paneID)
             // Called synchronously by `feedData`, which now runs on the tmux
             // parse queue for the common case — so this must NOT assume the main
             // actor (`assumeIsolated` would trap). `feed` is nonisolated and
@@ -260,6 +291,12 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             BentoTerminalWindow.openPreview(path: path, line: line, context: context)
         }
         surface.onSelect = { [weak self] in self?.viewModel.selectPane(paneID) }
+        // Which machine THIS pane means by `localhost` — a link clicked in a
+        // pane of a remote tmux session points at that box, not at this one.
+        surface.linkOriginProvider = { [weak self] in
+            guard let self else { return nil }
+            return LinkOrigin(paneID: "\(paneID)", host: self.linkHost)
+        }
         // Wheel in a pane tmux has in copy-mode → tmux's own scroll, not ours.
         surface.onCopyModeScroll = { [weak self] rows in
             self?.viewModel.scrollCopyMode(paneID, rows: rows)
@@ -1322,6 +1359,11 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     // Different scope, different home.
 
     /// The surface of the pane the user is actually working in.
+    /// Which machine the FOCUSED pane means by `localhost` — what a URL typed
+    /// into ⌘P resolves against, so "localhost:3000" means the same thing there
+    /// as it does in the terminal you are looking at.
+    var activeLinkOrigin: LinkOrigin? { activeSurface?.linkOrigin }
+
     private var activeSurface: GhosttyTerminalSurface? {
         activePaneID.flatMap { cells[$0]?.surface }
     }
@@ -1685,6 +1727,38 @@ final class PaneCellView: NSView {
                                  height: max(bounds.height - h, 0))
         surface?.frame = surfaceRect
         stateTint.frame = surfaceRect
+        layoutDevServerChip(in: surfaceRect)
+    }
+
+    // MARK: Dev-server offer
+
+    private var devServerChip: DevServerChipView?
+
+    /// A server came up in this pane. Offer it — do not open it.
+    ///
+    /// Opening on its own would take the side panel away from whatever the user
+    /// was looking at, and `vite` reprints this banner on every restart, which
+    /// an agent triggers all day. One tap is the whole cost of being sure.
+    func offerDevServer(port: Int, onOpen: @escaping () -> Void) {
+        devServerChip?.removeFromSuperview()
+        let chip = DevServerChipView(port: port, onOpen: onOpen)
+        chip.onDismiss = { [weak self] in
+            self?.devServerChip?.removeFromSuperview()
+            self?.devServerChip = nil
+        }
+        devServerChip = chip
+        addSubview(chip)
+        needsLayout = true
+        chip.fadeIn()
+    }
+
+    private func layoutDevServerChip(in surfaceRect: NSRect) {
+        guard let chip = devServerChip else { return }
+        let size = chip.fittingSize
+        chip.frame = NSRect(
+            x: max(surfaceRect.minX, surfaceRect.maxX - size.width - 10),
+            y: max(surfaceRect.minY, surfaceRect.maxY - size.height - 10),
+            width: size.width, height: size.height)
     }
 
     // MARK: Title-bar drag (drag-to-swap)
@@ -2102,3 +2176,89 @@ private struct PaneCell {
     let surface: GhosttyTerminalSurface
 }
 #endif
+
+
+// MARK: - Dev-server offer chip
+
+/// "A server just came up in this pane — want to see it?"
+///
+/// Deliberately an offer and not an action: the side panel may be showing
+/// something the user is in the middle of, and a dev server reprints its banner
+/// on every restart. It fades itself out, because an offer nobody took should
+/// not stay on screen.
+private final class DevServerChipView: NSView {
+    var onDismiss: (() -> Void)?
+    private let onOpen: () -> Void
+    private let label = NSTextField(labelWithString: "")
+    /// `nonisolated(unsafe)` so `deinit` can invalidate it: the chip is only
+    /// ever touched on the main thread, and letting the timer outlive the view
+    /// would fire `fadeOut` on a dead one.
+    private nonisolated(unsafe) var timer: Timer?
+
+    /// Long enough to notice while reading output scroll past, short enough
+    /// that it is gone before it becomes furniture.
+    private static let lifetime: TimeInterval = 12
+
+    init(port: Int, onOpen: @escaping () -> Void) {
+        self.onOpen = onOpen
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 11
+        layer?.cornerCurve = .continuous
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.92).cgColor
+
+        label.stringValue = "Open :\(port)"
+        label.font = .systemFont(ofSize: 11, weight: .medium)
+        label.textColor = .white
+        label.sizeToFit()
+        addSubview(label)
+
+        timer = Timer.scheduledTimer(withTimeInterval: Self.lifetime, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.fadeOut() }
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    deinit { timer?.invalidate() }
+
+    override var fittingSize: NSSize {
+        NSSize(width: label.frame.width + 22, height: 22)
+    }
+
+    override func layout() {
+        super.layout()
+        label.frame = NSRect(x: 11, y: (bounds.height - label.frame.height) / 2,
+                             width: label.frame.width, height: label.frame.height)
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        timer?.invalidate()
+        onOpen()
+        onDismiss?()
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    func fadeIn() {
+        alphaValue = 0
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.18
+            animator().alphaValue = 1
+        }
+    }
+
+    private func fadeOut() {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            self?.onDismiss?()
+        }
+    }
+}

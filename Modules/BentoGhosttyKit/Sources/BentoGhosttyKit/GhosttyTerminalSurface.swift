@@ -1023,18 +1023,45 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// is what makes remote agent sign-in (an OAuth URL printed by a headless
     /// host) completable from the phone.
     ///
-    /// ghostty's own link pipeline is inert in this prebuilt (see above), so
-    /// the hit-test is done here: read the VISUAL row under the tap via a
-    /// transient row-selection ("what you see is what we scan" — no
-    /// logical-line/visual-row mapping), reassemble the wrap-chain when the
-    /// row runs edge-to-edge (long OAuth URLs always wrap), then regex for a
-    /// URL span containing the tap column.
     /// Returns whether a URL was found and opened — callers chain the
     /// path-preview hit-test off a miss (the two detectors are disjoint).
     @discardableResult
     public func openLinkIfPresent(at point: CGPoint, wrapCols: Int? = nil) -> Bool {
+        guard let url = linkTapHit(at: point, wrapCols: wrapCols) else { return false }
+        LinkRouter.open(url, from: linkOrigin)
+        return true
+    }
+
+    /// Which machine this pane's `localhost` means, installed by the host that
+    /// owns the pane. Unset (or nil) reads as this device — the same answer a
+    /// local pane gives, so an unwired surface degrades to the old behaviour
+    /// instead of guessing at a host.
+    public var linkOriginProvider: (@MainActor () -> LinkOrigin?)?
+
+    public var linkOrigin: LinkOrigin? { linkOriginProvider?() }
+
+    /// The URL under `point`, or nil — hit-test only, nothing is opened.
+    ///
+    /// The iOS host asks for the URL rather than for "did it open", because a
+    /// tap only OFFERS the link (chip) and the answer also decides whether the
+    /// program running in the pane gets this tap at all.
+    ///
+    /// Two routes: the engine's OSC 8 answer, then a scrape. The scrape reads
+    /// the VISUAL row under the tap and reassembles the wrap-chain when the row
+    /// runs edge-to-edge (long OAuth URLs always wrap), then regexes for a URL
+    /// span containing the tap column. Links the app would refuse to open
+    /// (anything outside the scheme allowlist) count as a MISS, so a `file://`
+    /// in the output falls through to path detection instead of offering a chip
+    /// that does nothing.
+    public func linkTapHit(at point: CGPoint, wrapCols: Int? = nil) -> String? {
+        guard let url = detectLink(at: point, wrapCols: wrapCols),
+              LinkRouter.canOpen(url) else { return nil }
+        return url
+    }
+
+    private func detectLink(at point: CGPoint, wrapCols: Int? = nil) -> String? {
         guard !isTornDown, let size = currentSize, size.cellWidthPx > 0, size.cellHeightPx > 0
-        else { return false }
+        else { return nil }
         // Ask the ENGINE first: an OSC 8 hyperlink's target lives in the cell
         // attributes, never on screen, so a scrape cannot find it (Claude Code's
         // links routinely have prose anchors in another language). A touch has
@@ -1046,8 +1073,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         }
         if let url = engineLinkURL {
             linkLog.log("link via engine (OSC 8) ⟨\(url, privacy: .public)⟩")
-            GhosttyRuntime.openExternalURL(url)
-            return true
+            return url
         }
         let cell = CGSize(width: CGFloat(size.cellWidthPx) / renderScale,
                           height: CGFloat(size.cellHeightPx) / renderScale)
@@ -1064,9 +1090,8 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
             scrollTop: lastScrollTop,
             readText: { [weak self] in self?.readScrollback() }),
             let url = TerminalLinkDetector.urlHit(inLine: line, atCell: tappedCell)
-        else { return false }
-        GhosttyRuntime.openExternalURL(url)
-        return true
+        else { return nil }
+        return url
     }
 
     // MARK: - Input (UIKeyInput)

@@ -22,6 +22,13 @@ struct BentoApp: App {
 
     init() {
         BentoAppearance.install()
+        // Links, and the ssh tunnels that make a remote `localhost` reachable.
+        PortForwarders.current = IOSPortForwarder()
+        LinkRouter.inAppHandler = { request in
+            WebSheetPresenter.present(url: request.url, origin: request.origin)
+        }
+        LinkRouter.preference = LinkOpenPreference(
+            rawValue: UserDefaults.standard.string(forKey: "open_links_in") ?? "") ?? .inApp
         Self.logBundledFonts()
 #if DEBUG
         // Mirror the core package's dlog (reconnect loop, tmux protocol, voice

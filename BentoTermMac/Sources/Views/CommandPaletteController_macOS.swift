@@ -253,6 +253,18 @@ final class PaletteViewModel: ObservableObject {
                 return
             }
 
+            // An address typed in wins the top slot — the same escape hatch as
+            // typing `/` or `~` for a file, and the only way to reach a page
+            // nobody offered you.
+            if let url = PaletteURL.candidate(for: q) {
+                built.append(PaletteSection(id: "web", title: "Open", items: [
+                    PaletteURL.item(for: url) { url in
+                        BentoTerminalWindow.openWeb(
+                            url: url, origin: BentoTerminalWindow.focusedLinkOrigin())
+                    },
+                ]))
+            }
+
             // Recent Files spec first (empty-state only), then New Pane, so the
             // most "resume where I was" rows sit at the top when idle.
             for spec in staticSpecs where spec.emptyStateOnly {

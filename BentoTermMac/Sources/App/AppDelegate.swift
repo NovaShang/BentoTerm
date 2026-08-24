@@ -46,6 +46,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // surface exists, so libghostty can resolve it by family name.
         registerBundledFonts()
 
+        // Links and the ports behind them. Installed before any window exists,
+        // so the first clicked link already has somewhere to go.
+        PortForwarders.current = MacPortForwarder()
+        LinkRouter.inAppHandler = { request in
+            BentoTerminalWindow.openWeb(url: request.url, origin: request.origin)
+        }
+        LinkRouter.preference = LinkOpenPreference(
+            rawValue: UserDefaults.standard.string(forKey: "open_links_in") ?? "") ?? .inApp
+
         // SwiftUI has built NSApp.mainMenu by now; take ⌘W back (see below).
         reclaimClosePaneShortcut()
 

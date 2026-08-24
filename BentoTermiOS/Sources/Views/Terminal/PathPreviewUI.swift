@@ -3,15 +3,17 @@ import SwiftUI
 import BentoSessionKit
 import BentoFoundationKit
 import BentoFilePreviewKit
+import BentoGhosttyKit
 
 // MARK: - Tap chip
 
-/// Floating confirmation chip shown when a tap lands on a recognized file
-/// path: [doc icon] filename ›. Tapping it opens the preview sheet; it
-/// auto-dismisses after a few seconds. The extra step keeps ordinary
-/// pane-selection taps cheap, forgives detection false-positives, and masks
-/// the stat round-trip on slow links.
-final class PathPreviewChip: UIControl {
+/// Floating confirmation chip shown when a tap lands on something Bento can
+/// open — a file path ([doc icon] filename ›) or a URL ([link icon] host/… ›).
+/// Tapping the chip is what actually opens it; it auto-dismisses after a few
+/// seconds. The extra step keeps ordinary pane-selection taps cheap, forgives
+/// detection false-positives, masks the stat round-trip on slow links, and on
+/// a touch screen keeps a mistap from launching the browser.
+final class TapConfirmChip: UIControl {
     var onTap: (() -> Void)?
 
     private let icon = UIImageView()
@@ -30,8 +32,7 @@ final class PathPreviewChip: UIControl {
         layer.shadowRadius = 10
         layer.shadowOffset = CGSize(width: 0, height: 4)
 
-        let cfg = UIImage.SymbolConfiguration(pointSize: 13, weight: .medium)
-        icon.image = UIImage(systemName: "doc.text", withConfiguration: cfg)
+        icon.image = UIImage(systemName: "doc.text", withConfiguration: Self.iconConfig)
         icon.tintColor = BentoBrand.emerald
 
         label.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
@@ -61,8 +62,37 @@ final class PathPreviewChip: UIControl {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    private static let iconConfig = UIImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+
     func configure(fileName: String, maxWidth: CGFloat) {
+        icon.image = UIImage(systemName: "doc.text", withConfiguration: Self.iconConfig)
         label.text = fileName
+        sizeToChipFit(maxWidth: maxWidth)
+    }
+
+    /// Link variant: the URL itself is the label, elided in the middle so the
+    /// host and the tail — who is being opened, and which page — both survive.
+    func configure(link: String, maxWidth: CGFloat) {
+        icon.image = UIImage(systemName: "link", withConfiguration: Self.iconConfig)
+        label.text = LinkChipText.display(for: link, maxChars: Self.linkMaxChars)
+        sizeToChipFit(maxWidth: maxWidth)
+    }
+
+    /// Dev-server variant: the port IS the name. On a phone the full
+    /// `http://localhost:5173/` is most of the screen and all of it is
+    /// boilerplate except those four digits.
+    func configure(devServerPort port: Int, maxWidth: CGFloat) {
+        icon.image = UIImage(systemName: "globe", withConfiguration: Self.iconConfig)
+        label.text = "Open :\(port)"
+        sizeToChipFit(maxWidth: maxWidth)
+    }
+
+    /// Character budget for a link label. Chosen for the narrowest phone: the
+    /// chip is monospaced 13pt, so this is a width the layout can honour
+    /// without the label truncating a second time.
+    private static let linkMaxChars = 34
+
+    private func sizeToChipFit(maxWidth: CGFloat) {
         let fit = systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
         bounds.size = CGSize(width: min(fit.width, maxWidth), height: fit.height)
     }

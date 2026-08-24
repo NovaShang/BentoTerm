@@ -309,24 +309,6 @@ public final class GhosttyRuntime {
         }
     }
 
-    /// Open a clicked terminal link in the user's default app. Restricted to
-    /// web/mail schemes so terminal output can't auto-launch `file://` or custom
-    /// app schemes by emitting a crafted "link". Internal so the surfaces'
-    /// link-activation paths (iOS tap probe, macOS ⌘-click) share the one
-    /// allowlist with the OPEN_URL action.
-    public static func openExternalURL(_ string: String) {
-        guard let url = URL(string: string),
-              let scheme = url.scheme?.lowercased(),
-              ["http", "https", "mailto", "ftp", "ftps"].contains(scheme) else { return }
-        DispatchQueue.main.async {
-            #if canImport(AppKit) && !targetEnvironment(macCatalyst)
-            NSWorkspace.shared.open(url)
-            #elseif canImport(UIKit)
-            UIApplication.shared.open(url)
-            #endif
-        }
-    }
-
     /// Terminal bell (BEL / OSC). Audible system beep.
     private static func ringBell() {
         DispatchQueue.main.async {
@@ -390,7 +372,10 @@ public final class GhosttyRuntime {
             let ou = action.action.open_url
             if let cstr = ou.url, ou.len > 0,
                let s = String(bytes: UnsafeRawBufferPointer(start: cstr, count: Int(ou.len)), encoding: .utf8) {
-                openExternalURL(s)
+                // App-level action: no surface, so no pane origin. The paths
+                // that DO know their pane (macOS ⌘-click, the iOS tap chip)
+                // call the router directly and pass one.
+                LinkRouter.open(s)
             }
             return true
         case GHOSTTY_ACTION_RING_BELL:

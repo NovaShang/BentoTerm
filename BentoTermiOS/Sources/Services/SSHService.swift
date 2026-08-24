@@ -37,6 +37,16 @@ private func elapsedMs(since start: ContinuousClock.Instant) -> Int {
     return Int(d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000)
 }
 
+/// Citadel's `SSHClient` predates `Sendable`, but it is internally thread-safe
+/// (everything funnels onto a NIO event loop) and this is the very instance
+/// `filePreviewSource()` already hands to an actor. The box is how it crosses
+/// to the main actor without the compiler having to take our word for it
+/// implicitly.
+struct SendableSSHClient: @unchecked Sendable {
+    let client: SSHClient
+    init(_ client: SSHClient) { self.client = client }
+}
+
 /// Thread-safe mutable state for SSHService
 private struct SSHMutableState: Sendable {
     var state: SSHConnectionState = .disconnected
@@ -128,6 +138,15 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
 
             self.client = sshClient
             mutableState.withLock { $0.state = .connected }
+            // The connection a link's `localhost` rides. Registered as soon as
+            // it is up, so the first clicked dev-server URL already has a
+            // tunnel available rather than having to wait for one.
+            let tunnelID = host.id.uuidString
+            let boxed = SendableSSHClient(sshClient)
+            Task { @MainActor in
+                (PortForwarders.current as? IOSPortForwarder)?
+                    .register(client: boxed.client, for: tunnelID)
+            }
             dlog("SSH connected successfully in \(elapsedMs(since: connectStart))ms")
             Task { @MainActor in TelemetryService.shared.record(.sshDirectConnected) }
 
@@ -296,6 +315,12 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
             $0.state = .disconnected
         }
 
+        if let tunnelID = connectedHost?.id.uuidString {
+            // Tunnels ride this connection; they cannot outlive it.
+            Task { @MainActor in
+                (PortForwarders.current as? IOSPortForwarder)?.unregister(remoteID: tunnelID)
+            }
+        }
         let clientToClose = client
         client = nil
 
