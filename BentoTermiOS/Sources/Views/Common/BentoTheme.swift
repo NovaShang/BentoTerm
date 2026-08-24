@@ -129,25 +129,15 @@ enum STTheme {
     static let sans = UIFont.systemFont(ofSize: 14, weight: .regular)
     static let display = UIFont.systemFont(ofSize: 34, weight: .bold)
 
-    /// Last non-zero font size this process read from defaults. UserDefaults
-    /// can transiently read EMPTY right after unlocking the device (the prefs
-    /// plist is protected until first read post-unlock, and the resume rebuild
-    /// races that window) — surfaces rebuilt in that window picked up the
-    /// device fallback and the terminal "grew" from 10pt to 14pt until the
-    /// user touched the slider again. The cache answers with the real value.
-    private nonisolated(unsafe) static var lastKnownFontSize: CGFloat = 0
-
-    /// Terminal font size — reads from Settings slider, falls back to the last
-    /// value this process saw, then to the iOS default (10).
-    static var terminalFontSize: CGFloat {
-        let stored = UserDefaults.standard.double(forKey: "terminal_font_size")
-        if stored > 0 {
-            lastKnownFontSize = CGFloat(stored)
-            return CGFloat(stored)
-        }
-        if lastKnownFontSize > 0 { return lastKnownFontSize }
-        return 10
-    }
+    /// Terminal font size — a CGFloat view onto `ThemeStore.fontSize`, which
+    /// owns the stored value, the post-unlock cache, and the fallback.
+    ///
+    /// It must NOT re-derive any of those. This used to hold its own cache and
+    /// its own fallback (10) while the engine's app-wide config reload read
+    /// ThemeStore's (iPhone 12 / iPad 14) — surfaces were created at one size
+    /// and every live surface was pushed to the other, so a pane opened after
+    /// an app-switch didn't match the panes beside it.
+    static var terminalFontSize: CGFloat { CGFloat(ThemeStore.fontSize) }
 
     /// User-selected terminal font for the CHROME beside the terminal, matching
     /// what the surface renders inside it.

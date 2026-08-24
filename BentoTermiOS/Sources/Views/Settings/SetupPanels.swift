@@ -28,7 +28,6 @@ struct IOSSetupPanel: View {
         switch page {
         case .appearance:
             AppearancePanel(context: context,
-                            defaultFontSize: 10,
                             preview: AnyView(GhosttyThemePreview())) {
                 Toggle("Haptic Feedback", isOn: $hapticsEnabled)
                 Toggle("Tap to Preview Files", isOn: $pathPreviewEnabled)

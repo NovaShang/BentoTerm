@@ -1,4 +1,5 @@
 import Foundation
+import os
 #if canImport(AppKit)
 import AppKit
 #elseif canImport(UIKit)
@@ -236,39 +237,59 @@ public final class ThemeStore: ObservableObject {
 
     // MARK: Font prefs (same UserDefaults keys both platforms use)
 
+    /// The size an install that has never touched the size stepper renders at.
+    ///
+    /// ONE constant, deliberately. This fallback used to be spelled three times
+    /// — here, in the iOS chrome's `STTheme.terminalFontSize`, and as the
+    /// settings panel's `@AppStorage` default — and the three disagreed (10 vs
+    /// iPhone 12 / iPad 14). iOS created every surface at 10 while a config
+    /// reload pushed 12/14 to every LIVE surface (`ghostty_app_update_config`
+    /// overrides the per-surface creation size), so a pane created after an
+    /// app-switch rendered at a different size than the panes that lived
+    /// through it — and since no per-surface bookkeeping saw the app-wide push,
+    /// nothing ever reconciled the two. Every reader of the fallback goes
+    /// through this.
+    nonisolated public static let defaultFontSize: Double = {
+        #if canImport(UIKit)
+        return 10
+        #else
+        return 13
+        #endif
+    }()
+
     /// Last non-zero size this process read from defaults. UserDefaults can
     /// transiently read EMPTY right after device unlock (the prefs plist is
     /// protected until first post-unlock read); a config reload in that window
     /// must answer with the real size, not the fallback, or every live surface
-    /// snaps to the wrong font. Mirrors STTheme.terminalFontSize's cache.
-    private var lastKnownFontSize: Double = 0
+    /// snaps to the wrong font. Process-wide (not per-instance) so the one
+    /// cache is seeded by whichever reader gets the first good read — two
+    /// caches warming independently is how the surface-creation path and the
+    /// config-reload path came to disagree about the size mid-session.
+    nonisolated private static let lastKnownFontSize = OSAllocatedUnfairLock(initialState: 0.0)
 
     /// Terminal font size in points. Falls back to the last value this process
-    /// saw, then to the platform default — which must match what the app
-    /// targets use to CREATE surfaces (iPad 14 / iPhone 12 / mac 13), or a
-    /// config reload nudges untouched-slider installs to a different size.
-    public var fontSize: Double {
+    /// saw, then to `defaultFontSize`.
+    ///
+    /// `nonisolated` because the iOS chrome reads it off the main actor
+    /// (`SessionManager.terminalGridEstimate`) — it is a UserDefaults read plus
+    /// a locked cache, none of it actor state.
+    nonisolated public static var fontSize: Double {
         resolveFontSize(UserDefaults.standard.double(forKey: "terminal_font_size"))
     }
 
+    /// Instance forwarder for the `ThemeStore.shared.fontSize` call sites.
+    public var fontSize: Double { Self.fontSize }
+
     /// Resolve the persisted size, seeding the unlock-race cache in the
-    /// process. UserDefaults can transiently read EMPTY right after device
-    /// unlock (the prefs plist is protected until the first post-unlock read);
-    /// a config reload in that window must answer with the real size, not the
-    /// fallback, or every live surface snaps to the wrong font. Mirrors
-    /// STTheme.terminalFontSize's cache. (An explicit method rather than a
-    /// side-effectful getter so the mutation is visible at the call site.)
-    private func resolveFontSize(_ persisted: Double) -> Double {
+    /// process. (An explicit method rather than a side-effectful getter so the
+    /// mutation is visible at the call site.)
+    nonisolated private static func resolveFontSize(_ persisted: Double) -> Double {
         if persisted > 0 {
-            lastKnownFontSize = persisted
+            lastKnownFontSize.withLock { $0 = persisted }
             return persisted
         }
-        if lastKnownFontSize > 0 { return lastKnownFontSize }
-        #if canImport(UIKit)
-        return UIDevice.current.userInterfaceIdiom == .pad ? 14 : 12
-        #else
-        return 13
-        #endif
+        let cached = lastKnownFontSize.withLock { $0 }
+        return cached > 0 ? cached : defaultFontSize
     }
 
     /// Selected font-family token (e.g. "jetbrains"); nil = engine default.
