@@ -12,6 +12,7 @@ struct HostEditView: View {
     @Environment(\.dismiss) private var dismiss
 
     let mode: HostEditMode
+    let credentials: HostCredentialStore
     let onSave: (Host) -> Void
 
     @State private var name: String = ""
@@ -27,16 +28,35 @@ struct HostEditView: View {
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var generatedPublicKey: String?
+    // Whether the Keychain already holds a secret for this host. The secrets
+    // themselves stay in the Keychain — a SecureField seeded with plaintext
+    // puts the password back into the view hierarchy, into snapshots and into
+    // whatever the keyboard's autofill layer decides to do with it. The
+    // booleans are enough to drive the copy and the Save gate.
+    @State private var hasStoredPassword = false
+    @State private var hasStoredMacPassword = false
 
     private var isEditing: Bool {
         if case .edit = mode { return true }
         return false
     }
 
-    init(mode: HostEditMode, onSave: @escaping (Host) -> Void) {
+    private var editedHostID: UUID? {
+        if case .edit(let host) = mode { return host.id }
+        return nil
+    }
+
+    init(
+        mode: HostEditMode,
+        credentials: HostCredentialStore = .keychain,
+        onSave: @escaping (Host) -> Void
+    ) {
         self.mode = mode
+        self.credentials = credentials
         self.onSave = onSave
         if case .edit(let host) = mode {
+            _hasStoredPassword = State(initialValue: credentials.hasPassword(for: host.id))
+            _hasStoredMacPassword = State(initialValue: credentials.hasMacKeychainPassword(for: host.id))
             _name = State(initialValue: host.name)
             _hostname = State(initialValue: host.hostname)
             _port = State(initialValue: String(host.port))
@@ -85,8 +105,14 @@ struct HostEditView: View {
                 .pickerStyle(.segmented)
 
                 if authType == 0 {
-                    SecureField("Password", text: $password)
+                    SecureField(hasStoredPassword ? "Password (saved)" : "Password", text: $password)
                         .textContentType(.password)
+
+                    if hasStoredPassword {
+                        Button("Clear Saved Password", role: .destructive) {
+                            clearSavedPassword()
+                        }
+                    }
                 } else {
                     if let label = importedKeyLabel {
                         HStack {
@@ -115,7 +141,11 @@ struct HostEditView: View {
             } header: {
                 BentoFormHeader("Authentication")
             } footer: {
-                if authType == 1 {
+                if authType == 0 {
+                    if hasStoredPassword {
+                        BentoFormFooter("Leave the password blank to keep the saved one.")
+                    }
+                } else {
                     BentoFormFooter("Only ed25519 keys (32-byte raw private key) are supported. Use \"Generate New Key Pair\" to make one — copy the public key onto the server's ~/.ssh/authorized_keys.")
                 }
             }
@@ -124,14 +154,27 @@ struct HostEditView: View {
             Section {
                 Toggle("Unlock Mac Keychain", isOn: $unlockMacKeychain)
                 if unlockMacKeychain {
-                    SecureField("Mac Login Password", text: $keychainPassword)
-                        .textContentType(.password)
+                    SecureField(
+                        hasStoredMacPassword ? "Mac Login Password (saved)" : "Mac Login Password",
+                        text: $keychainPassword
+                    )
+                    .textContentType(.password)
+
+                    if hasStoredMacPassword {
+                        Button("Clear Saved Password", role: .destructive) {
+                            clearSavedMacPassword()
+                        }
+                    }
                 }
             } header: {
                 BentoFormHeader("macOS")
             } footer: {
                 if unlockMacKeychain {
-                    BentoFormFooter("Runs `security unlock-keychain` after connecting. Password is stored in the app's keychain.")
+                    BentoFormFooter(
+                        hasStoredMacPassword
+                            ? "Runs `security unlock-keychain` after connecting. Leave the password blank to keep the saved one."
+                            : "Runs `security unlock-keychain` after connecting. Password is stored in the app's keychain."
+                    )
                 }
             }
             .bentoSectionStyle()
@@ -182,8 +225,58 @@ struct HostEditView: View {
     }
 
     private var isValid: Bool {
-        !hostname.isEmpty && !username.isEmpty &&
-        (authType == 0 ? !password.isEmpty : importedKeyLabel != nil)
+        Self.isFormValid(
+            hostname: hostname,
+            username: username,
+            authType: authType,
+            password: password,
+            hasStoredPassword: hasStoredPassword,
+            importedKeyLabel: importedKeyLabel
+        )
+    }
+
+    /// The Save gate, split out of the view so it can be tested.
+    ///
+    /// A host that already has a stored password needs no password typed:
+    /// requiring one made every unrelated edit (rename, port, username) cost
+    /// the user a full retype of a secret they cannot see.
+    static func isFormValid(
+        hostname: String,
+        username: String,
+        authType: Int,
+        password: String,
+        hasStoredPassword: Bool,
+        importedKeyLabel: String?
+    ) -> Bool {
+        guard !hostname.isEmpty, !username.isEmpty else { return false }
+        if authType == 0 {
+            return !password.isEmpty || hasStoredPassword
+        }
+        return importedKeyLabel != nil
+    }
+
+    private func clearSavedPassword() {
+        guard let hostID = editedHostID else { return }
+        do {
+            try credentials.clearPassword(for: hostID)
+            password = ""
+            hasStoredPassword = false
+        } catch {
+            errorMessage = "Failed to clear password: \(error.localizedDescription)"
+            showError = true
+        }
+    }
+
+    private func clearSavedMacPassword() {
+        guard let hostID = editedHostID else { return }
+        do {
+            try credentials.clearMacKeychainPassword(for: hostID)
+            keychainPassword = ""
+            hasStoredMacPassword = false
+        } catch {
+            errorMessage = "Failed to clear password: \(error.localizedDescription)"
+            showError = true
+        }
     }
 
     private func save() {
@@ -204,7 +297,8 @@ struct HostEditView: View {
         if authType == 0 {
             host.authMethod = .password
             do {
-                try KeychainService.shared.savePassword(password, for: host.id.uuidString)
+                // Blank field = keep the stored password; see savePassword.
+                try credentials.savePassword(password, for: host.id)
             } catch {
                 errorMessage = "Failed to save password: \(error.localizedDescription)"
                 showError = true
@@ -212,12 +306,15 @@ struct HostEditView: View {
             }
         } else if let keyLabel = importedKeyLabel {
             host.authMethod = .privateKey(keyLabel: keyLabel)
+            // The host now authenticates with a key, so nothing will ever read
+            // its password again — don't leave the secret sitting there.
+            try? credentials.clearPassword(for: host.id)
         }
 
         host.unlockMacKeychain = unlockMacKeychain
-        if unlockMacKeychain && !keychainPassword.isEmpty {
+        if unlockMacKeychain {
             do {
-                try KeychainService.shared.savePassword(keychainPassword, for: "macKeychain:\(host.id.uuidString)")
+                try credentials.saveMacKeychainPassword(keychainPassword, for: host.id)
             } catch {
                 errorMessage = "Failed to save keychain password: \(error.localizedDescription)"
                 showError = true

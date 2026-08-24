@@ -147,3 +147,96 @@ final class KeychainService: Sendable {
         }
     }
 }
+
+// MARK: - Host Credentials
+
+/// The Keychain, as the host form and the host store need it: which secrets a
+/// host has, and the rules for changing them.
+///
+/// Everything goes through injectable closures because the Keychain is not
+/// reachable from a unit test — the rules below are the part worth testing,
+/// and they are the part that used to be wrong.
+struct HostCredentialStore: Sendable {
+    /// nil = nothing stored under that account.
+    var load: @Sendable (_ account: String) -> String?
+    var write: @Sendable (_ secret: String, _ account: String) throws -> Void
+    var remove: @Sendable (_ account: String) throws -> Void
+
+    static let keychain = HostCredentialStore(
+        load: { try? KeychainService.shared.loadPassword(for: $0) },
+        write: { try KeychainService.shared.savePassword($0, for: $1) },
+        remove: { try KeychainService.shared.deletePassword(for: $0) }
+    )
+
+    // MARK: Account keys
+    //
+    // These have to match SSHService (`loadPassword(for: host.id.uuidString)`)
+    // and SessionManager byte for byte. Host.id is a fresh random UUID for
+    // every host, so a key derived any other way reads back empty and the
+    // form reports "not saved" for a password that is sitting right there.
+
+    static func passwordAccount(for hostID: UUID) -> String {
+        hostID.uuidString
+    }
+
+    static func macKeychainAccount(for hostID: UUID) -> String {
+        "macKeychain:\(hostID.uuidString)"
+    }
+
+    // MARK: Queries
+
+    func hasPassword(for hostID: UUID) -> Bool {
+        isStored(Self.passwordAccount(for: hostID))
+    }
+
+    func hasMacKeychainPassword(for hostID: UUID) -> Bool {
+        isStored(Self.macKeychainAccount(for: hostID))
+    }
+
+    /// An empty stored string counts as "nothing stored": builds before this
+    /// change could overwrite a real password with "" (see savePassword), and
+    /// an empty secret is never a usable one anyway.
+    private func isStored(_ account: String) -> Bool {
+        guard let secret = load(account) else { return false }
+        return !secret.isEmpty
+    }
+
+    // MARK: Mutations
+
+    /// Store what the user typed, or keep what is already stored if the field
+    /// was left blank.
+    ///
+    /// The SecureField is never seeded with the stored secret (plaintext must
+    /// not travel back into the UI), so blank can only mean "unchanged".
+    /// Passing "" down to the Keychain would take the SecItemUpdate path and
+    /// replace the real password with an empty string — a silent, permanent
+    /// loss the user cannot see until the next connect fails.
+    func savePassword(_ typed: String, for hostID: UUID) throws {
+        guard !typed.isEmpty else { return }
+        try write(typed, Self.passwordAccount(for: hostID))
+    }
+
+    /// Same blank-means-unchanged rule as `savePassword`.
+    func saveMacKeychainPassword(_ typed: String, for hostID: UUID) throws {
+        guard !typed.isEmpty else { return }
+        try write(typed, Self.macKeychainAccount(for: hostID))
+    }
+
+    func clearPassword(for hostID: UUID) throws {
+        try remove(Self.passwordAccount(for: hostID))
+    }
+
+    func clearMacKeychainPassword(for hostID: UUID) throws {
+        try remove(Self.macKeychainAccount(for: hostID))
+    }
+
+    /// Drop every secret that belongs to this host alone — used when the host
+    /// is deleted. Private keys are deliberately untouched: their account key
+    /// is the key file's name (`privatekey:id_ed25519`), so any number of
+    /// hosts can be pointing at the same entry, and deleting one host's key
+    /// would log the others out.
+    func forgetAll(for hostID: UUID) {
+        try? clearPassword(for: hostID)
+        try? clearMacKeychainPassword(for: hostID)
+    }
+}

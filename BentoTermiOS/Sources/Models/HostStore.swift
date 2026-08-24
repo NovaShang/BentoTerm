@@ -12,7 +12,10 @@ final class HostStore: ObservableObject {
         return dir.appendingPathComponent("hosts.json")
     }()
 
-    init() {
+    private let credentials: HostCredentialStore
+
+    init(credentials: HostCredentialStore = .keychain) {
+        self.credentials = credentials
         load()
     }
 
@@ -67,6 +70,11 @@ final class HostStore: ObservableObject {
     func delete(_ host: Host) {
         hosts.removeAll { $0.id == host.id }
         save()
+        // hosts.json is the only thing this store owns; the host's secrets live
+        // in the Keychain and survive it. Nothing can reach them again once the
+        // host (and its random UUID) is gone, so drop them here. Private keys
+        // are keyed by file name and may be shared — see forgetAll.
+        credentials.forgetAll(for: host.id)
         SessionManager.shared.handleHostDeleted(host)
     }
 
