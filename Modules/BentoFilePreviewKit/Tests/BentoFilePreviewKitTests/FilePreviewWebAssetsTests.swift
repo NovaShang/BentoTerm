@@ -163,5 +163,53 @@ import WebKit
         }
         #expect(src.hasPrefix("data:image/png;base64,"))
     }
+
+    /// A document with more images than one screenful holds. The fill used to
+    /// stop after a fixed 12, and every image past that stayed an <img> with no
+    /// src — a blank box, no stub, no error. Now the page requests them as they
+    /// approach the viewport, so the tail fills once it's scrolled to.
+    @Test func imagesPastTheFirstScreenfulFillWhenScrolledTo() async throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bento-md-img-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let png = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))
+        let count = 20
+        // Filler between images so the document is far taller than one screen —
+        // otherwise every image sits inside the observer's margin at once and
+        // the lazy path never gets exercised.
+        let filler = String(repeating: "lorem ipsum dolor sit amet\n\n", count: 40)
+        var text = ""
+        for i in 0..<count {
+            try png.write(to: dir.appendingPathComponent("img\(i).png"))
+            text += "![shot \(i)](img\(i).png)\n\n" + filler
+        }
+
+        let view = FilePreviewWebView.makePreview()
+        view.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        view.render(fileName: "doc.md", text: text, line: nil, dark: false,
+                    imageBase: .init(directory: dir.path, source: LocalFileSource()))
+
+        // Walk down the document a screenful at a time — the way a reader
+        // does — counting how many images have been filled in.
+        let js = """
+        (function () {
+          window.scrollBy(0, 400);
+          var n = 0;
+          document.querySelectorAll('img[data-bento-src]').forEach(function (e) {
+            if ((e.getAttribute('src') || '').indexOf('data:image/png') === 0) { n++; }
+          });
+          return n;
+        })()
+        """
+        var filled = 0
+        for _ in 0..<100 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            filled = ((try? await view.evaluateJavaScript(js)) as? NSNumber)?.intValue ?? 0
+            if filled == count { break }
+        }
+        #expect(filled == count)
+    }
 }
 #endif

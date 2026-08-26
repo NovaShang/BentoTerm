@@ -120,14 +120,79 @@ md.renderer.rules.image = function (tokens, idx) {
          '" alt="' + escapeAttr(label) + '">';
 };
 
-// Native side: query which images the document wants, then fill each in.
-function bentoWantedImages() {
+// Native side: the page asks for the images it needs, the native side answers
+// each one — with a data: URI, or with bentoFailImage.
+//
+// Asking for every image at once does not scale: each fill lands in the DOM as
+// a base64 data: URI (~4/3 of the file) and stays resident, so a photo-heavy
+// document used to hit the native side's budget and the leftovers were dropped
+// in silence — an <img> with no src is just a blank box. We now request what is
+// near the viewport and let the rest arrive as the reader scrolls.
+let bentoImageSeq = 0;
+let bentoImageObserver = null;
+let bentoImageRequested = Object.create(null);
+
+function bentoPostImages(srcs) {
+  if (!srcs.length) { return; }
+  const mh = window.webkit && window.webkit.messageHandlers &&
+             window.webkit.messageHandlers.bentoImages;
+  if (!mh) { return; }
+  mh.postMessage({ seq: bentoImageSeq, srcs: srcs });
+}
+
+/// Claim these elements' sources (deduped across the document) for one request.
+function bentoClaimImages(els) {
   const out = [];
-  document.querySelectorAll("img[data-bento-src]").forEach(function (el) {
+  els.forEach(function (el) {
     const s = el.getAttribute("data-bento-src");
-    if (s && out.indexOf(s) < 0) { out.push(s); }
+    if (!s || bentoImageRequested[s]) { return; }
+    bentoImageRequested[s] = true;
+    out.push(s);
   });
   return out;
+}
+
+/// Called by the native side after each render; `seq` tags every request so a
+/// re-render's answers can't land in the previous document.
+function bentoObserveImages(seq) {
+  bentoImageSeq = seq;
+  bentoImageRequested = Object.create(null);
+  if (bentoImageObserver) { bentoImageObserver.disconnect(); bentoImageObserver = null; }
+
+  const all = [];
+  document.querySelectorAll("img[data-bento-src]").forEach(function (el) { all.push(el); });
+  if (!all.length) { return; }
+
+  // The first screenful goes out unconditionally: the panel renders into a
+  // WebView that may not be laid out yet, and an observer over a zero-size
+  // viewport reports nothing at all — which would leave the top of the
+  // document blank until the reader scrolls.
+  const eager = 8;
+  bentoPostImages(bentoClaimImages(all.slice(0, eager)));
+  const rest = all.slice(eager);
+  if (!rest.length) { return; }
+  if (!("IntersectionObserver" in window)) { bentoPostImages(bentoClaimImages(rest)); return; }
+
+  bentoImageObserver = new IntersectionObserver(function (entries) {
+    const hit = [];
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) { return; }
+      bentoImageObserver.unobserve(e.target);
+      hit.push(e.target);
+    });
+    bentoPostImages(bentoClaimImages(hit));
+  }, { rootMargin: "800px" });
+  rest.forEach(function (el) { bentoImageObserver.observe(el); });
+}
+
+/// No file source behind this preview, so nothing can ever be filled — show
+/// the stubs now rather than leaving blank boxes in the document.
+function bentoStubUnfilled() {
+  const pending = [];
+  document.querySelectorAll("img[data-bento-src]").forEach(function (el) {
+    if (!el.getAttribute("src")) { pending.push(el.getAttribute("data-bento-src")); }
+  });
+  pending.forEach(bentoFailImage);
 }
 
 function bentoSetImage(src, dataURI) {
