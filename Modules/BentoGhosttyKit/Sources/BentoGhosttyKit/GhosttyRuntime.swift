@@ -42,13 +42,6 @@ public final class GhosttyRuntime {
     /// any AppKit/UIKit surface type. nil → `read_clipboard_cb` declines.
     public var pasteSurface: ghostty_surface_t?
 
-    /// Wired by the macOS app: invalidate the surface's cached input-source
-    /// layout. The runtime keeps the AppKit keyboard-layout observer (below)
-    /// but the surface class now lives in the app target — this closure is the
-    /// seam (see `GhosttySurfaceUserdata` for the same pattern in action
-    /// routing).
-    public static var invalidateInputSourceCache: @MainActor () -> Void = {}
-
     /// When set, the next clipboard-read (paste) request is answered with THIS
     /// text instead of the system pasteboard, then cleared. Lets scroll-review-
     /// compose inject a committed draft through ghostty's paste pipeline (so it
@@ -115,19 +108,22 @@ public final class GhosttyRuntime {
         // so keys keep translating through the layout that was live at launch.
         // This is the only way to invalidate it.
         #if canImport(AppKit) && !targetEnvironment(macCatalyst)
-        NotificationCenter.default.addObserver(
-            forName: NSTextInputContext.keyboardSelectionDidChangeNotification,
-            object: nil, queue: .main
-        ) { _ in
-            Task { @MainActor in
-                // The surface caches whether the active source is a plain layout
-                // (it decides whether a keystroke may skip the IME); that answer
-                // just changed. The surface class lives in the app target now,
-                // so the app wires this closure (GhosttySurfaceUserdata exists
-                // for exactly this decoupling).
-                GhosttyRuntime.invalidateInputSourceCache()
-                guard let app = GhosttyRuntime.shared.app else { return }
-                ghostty_app_keyboard_changed(app)
+        // Activation counts too: the selection notification only reaches the
+        // ACTIVE app, so an input source picked while another app was frontmost
+        // would leave both caches on the launch layout — and a stale surface
+        // cache means every keystroke keeps skipping the IME, so CJK input
+        // silently degrades to plain ASCII.
+        for name in [NSTextInputContext.keyboardSelectionDidChangeNotification,
+                     NSApplication.didBecomeActiveNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                Task { @MainActor in
+                    // The surface caches whether the active source is a plain
+                    // layout (it decides whether a keystroke may skip the IME);
+                    // that answer may have just changed.
+                    GhosttyTerminalSurface.invalidateInputSourceCache()
+                    guard let app = GhosttyRuntime.shared.app else { return }
+                    ghostty_app_keyboard_changed(app)
+                }
             }
         }
         #elseif canImport(UIKit)

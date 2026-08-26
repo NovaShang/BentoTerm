@@ -5,14 +5,6 @@ import AppKit
 import Carbon   // TIS* — identifies whether the input source is a plain layout
 import GhosttyKit
 
-/// Wire the runtime's input-source observer (kept in core) to this surface's
-/// layout cache. The surface class lives in the app target now, so the seam
-/// is a closure — see `GhosttyRuntime.invalidateInputSourceCache`.
-@MainActor
-private let _wireInputSourceCache: Void = {
-    GhosttyRuntime.invalidateInputSourceCache = { GhosttyTerminalSurface.invalidateInputSourceCache() }
-}()
-
 /// libghostty-backed terminal surface for macOS. Same external-backend contract
 /// as the iOS surface (`TerminalSurface`): host feeds remote/pty bytes via
 /// `feed`, the engine emits encoded keystrokes back through the runtime's
