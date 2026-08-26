@@ -5,179 +5,23 @@ import SwiftUI
 import BentoSessionKit
 import BentoFoundationKit
 
-// MARK: - Preview panel
+// MARK: - Preview content
 
-/// One floating preview panel for the whole app (a new preview replaces the
-/// current one, like Quick Look). Esc or the close button dismisses.
-@MainActor
-public final class FilePreviewPanelController {
-    public static let shared = FilePreviewPanelController()
-    private init() {}
-
-    private var panel: NSPanel?
-    private var model = FilePreviewPanelModel()
-
-    /// The optional detached "Open in Window" surface — a floating panel a dock
-    /// tab pops out into. (Previews open in the side dock by default now.)
-    public func present(path: String, line: Int?, context: PathPreviewContext,
-                        nearScreenPoint point: NSPoint) {
-        let panel = ensurePanel(near: point)
-        model.load(path: path, line: line, context: context)
-        panel.makeKeyAndOrderFront(nil)
-    }
-
-    /// Last user-chosen panel size, persisted across launches ("820x620").
-    static let sizeKey = "path_preview_panel_size"
-
-    private func preferredSize(near point: NSPoint) -> NSSize {
-        let screen = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) })
-            ?? NSScreen.main
-        // Default: comfortable code width, near-full height — files are tall.
-        var size = NSSize(width: 820, height: (screen?.visibleFrame.height ?? 900) - 24)
-        if let parts = UserDefaults.standard.string(forKey: Self.sizeKey)?.split(separator: "x"),
-           parts.count == 2, let w = Double(parts[0]), let h = Double(parts[1]),
-           w >= 420, h >= 280 {
-            size = NSSize(width: w, height: h)
-        }
-        // Never larger than the screen the click happened on.
-        if let vis = screen?.visibleFrame {
-            size.width = min(size.width, vis.width - 32)
-            size.height = min(size.height, vis.height - 16)
-        }
-        return size
-    }
-
-    private func ensurePanel(near point: NSPoint) -> NSPanel {
-        if let panel { position(panel, near: point); return panel }
-        let p = EscClosablePanel(
-            contentRect: NSRect(origin: .zero, size: preferredSize(near: point)),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .utilityWindow],
-            backing: .buffered, defer: false)
-        p.titleVisibility = .hidden
-        p.titlebarAppearsTransparent = true
-        p.isFloatingPanel = true
-        p.becomesKeyOnlyIfNeeded = false
-        p.isReleasedWhenClosed = false
-        p.minSize = NSSize(width: 420, height: 280)
-        p.delegate = p          // saves the size the user resizes to
-        p.contentView = NSHostingView(rootView: FilePreviewPanelRoot(model: model))
-        position(p, near: point)
-        panel = p
-        return p
-    }
-
-    /// Place the panel near the click, clamped inside the screen.
-    private func position(_ panel: NSPanel, near point: NSPoint) {
-        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) })
-            ?? NSScreen.main else { return }
-        let size = panel.frame.size
-        var origin = NSPoint(x: point.x + 12, y: point.y - size.height - 12)
-        let vis = screen.visibleFrame
-        origin.x = min(max(origin.x, vis.minX + 8), vis.maxX - size.width - 8)
-        origin.y = min(max(origin.y, vis.minY + 8), vis.maxY - size.height - 8)
-        panel.setFrameOrigin(origin)
-    }
-}
-
-/// NSPanel that closes on Esc (cancelOperation) — Quick Look muscle memory —
-/// and remembers the size the user drags it to.
-private final class EscClosablePanel: NSPanel, NSWindowDelegate {
-    override var canBecomeKey: Bool { true }
-    override func cancelOperation(_ sender: Any?) { close() }
-
-    func windowDidEndLiveResize(_ notification: Notification) {
-        UserDefaults.standard.set("\(Int(frame.width))x\(Int(frame.height))",
-                                  forKey: FilePreviewPanelController.sizeKey)
-    }
-}
-
-// MARK: - Model
-
-@MainActor
-final class FilePreviewPanelModel: ObservableObject {
-    enum Phase {
-        case loading(path: String)
-        case loaded(FilePreviewData)
-        case failed(path: String, message: String)
-    }
-    @Published var phase: Phase = .loading(path: "")
-
-    private var task: Task<Void, Never>?
-
-    func load(path: String, line: Int?, context: PathPreviewContext) {
-        task?.cancel()
-        phase = .loading(path: path)
-        task = Task { [weak self] in
-            do {
-                let data = try await FilePreviewLoader.load(path: path, line: line, context: context)
-                guard !Task.isCancelled else { return }
-                self?.phase = .loaded(data)
-            } catch {
-                guard !Task.isCancelled else { return }
-                self?.phase = .failed(path: path, message: error.localizedDescription)
-            }
-        }
-    }
-}
-
-// MARK: - SwiftUI content
-
-struct FilePreviewPanelRoot: View {
-    @ObservedObject var model: FilePreviewPanelModel
-
-    var body: some View {
-        Group {
-            switch model.phase {
-            case .loading(let path):
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text(path)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .failed(let path, let message):
-                VStack(spacing: 10) {
-                    Image(systemName: "questionmark.folder")
-                        .font(.system(size: 34))
-                        .foregroundStyle(.secondary)
-                    Text(path)
-                        .font(.system(size: 12, design: .monospaced))
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                    Text(message)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .loaded(let data):
-                FilePreviewContentView(data: data)   // the detached window itself
-            }
-        }
-        .frame(minWidth: 420, minHeight: 280)
-    }
-}
-
+/// A file preview, as it appears in the side dock. There is no second place a
+/// preview can live: the floating "Open in Window" panel is gone — it was a
+/// whole parallel surface (its own controller, size memory, Esc handling) for
+/// a window that duplicated the dock tab you already had.
 struct FilePreviewContentView: View {
     let data: FilePreviewData
-    /// Non-nil in the dock → shows an "Open in Window" button that pops the tab
-    /// out into a floating window. Nil in that floating window itself.
-    var onDetach: (() -> Void)? = nil
-    /// The floating window closes on Esc; the docked view doesn't.
-    var showsEscHint: Bool = true
+    /// Where a file picked from a breadcrumb dropdown goes. Nil leaves the
+    /// crumbs as plain labels.
+    var onOpenPath: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
-            content
-                // Room under the transparent titlebar — only in the floating
-                // panel (onDetach nil); the dock has no titlebar.
-                .padding(.top, onDetach == nil ? 26 : 0)
+            header
             Divider()
-            footer
+            content
         }
     }
 
@@ -234,39 +78,385 @@ struct FilePreviewContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var footer: some View {
-        HStack(spacing: 8) {
-            Button("Copy Path") {
+    /// One bar carrying both jobs a preview header has: where this file IS
+    /// (clickable crumbs — the dock is a narrow column and hunting a sibling
+    /// through the tree tab meant losing the file you were reading), and what
+    /// you can do with it. The actions used to sit in a footer, which put the
+    /// two halves of "this file" at opposite ends of the panel.
+    private var header: some View {
+        HStack(spacing: 6) {
+            FilePreviewBreadcrumbs(data: data, onOpenPath: onOpenPath)
+            Spacer(minLength: 4)
+            actions
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .frame(height: 30)
+    }
+
+    private var actions: some View {
+        HStack(spacing: 1) {
+            actionButton("doc.on.doc", "Copy Path") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(data.resolvedPath, forType: .string)
             }
             if data.isLocal {
-                Button("Reveal in Finder") {
+                actionButton("folder", "Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting(
                         [URL(fileURLWithPath: data.resolvedPath)])
                 }
-                Button("Open") {
+                actionButton("arrow.up.forward.app", "Open") {
                     NSWorkspace.shared.open(URL(fileURLWithPath: data.resolvedPath))
                 }
             }
             // Deliberately not gated on what the panel above managed to
             // render: the files we can't preview are the ones worth exporting.
+            // Icon-only like its neighbours; it keeps its own progress and
+            // picker anchor, so it stays a real view rather than a menu item.
             if let share = FileShareButton(data: data) {
                 share
-            }
-            if let onDetach {
-                Button(action: onDetach) { Label("Open in Window", systemImage: "macwindow") }
-            }
-            Spacer()
-            if showsEscHint {
-                Text("esc to close")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    // Padding, not a fixed frame: mid-download this button
+                    // grows a progress bar and a Cancel, which a 22pt box
+                    // would clip.
+                    .padding(.horizontal, 5)
+                    .help("Share")
             }
         }
         .controlSize(.small)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+    }
+
+    private func actionButton(_ icon: String, _ help: String,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}
+
+// MARK: - Breadcrumbs
+
+/// The file's path as clickable crumbs, VS Code style: every crumb drops down
+/// its own directory, so switching to a sibling — the overwhelmingly common
+/// move while reading code — is one click from inside the file you're in.
+///
+/// The strip scrolls horizontally and stays pinned to its trailing end: the
+/// dock is a narrow column, and of `/Users/…/Sources/Views/Thing.swift` the
+/// part worth the width is the right-hand end.
+private struct FilePreviewBreadcrumbs: View {
+    let data: FilePreviewData
+    let onOpenPath: ((String) -> Void)?
+
+    @State private var openCrumb: Int?
+    /// The pane's directory — the same root the Files tab lists. Crumbs start
+    /// there, not at `/`: what you're navigating is a project, and eight
+    /// segments of machine-specific prefix in front of it are noise.
+    @State private var root: String?
+
+    private struct Crumb: Hashable {
+        let name: String
+        let path: String
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 1) {
+                    if !data.isLocal {
+                        Text(data.hostLabel)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.primary.opacity(0.06)))
+                            .help("This file lives on \(data.hostLabel)")
+                        separator
+                    }
+                    ForEach(Array(crumbs.enumerated()), id: \.offset) { index, crumb in
+                        if index > 0 { separator }
+                        crumbButton(index, crumb)
+                            .id(index)
+                    }
+                }
+                .padding(.trailing, 2)
+            }
+            .onAppear { scrollToFile(proxy) }
+            .onChange(of: data.resolvedPath) { _, _ in scrollToFile(proxy) }
+            .task(id: data.resolvedPath) { root = await data.context?.cwd() }
+        }
+    }
+
+    private var separator: some View {
+        Image(systemName: "chevron.compact.right")
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+    }
+
+    @ViewBuilder
+    private func crumbButton(_ index: Int, _ crumb: Crumb) -> some View {
+        let last = index == crumbs.count - 1
+        Button {
+            guard data.context != nil, onOpenPath != nil else { return }
+            openCrumb = index
+        } label: {
+            Text(crumb.name)
+                .font(.system(size: 11, weight: last ? .medium : .regular))
+                .foregroundStyle(last ? .primary : .secondary)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: Binding(get: { openCrumb == index },
+                                      set: { if !$0, openCrumb == index { openCrumb = nil } }),
+                 arrowEdge: .bottom) {
+            if let context = data.context, let onOpenPath {
+                DirectorySwitchPopover(source: context.source,
+                                       start: listingDirectory(index),
+                                       currentPath: data.resolvedPath,
+                                       onOpen: onOpenPath)
+            }
+        }
+        .help(crumb.path)
+    }
+
+    /// The path as crumbs, each carrying its own absolute path.
+    ///
+    /// Rooted at the pane's directory when the file is inside it — that root is
+    /// what the Files tab lists, and it's the only prefix a reader thinks in.
+    /// Everything above it collapses into a single `…` crumb, which still drops
+    /// down its parent, so going up stays one click without costing width.
+    /// A file outside the pane's directory (or a pane whose cwd we never
+    /// learned) falls back to the absolute path from `/`.
+    private var crumbs: [Crumb] {
+        let path = data.resolvedPath
+        var out: [Crumb] = []
+        var current = "/"
+        var rest = path
+
+        if let root, root != "/", root.hasPrefix("/"),
+           path == root || path.hasPrefix(root + "/") {
+            out.append(Crumb(name: "…", path: (root as NSString).deletingLastPathComponent))
+            out.append(Crumb(name: (root as NSString).lastPathComponent, path: root))
+            current = root
+            rest = String(path.dropFirst(root.count))
+        } else {
+            out.append(Crumb(name: "/", path: "/"))
+        }
+
+        for part in rest.split(separator: "/") {
+            current = (current as NSString).appendingPathComponent(String(part))
+            out.append(Crumb(name: String(part), path: current))
+        }
+        return out
+    }
+
+    /// Which directory a crumb drops down. Every crumb but the last IS a
+    /// directory; the last one is the file itself, and what you want there is
+    /// its siblings — the reason to click it at all.
+    private func listingDirectory(_ index: Int) -> String {
+        let crumb = crumbs[index]
+        if index == crumbs.count - 1, !data.stat.isDirectory {
+            return (crumb.path as NSString).deletingLastPathComponent
+        }
+        return crumb.path
+    }
+
+    private func scrollToFile(_ proxy: ScrollViewProxy) {
+        guard crumbs.count > 1 else { return }
+        proxy.scrollTo(crumbs.count - 1, anchor: .trailing)
+    }
+}
+
+/// One directory's contents, as a dropdown. Folders walk deeper in place (the
+/// crumb you opened is the way back up), files open and dismiss.
+private struct DirectorySwitchPopover: View {
+    let source: FilePreviewSource
+    let start: String
+    let currentPath: String
+    let onOpen: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var directory: String
+    @State private var entries: [DirectoryEntry] = []
+    @State private var truncated = false
+    @State private var loading = true
+    @State private var error: String?
+    @State private var filter = ""
+
+    /// Listed per directory. Bigger than the browse default because this list
+    /// is the only thing on screen and a source directory of 300 files is
+    /// ordinary; the truncation note below still tells the truth past it.
+    private static let maxEntries = 500
+
+    init(source: FilePreviewSource, start: String, currentPath: String,
+         onOpen: @escaping (String) -> Void) {
+        self.source = source
+        self.start = start
+        self.currentPath = currentPath
+        self.onOpen = onOpen
+        _directory = State(initialValue: start)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                if directory != start {
+                    Button {
+                        filter = ""
+                        directory = (directory as NSString).deletingLastPathComponent
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Back to \((directory as NSString).deletingLastPathComponent)")
+                }
+                Text(directory)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 7)
+
+            TextField("Filter", text: $filter)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+
+            Divider()
+            list
+        }
+        .frame(width: 300, height: 340)
+        .task(id: directory) { await load() }
+    }
+
+    @ViewBuilder private var list: some View {
+        if loading {
+            ProgressView().controlSize(.small)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error {
+            Text(error)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(visible, id: \.name) { entry in
+                        let full = (directory as NSString).appendingPathComponent(entry.name)
+                        DirectoryRow(entry: entry, isCurrent: full == currentPath) {
+                            if entry.isDir {
+                                filter = ""
+                                directory = full
+                            } else {
+                                onOpen(full)
+                                dismiss()
+                            }
+                        }
+                    }
+                    if visible.isEmpty {
+                        Text(entries.isEmpty ? "Empty folder" : "No matches")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                    }
+                    if truncated {
+                        Text("First \(Self.maxEntries) entries")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private var visible: [DirectoryEntry] {
+        let needle = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !needle.isEmpty else { return entries }
+        return entries.filter { $0.name.lowercased().contains(needle) }
+    }
+
+    private func load() async {
+        loading = true
+        error = nil
+        do {
+            let result = try await DirectoryListCache.shared.listing(
+                source: source, path: directory,
+                request: DirectoryListRequest(maxChildren: Self.maxEntries))
+            // Folders first, then names the way Finder orders them — the list
+            // is read by eye, not by byte.
+            entries = result.entries.sorted { a, b in
+                if a.isDir != b.isDir { return a.isDir }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+            truncated = result.truncated
+        } catch {
+            self.error = error.localizedDescription
+            entries = []
+            truncated = false
+        }
+        loading = false
+    }
+}
+
+private struct DirectoryRow: View {
+    let entry: DirectoryEntry
+    let isCurrent: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: entry.isDir ? "folder" : "doc.text")
+                    .font(.system(size: 10))
+                    .foregroundStyle(entry.isDir ? Color.accentColor : .secondary)
+                    .frame(width: 13)
+                Text(entry.name)
+                    .font(.system(size: 11))
+                    .foregroundStyle(isCurrent ? .primary : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                if isCurrent {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(hovering ? Color.primary.opacity(0.07) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 

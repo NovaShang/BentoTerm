@@ -238,6 +238,30 @@ final class PreviewDockModel: ObservableObject {
         selectedID = tab.id
     }
 
+    /// Follow a breadcrumb pick: this tab BECOMES the file that was picked.
+    /// Navigating a path is moving around inside one view of the filesystem —
+    /// piling up a tab per hop turns three clicks into three tabs to close.
+    /// Opening from the file tree still makes a tab; that's a deliberate
+    /// "keep this one open".
+    func replace(_ id: String, with path: String, line: Int? = nil,
+                 context: PathPreviewContext) {
+        // Already open elsewhere (including this very tab) — go there rather
+        // than end up with the same file twice.
+        if let existing = tabs.first(where: { $0.id == path })?.fileTab {
+            existing.reload()
+            selectedID = existing.id
+            return
+        }
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else {
+            open(path: path, line: line, context: context)
+            return
+        }
+        tabs[index].stop()          // the outgoing file stops being watched
+        let tab = PinnedPreview(path: path, line: line, context: context, initial: nil)
+        tabs[index] = .file(tab)
+        selectedID = tab.id
+    }
+
     /// Open a page in the dock.
     ///
     /// Unlike a file, the same URL twice is two legitimate tabs (two states of
@@ -452,21 +476,13 @@ struct PreviewDock: View {
         }
     }
 
-    /// Pop the tab out into the floating window (the optional detached surface)
-    /// and drop it from the dock — "move to window".
-    private func detach(_ tab: PinnedPreview) {
-        let pt = NSApp.keyWindow.map { NSPoint(x: $0.frame.midX, y: $0.frame.midY) }
-            ?? NSPoint(x: 400, y: 400)
-        FilePreviewPanelController.shared.present(
-            path: tab.path, line: tab.line, context: tab.context, nearScreenPoint: pt)
-        model.close(tab.id)
-    }
-
     @ViewBuilder private var content: some View {
         if let tab = model.selected {
             switch tab {
             case .file(let file):
-                PreviewDockContent(tab: file, onDetach: { detach(file) })
+                PreviewDockContent(tab: file,
+                                   onOpenPath: { model.replace(file.id, with: $0,
+                                                               context: file.context) })
                     .id(file.id)   // stable per tab → WebView reuse preserves scroll
             case .web(let web):
                 // Keyed on the tab's synthetic id, NOT its URL: navigating must
@@ -488,14 +504,15 @@ struct PreviewDock: View {
 
 private struct PreviewDockContent: View {
     @ObservedObject var tab: PinnedPreview
-    let onDetach: () -> Void
+    /// A file picked from the breadcrumb dropdown takes this tab over.
+    let onOpenPath: (String) -> Void
 
     var body: some View {
         switch tab.phase {
         case .loading:
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loaded(let data):
-            FilePreviewContentView(data: data, onDetach: onDetach, showsEscHint: false)
+            FilePreviewContentView(data: data, onOpenPath: onOpenPath)
         case .failed(let message):
             VStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")
