@@ -179,12 +179,16 @@ enum DockTab: @preconcurrency Identifiable {
         }
     }
 
-    /// Which machine this tab is showing. Nil for local files, where the
-    /// question does not arise.
-    var hostLabel: String? {
+    /// The hover text. Not a visible label: a strip this narrow cannot spend
+    /// room restating what the window title already says, but two dev servers
+    /// that both render as ":5173" do need SOMETHING that tells them apart,
+    /// and a tooltip costs nothing until it is asked for.
+    var tooltip: String {
         switch self {
-        case .file: return nil
-        case .web(let w): return w.host.isLocal ? nil : w.host.label
+        case .file(let p): return p.path
+        case .web(let w):
+            let address = w.displayURL?.absoluteString ?? "New Tab"
+            return w.host.isLocal ? address : "\(address) — \(w.host.label)"
         }
     }
 
@@ -240,8 +244,13 @@ final class PreviewDockModel: ObservableObject {
     /// one app), so this never dedupes — the browser convention, and the one
     /// that does not silently throw away what you were looking at.
     @discardableResult
-    func openWeb(url: URL, origin: LinkOrigin?) -> WebTab {
+    func openWeb(url: URL?, origin: LinkOrigin?) -> WebTab {
         let tab = WebTab(url: url, origin: origin)
+        // A page asking for a new tab (`target="_blank"`) gets a real one, on
+        // the same machine as the page that asked.
+        tab.onOpenInNewTab = { [weak self] target in
+            self?.openWeb(url: target, origin: origin)
+        }
         tabs.append(.web(tab))
         selectedID = tab.id
         return tab
@@ -320,7 +329,7 @@ struct PreviewDock: View {
                         PreviewDockTab(
                             title: "Files",
                             icon: "folder",
-                            hostLabel: nil,
+                            tooltip: "The focused pane's folder",
                             active: model.selected == nil,
                             closable: false,
                             onSelect: { model.selectedID = PreviewDockModel.treeTabID },
@@ -330,7 +339,7 @@ struct PreviewDock: View {
                             PreviewDockTab(
                                 title: tab.title,
                                 icon: tab.icon,
-                                hostLabel: tab.hostLabel,
+                                tooltip: tab.tooltip,
                                 active: tab.id == model.selectedID,
                                 closable: true,
                                 onSelect: { model.selectedID = tab.id },
@@ -363,12 +372,14 @@ struct PreviewDock: View {
         .frame(height: 36)
     }
 
-    /// "+" opens the palette rather than an empty tab: a blank browser tab has
-    /// nothing to show and nowhere to type, and ⌘P already knows how to take an
-    /// address. This is the discoverable door to the same room.
+    /// "+" makes a real, empty tab with the cursor in its address bar.
+    ///
+    /// It used to open the command palette, on the theory that a blank tab has
+    /// nothing to show. But "I know the URL I want" is the ordinary case, and
+    /// routing that through a file-search panel is a puzzle, not a shortcut.
     private var newTabButton: some View {
         Button {
-            BentoTerminalWindow.presentCommandPalette()
+            model.openWeb(url: nil, origin: BentoTerminalWindow.focusedLinkOrigin())
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 10, weight: .semibold))
@@ -377,7 +388,7 @@ struct PreviewDock: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Open a file or address (⌘P)")
+        .help("New tab")
     }
 
     /// True when the strip is wider than the space it has — i.e. some tab is
@@ -403,8 +414,10 @@ struct PreviewDock: View {
                     // icon so the list does not jump as the selection moves.
                     // The host is part of the label because with three agents on
                     // three boxes, ":5173" alone names three different pages.
-                    Label(tab.hostLabel.map { "\(tab.title) · \($0)" } ?? tab.title,
-                          systemImage: tab.id == model.selectedID ? "checkmark" : tab.icon)
+                    // The menu has room the strip does not, so the full
+                    // address goes here — this is where you look when two tabs
+                    // read the same.
+                    Label(tab.tooltip, systemImage: tab.id == model.selectedID ? "checkmark" : tab.icon)
                 }
             }
             Divider()
@@ -498,9 +511,7 @@ private struct PreviewDockContent: View {
 private struct PreviewDockTab: View {
     let title: String
     let icon: String
-    /// Which machine, when it is not this one. A dev server tab reads ":5173",
-    /// which names nothing on its own once two boxes are in play.
-    let hostLabel: String?
+    let tooltip: String
     let active: Bool
     let closable: Bool
     let onSelect: () -> Void
@@ -520,12 +531,6 @@ private struct PreviewDockTab: View {
                         .font(.system(size: 11))
                         .lineLimit(1)
                         .foregroundStyle(active ? .primary : .secondary)
-                    if let hostLabel {
-                        Text(hostLabel)
-                            .font(.system(size: 9))
-                            .lineLimit(1)
-                            .foregroundStyle(.tertiary)
-                    }
                 }
                 .padding(.leading, 9)
                 .padding(.trailing, closable ? 0 : 9)
@@ -553,6 +558,7 @@ private struct PreviewDockTab: View {
                 .fill(active ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.25)
                              : (hovering ? Color.primary.opacity(0.06) : .clear)))
         .onHover { hovering = $0 }
+        .help(tooltip)
     }
 }
 

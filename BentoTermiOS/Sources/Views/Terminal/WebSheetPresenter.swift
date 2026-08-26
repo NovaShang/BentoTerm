@@ -25,6 +25,12 @@ enum WebSheetPresenter {
     @discardableResult
     static func present(url: URL, origin: LinkOrigin?) -> Bool {
         let tab = WebTab(url: url, origin: origin)
+        // There is no tab strip on a phone, so a page asking for a new tab
+        // (`target="_blank"`) gets this sheet, pointed somewhere else. Silently
+        // doing nothing is the one option that reads as a broken app.
+        tab.onOpenInNewTab = { target in
+            _ = WebSheetPresenter.present(url: target, origin: origin)
+        }
 
         // A sheet is already up: swap its page rather than stacking a second
         // sheet on top of the first, which iOS allows and nobody wants.

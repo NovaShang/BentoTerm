@@ -216,7 +216,15 @@ public enum BentoTerminalWindow {
         // kind of search: the page used to answer ⌘P by focusing a filter over
         // its own dozen rows, which found strictly less than this does.
         if LauncherWindowController.presentPaletteIfKey() { return }
-        frontmostManager()?.tab.paneHost?.presentCommandPalette()
+        guard let manager = frontmostManager() else { return }
+        // A plain (no-tmux) tab has no pane host, and ⌘P used to silently do
+        // nothing there — including for the dock's "+" while that still called
+        // this. Fall back to the window itself so the panel always opens.
+        if let paneHost = manager.tab.paneHost {
+            paneHost.presentCommandPalette()
+        } else {
+            manager.presentCommandPaletteForPlainTab()
+        }
     }
 
     /// Open a file preview in the focused window's side dock (the default
@@ -1129,6 +1137,22 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     nonisolated static let defaultContentSize = NSSize(width: 980, height: 640)
 
     var activeTab: SessionTab? { tab }
+
+    /// ⌘P over a plain (no-tmux) tab, which has no pane host to build the
+    /// pane-flavoured sections. The file context comes from the tab's single
+    /// surface instead; everything else the panel offers still applies.
+    func presentCommandPaletteForPlainTab() {
+        let ctx = plainSurfaceContext
+        CommandPaletteController.shared.present(
+            fileContext: ctx,
+            hostLabel: ctx?.hostLabel ?? "This Mac",
+            staticSpecs: [],
+            from: nil)
+    }
+
+    private var plainSurfaceContext: PathPreviewContext? {
+        tab.plainSurface?.pathPreviewContext
+    }
 
     /// Open a preview in the side dock (expanding it) and bring the window front.
     func openPreview(path: String, line: Int?, context: PathPreviewContext) {

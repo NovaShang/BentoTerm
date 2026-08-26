@@ -19,6 +19,10 @@ import UIKit
 @MainActor
 public struct WebBrowserView: View {
     @ObservedObject var tab: WebTab
+    /// What is IN the field, which is not the same as where the tab is: while
+    /// you are typing, the tab has not gone anywhere yet.
+    @State private var typed: String = ""
+    @FocusState private var addressFocused: Bool
     /// Narrow enough that a desktop layout would be unreadable → render as a
     /// phone would. Widening the dock past this is what turns it back into a
     /// desktop viewport, which makes dragging the divider a responsive preview.
@@ -48,9 +52,22 @@ public struct WebBrowserView: View {
 
     // MARK: Chrome
 
-    /// Back / forward / reload, the machine this page lives on, its address,
-    /// and the way out to the real browser. No address bar to type in — that is
-    /// ⌘P's job, and it already knows how to take a URL.
+    /// Back / forward / reload, the address — editable, because knowing where
+    /// you want to go is the ordinary case — and the way out to the real
+    /// browser.
+    ///
+    /// The address shipped read-only on the theory that ⌘P was the address bar.
+    /// It isn't: nobody guesses that the file palette takes URLs, and the
+    /// palette is not even reachable from a pane with no tmux behind it. A
+    /// browser has an address bar.
+    ///
+    /// There is deliberately no "which machine" chip. It said "This Mac" almost
+    /// all the time, and on the occasions it said something else the window
+    /// title had already said it — every pane in a window is on the same host,
+    /// so the chip was restating the title in a smaller font. `localhost` here
+    /// means what it means in the terminal you are looking at, for the same
+    /// reason and with the same evidence. The host still gets named where it
+    /// actually carries information: in a failure.
     private var chrome: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
@@ -59,15 +76,10 @@ public struct WebBrowserView: View {
                 button(tab.isLoading ? "xmark" : "arrow.clockwise", enabled: true) {
                     Task { await tab.reload() }
                 }
-                hostChip
-                Text(addressText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                button("safari", enabled: true) {
-                    LinkRouter.open(tab.displayURL.absoluteString, forceSystem: true)
+                addressField
+                button("safari", enabled: tab.displayURL != nil) {
+                    guard let url = tab.displayURL else { return }
+                    LinkRouter.open(url.absoluteString, forceSystem: true)
                 }
             }
             .padding(.horizontal, 8)
@@ -84,22 +96,60 @@ public struct WebBrowserView: View {
         }
     }
 
-    /// Which machine this page is on. Present even for local pages: with three
-    /// panes on three boxes, "which one is this" is the first question.
-    private var hostChip: some View {
-        Text(tab.host.label)
-            .font(.system(size: 10, weight: .medium))
+    /// Accepts exactly what ⌘P accepts — `localhost:3000`, `github.com/x`, a
+    /// full URL — because they are the same parser. `localhost` means the
+    /// machine this tab's pane is on, the same one the window title names.
+    private var addressField: some View {
+        TextField("Address", text: $typed)
+            .textFieldStyle(.plain)
+            .font(.system(size: 11))
             .lineLimit(1)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
+            .focused($addressFocused)
+            .onSubmit {
+                // Only give up focus if we actually went somewhere. On an
+                // address that doesn't parse, blurring would revert the text
+                // and leave no trace that anything was wrong — the cursor
+                // staying put is the feedback.
+                guard PaletteURL.candidate(for: typed) != nil else { return }
+                let text = typed
+                Task { await tab.navigate(to: text) }
+                addressFocused = false
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            // It has to LOOK like a field. The first version of this chrome
+            // rendered the address as plain text and the complaint was not
+            // "the address bar is ugly", it was "I can't find where to type
+            // a URL" — a bare label reads as a caption, not an input.
             .background(
-                Capsule().fill(Color.accentColor.opacity(0.15)))
-            .foregroundStyle(Color.accentColor)
-            .help(tab.host.isLocal ? "On this device" : "Tunnelled over SSH")
-    }
-
-    private var addressText: String {
-        tab.displayURL.absoluteString
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.primary.opacity(0.06)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(addressFocused ? Color.accentColor.opacity(0.7)
+                                                 : Color.primary.opacity(0.10),
+                                  lineWidth: 1))
+            // While the field has focus it belongs to the typist; a page that
+            // finishes loading must not yank the text out from under them.
+            .onChange(of: tab.displayURL) { _, url in
+                guard !addressFocused else { return }
+                typed = url?.absoluteString ?? ""
+            }
+            .onChange(of: addressFocused) { _, focused in
+                // Leaving without submitting reverts to where the tab actually
+                // is, rather than stranding a half-typed address in the bar.
+                if !focused { typed = tab.displayURL?.absoluteString ?? "" }
+            }
+            .onAppear {
+                typed = tab.displayURL?.absoluteString ?? ""
+                // A "+" tab is a cursor waiting in an empty field. Consumed, so
+                // re-selecting the tab later does not steal focus again.
+                if tab.wantsAddressFocus {
+                    tab.wantsAddressFocus = false
+                    addressFocused = true
+                }
+            }
     }
 
     /// The one piece of plumbing worth surfacing: we could not get the same
@@ -188,7 +238,7 @@ private struct WebViewRepresentable: UIViewRepresentable {
 #endif
 
 @MainActor
-final class WebViewCoordinator: NSObject, WKNavigationDelegate {
+final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
     private let tab: WebTab
     private var observations: [NSKeyValueObservation] = []
     private var appliedCompact: Bool?
@@ -207,6 +257,10 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate {
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = self
+        // Without a UI delegate, WebKit silently drops every `target="_blank"`
+        // and `window.open` — the link just does nothing, which is exactly how
+        // this shipped.
+        view.uiDelegate = self
         view.allowsBackForwardNavigationGestures = true
         tab.webView = view
         apply(compact: compact, to: view)
@@ -219,19 +273,30 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate {
                 MainActor.assumeIsolated { self?.tab.noteNavigation(to: v.url, title: v.title) }
             },
         ]
-        Task { await tab.load() }
+        // UA first, THEN the first load — a request that goes out with the
+        // default UA is the one that gets the legacy bundle, and reloading
+        // afterwards would be visible.
+        Task {
+            await UserAgentCache.apply(to: view)
+            await tab.load()
+        }
         return view
     }
 
-    /// A narrow dock renders as a phone would; widening it hands the page a
-    /// desktop viewport. Only re-applied on a real change — resetting the
-    /// content mode reloads the page.
+    /// iOS only, and measured: `preferredContentMode` does not change the UA
+    /// on macOS (all three settings produce a byte-identical string), so it is
+    /// inert there and setting it would just be a lie in the code.
+    ///
+    /// Responsiveness on macOS does not need it. A site's `@media` queries key
+    /// on the actual view width, so a narrow dock already gets the narrow
+    /// layout — which is what makes dragging the divider a live preview.
     func apply(compact: Bool, to view: WKWebView) {
+        #if canImport(UIKit)
         guard appliedCompact != compact else { return }
         appliedCompact = compact
-        // Optional on macOS, where the content mode is a no-op anyway.
         view.configuration.defaultWebpagePreferences?
             .preferredContentMode = compact ? .mobile : .desktop
+        #endif
     }
 
     private func sync(_ view: WKWebView) {
@@ -278,5 +343,56 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { await tab.noteFailure(error) }
+    }
+}
+
+// MARK: - Links that ask for a new tab
+
+extension WebViewCoordinator {
+
+    /// `target="_blank"` / `window.open`.
+    ///
+    /// Returning nil (the default when there is no UI delegate at all) makes
+    /// the link do NOTHING, which reads as the app being broken. A page asking
+    /// for a new tab gets one; if the tab strip has not told us how to make one,
+    /// we at least honour the navigation in this tab rather than swallow it.
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard let url = navigationAction.request.url else { return nil }
+        if let open = tab.onOpenInNewTab {
+            open(url)
+        } else {
+            webView.load(URLRequest(url: url))
+        }
+        return nil   // we never hand WebKit a second view to manage
+    }
+}
+
+
+// MARK: - User agent
+
+/// Resolves the Safari-shaped UA once and reuses it.
+///
+/// The default has to be read out of a live WebView (`navigator.userAgent`);
+/// there is no supported synchronous getter, and the private `userAgent` key is
+/// not worth the risk. One round trip on the first tab, cached for the rest.
+@MainActor
+enum UserAgentCache {
+    /// Outer nil = not asked yet. Inner nil = asked, and the answer is "leave
+    /// WebKit's default alone".
+    private static var resolved: String??
+
+    static func apply(to view: WKWebView) async {
+        if let resolved {
+            view.customUserAgent = resolved
+            return
+        }
+        let raw = try? await view.evaluateJavaScript("navigator.userAgent")
+        guard let defaultUA = raw as? String, !defaultUA.isEmpty else { return }
+        let answer = BentoUserAgent.string(appending: defaultUA)
+        resolved = .some(answer)
+        view.customUserAgent = answer
     }
 }

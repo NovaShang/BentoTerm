@@ -30,7 +30,9 @@ public final class WebTab: ObservableObject, Identifiable {
     public let id: String
 
     /// What the user asked for, in the address the machine it came from uses.
-    @Published public private(set) var displayURL: URL
+    /// Nil on a tab opened with "+" — it has nothing to show until you type
+    /// somewhere to go.
+    @Published public private(set) var displayURL: URL?
     @Published public private(set) var title: String
     @Published public private(set) var isLoading = false
     @Published public private(set) var canGoBack = false
@@ -52,15 +54,38 @@ public final class WebTab: ObservableObject, Identifiable {
     /// as already-rewritten instead of being rewritten forever.
     private var localPorts: Set<Int> = []
 
+    /// A page asked to open in a NEW tab (`target="_blank"`, `window.open`).
+    /// Installed by whatever owns the tab strip; without it such a link does
+    /// nothing at all, which is how this shipped the first time.
+    public var onOpenInNewTab: (@MainActor (URL) -> Void)?
+
+    /// True until the address bar has been given its one chance to take focus —
+    /// a tab opened with "+" is a cursor waiting in an empty field.
+    @Published public var wantsAddressFocus: Bool
+
     /// Set by the view once its WKWebView exists.
     weak var webView: WKWebView?
 
-    public init(url: URL, origin: LinkOrigin?) {
+    public init(url: URL?, origin: LinkOrigin?) {
         self.id = "web:" + UUID().uuidString
         self.displayURL = url
         self.origin = origin
         self.host = origin?.host ?? .local(label: "This device")
-        self.title = WebTab.shortTitle(for: url)
+        self.title = url.map(WebTab.shortTitle(for:)) ?? "New Tab"
+        self.wantsAddressFocus = (url == nil)
+    }
+
+    /// Go to whatever was typed in the address bar.
+    ///
+    /// Parsed by the same `PaletteURL` the command palette uses, so
+    /// `localhost:3000`, `github.com/x` and a full URL all mean here what they
+    /// mean there — and `localhost` means the machine THIS TAB is on.
+    public func navigate(to text: String) async {
+        guard let url = PaletteURL.candidate(for: text) else { return }
+        displayURL = url
+        title = WebTab.shortTitle(for: url)
+        failure = nil
+        await load(url)
     }
 
     /// The tab strip's label: the host, or the port when the host is just
@@ -82,6 +107,7 @@ public final class WebTab: ObservableObject, Identifiable {
     /// Load `displayURL`, setting up a tunnel first if it points at a port on
     /// another machine.
     public func load() async {
+        guard let displayURL else { return }   // a blank "+" tab has nowhere to go yet
         failure = nil
         await load(displayURL)
     }
@@ -122,7 +148,7 @@ public final class WebTab: ObservableObject, Identifiable {
             let made = try await forwarder.forward(remotePort: port, on: host)
             forwards[port] = made
             localPorts.insert(made.localPort)
-            if forward == nil || port == displayURL.port { forward = made }
+            if forward == nil || port == displayURL?.port { forward = made }
             return made.localURL(replacing: url)
         } catch let error as PortForwardError {
             failure = WebTabFailure(error, host: host, port: port)
@@ -149,7 +175,7 @@ public final class WebTab: ObservableObject, Identifiable {
     func noteNavigation(to url: URL?, title pageTitle: String?) {
         if let url { displayURL = remoteFacing(url) }
         if let pageTitle, !pageTitle.isEmpty { title = pageTitle }
-        else { title = WebTab.shortTitle(for: displayURL) }
+        else if let displayURL { title = WebTab.shortTitle(for: displayURL) }
     }
 
     /// Put the remote port back into an address we rewrote, so the bar shows
