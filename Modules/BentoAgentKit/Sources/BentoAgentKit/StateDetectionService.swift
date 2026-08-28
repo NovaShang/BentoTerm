@@ -63,7 +63,24 @@ public final class StateDetectionService {
     static func isRuntimeCommand(_ command: String?) -> Bool {
         guard let command, !command.isEmpty else { return false }
         let name = (command as NSString).lastPathComponent
-        return runtimeCommands.contains(name.lowercased())
+        if runtimeCommands.contains(name.lowercased()) { return true }
+        // A bare version string is a process name that names nothing: Claude
+        // Code's native installer execs `versions/2.1.246`, so that is what
+        // tmux reports. Same class of pane as `node` — worth one screen probe
+        // to find out who it is.
+        return isVersionName(name)
+    }
+
+    /// `2.1.246`, `1.0`, `0.147.0` — digits and dots, nothing else.
+    /// Pure text, so it needs no isolation (the tests call it directly).
+    nonisolated static func isVersionName(_ name: String) -> Bool {
+        guard let first = name.first, first.isNumber else { return false }
+        var sawDot = false
+        for ch in name {
+            if ch == "." { sawDot = true; continue }
+            if !ch.isNumber { return false }
+        }
+        return sawDot
     }
 
     /// Compiled once — `replacingOccurrences(options: .regularExpression)`

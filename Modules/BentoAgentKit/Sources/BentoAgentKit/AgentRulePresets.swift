@@ -66,7 +66,29 @@ extension AgentRuleSet {
     static let claudeCode = AgentRuleSet(
         id: "claude-code",
         commandPatterns: ["claude"],
-        titleIdentity: ["Claude Code"],
+        // `claude` is only the process name on installs where the launcher IS
+        // the binary (Homebrew's cask). The native installer's launcher execs
+        // `~/.local/share/claude/versions/<version>`, so tmux reports
+        // `pane_current_command` as a bare version string — `2.1.246` — and
+        // nothing about it says "claude". Calibrated 2026-08-26 against a live
+        // remote host running 2.1.241 / 2.1.246 (fixtures: claude-remote-*),
+        // where every pane fell through to activity detection.
+        //
+        // The title glyphs are the way back in: `✳` at rest and the quartered
+        // circles while working are Claude's alone. Braille is deliberately NOT
+        // here — codex spins in braille too, and identity must not be a coin
+        // flip between two agents.
+        titleIdentity: ["Claude Code", "^\\s*\\x{2733}", "^\\s*[\\x{25D0}-\\x{25D3}]"],
+        // Last resort for a version-named pane whose title says neither (a
+        // fresh launch, or a title the user's shell overwrote). Only ever
+        // consulted for runtime-ish commands — see
+        // `StateDetectionService.isRuntimeCommand`.
+        // Only strings seen on a real Claude screen and on no other agent's.
+        // `esc to interrupt` is deliberately absent: codex prints it too at the
+        // top of a turn, and a wrong identity here STICKS for the rest of the
+        // session. `? for shortcuts` is out for the weaker reason that no
+        // capture we hold actually shows it.
+        screenIdentity: ["Welcome to Claude Code", "Run claude doctor", "\u{23F5}\u{23F5}"],
         rules: [
             // Working: animated spinner in the title. Highest confidence.
             // Braille is the spinner up to Claude Code 2.1.227; the quartered
@@ -82,6 +104,43 @@ extension AgentRuleSet {
             DetectRule(id: "footer_working", status: .working, priority: 1050,
                        region: .bottomNonEmptyLines(4),
                        clause: .containsAny(["esc to interrupt"])),
+
+            // Working, and on some installs the ONLY evidence there is: the
+            // live status line, `✻ Twisting… (34m 7s · ↓ 120.3k tokens)`.
+            //
+            // Two things it survives that the two rules above don't. The title
+            // spinner is absent on 2.1.24x — a remote host running 2.1.246 kept
+            // its title at `✳ <summary>` for a whole turn (sampled every 0.8s),
+            // so the highest-confidence signal simply isn't emitted. And on a
+            // pane narrower than the footer, `esc to interrupt` is ellipsized
+            // to `esc to inte…`, so `footer_working` misses. Without this rule
+            // both fall through to `idle_prompt_box` (priority 800) — the `❯`
+            // box is on screen the whole time a turn runs — and a working agent
+            // reads as idle, which is the one wrong answer that costs you the
+            // turn you were waiting for.
+            //
+            // Anchored on the elapsed timer in parentheses, so the past-tense
+            // line a finished turn leaves behind (`✻ Cogitated for 8m 40s`,
+            // no parens) can't match. Twelve lines because the status line
+            // floats: the capture that prompted this rule had an auto-update
+            // warning and a tip line under it, and a tool result or a recap
+            // block pushes it further still. (herdr reads 12 for the same rule;
+            // our own capture needed 7.)
+            // The second branch is the same line before the timer shows up:
+            // `✻ Twisting…` with nothing after it. Cross-referenced against
+            // herdr's field-tested claude manifest, with two deliberate
+            // differences. Its glyph class misses U+2733 `✳`, which our own
+            // capture shows Claude using — that frame would have gone
+            // unmatched. And its class also carries `*` and `·`, which we drop:
+            // a prose line that happens to start with a bullet and trail off in
+            // an ellipsis would read as a running turn, and here that costs
+            // more than the frames it buys.
+            DetectRule(id: "status_line_working", status: .working, priority: 1040,
+                       region: .bottomNonEmptyLines(12),
+                       clause: .any([
+                           .lineRegex("\\(\\d+[hms](?:\\s+\\d+[hms])*\\s*·"),
+                           .lineRegex("^\\s*[\\x{2722}\\x{2733}\\x{2736}\\x{273B}\\x{273D}]\\s+\\S.*…\\s*$"),
+                       ])),
 
             // Transcript viewer (ctrl+o) — a scrolling overlay, not a state
             // change. Skip so browsing history can't flip the pane state.

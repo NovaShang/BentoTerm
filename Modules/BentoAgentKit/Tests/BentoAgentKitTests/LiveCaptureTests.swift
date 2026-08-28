@@ -81,6 +81,104 @@ final class LiveCaptureTests: XCTestCase {
         return (agent, status, matched?.ruleID)
     }
 
+    // MARK: - Claude Code, native installer (2.1.241 / 2.1.246)
+
+    /// The identity bug, pinned: the native installer's launcher execs
+    /// `versions/2.1.246`, so tmux reports a bare version string as the
+    /// command. Captured 2026-08-26 from a live remote host where every Claude
+    /// pane was falling through to activity detection.
+    func testClaudePaneCanReportAVersionAsItsCommand() throws {
+        for name in ["claude-remote-working", "claude-remote-idle"] {
+            let command = try capture(name).command
+            XCTAssertTrue(StateDetectionService.isVersionName(command),
+                          "\(name): fixture no longer shows the version-named-binary case")
+            XCTAssertFalse(command.contains("claude"),
+                           "\(name): nothing in this command names the agent")
+        }
+    }
+
+    /// Working, with BOTH of the signals the rules used to rely on gone: the
+    /// title sits at `✳ <summary>` for the whole turn on 2.1.24x, and the
+    /// footer's `esc to interrupt` is ellipsized on a 76-column pane. The `❯`
+    /// box is on screen throughout, so without the status-line rule this reads
+    /// idle — the failure the user actually saw.
+    @MainActor
+    func testClaudeRemoteWorkingIsWorkingDespiteAnIdleTitle() throws {
+        let c = try capture("claude-remote-working")
+        XCTAssertTrue(c.title.hasPrefix("✳"), "fixture no longer shows the at-rest title")
+        XCTAssertFalse(c.screen.contains("esc to interrupt"),
+                       "fixture no longer shows the truncated footer")
+        let r = classify(c)
+        XCTAssertEqual(r.agent, "claude-code")
+        XCTAssertEqual(r.status, .working)
+        XCTAssertEqual(r.rule, "status_line_working")
+    }
+
+    @MainActor
+    func testClaudeRemoteIdleIsIdle() throws {
+        let r = classify(try capture("claude-remote-idle"))
+        XCTAssertEqual(r.agent, "claude-code", "an idle Claude must still be recognized as an agent")
+        XCTAssertEqual(r.status, .idle)
+    }
+
+    /// A finished turn leaves `✻ Cogitated for 8m 40s` on screen. It carries an
+    /// elapsed time like the live status line does, and must not read as work
+    /// still running — the parenthesis is what tells them apart.
+    func testFinishedTurnElapsedLineIsNotWorking() throws {
+        let c = try capture("claude-remote-idle")
+        XCTAssertTrue(c.screen.contains("Cogitated for"), "fixture no longer shows a finished turn")
+    }
+
+    /// The frame before the timer appears — `✻ Twisting…` and nothing else.
+    /// Hand-built, not captured: it is one animation frame wide, and the two
+    /// live captures we hold both landed on a frame that already had the timer.
+    @MainActor
+    func testStatusLineWithoutATimerIsStillWorking() throws {
+        let base = try capture("claude-remote-idle")
+        for glyph in ["✻", "✳", "✽"] {
+            let screen = base.screen.replacingOccurrences(
+                of: "✻ Cogitated for 8m 40s", with: "\(glyph) Twisting…")
+            let service = StateDetectionService()
+            let pane = TmuxPaneID(7)
+            _ = service.classifyAgent(command: base.command, title: base.title,
+                                      snapshot: nil, pane: pane, current: .idle)
+            let result = service.classifyAgent(command: base.command, title: base.title,
+                                               snapshot: screen, pane: pane, current: .idle)
+            guard case .state(.working) = result else {
+                return XCTFail("\(glyph): a status line with no timer must still read as working")
+            }
+        }
+    }
+
+    /// The reason `*` and `·` are not in that glyph class: an unfinished bullet
+    /// in the conversation must not read as a turn still running.
+    @MainActor
+    func testProseBulletEndingInAnEllipsisIsNotWorking() throws {
+        let base = try capture("claude-remote-idle")
+        let screen = base.screen.replacingOccurrences(
+            of: "✻ Cogitated for 8m 40s", with: "* and then the rest of it…")
+        let service = StateDetectionService()
+        let pane = TmuxPaneID(8)
+        _ = service.classifyAgent(command: base.command, title: base.title,
+                                  snapshot: nil, pane: pane, current: .idle)
+        let result = service.classifyAgent(command: base.command, title: base.title,
+                                           snapshot: screen, pane: pane, current: .idle)
+        guard case .state(.idle) = result else {
+            return XCTFail("a prose bullet must not read as working")
+        }
+    }
+
+    /// Identity via the title glyph, with a command that names nothing.
+    func testClaudeTitleGlyphsIdentifyTheAgent() {
+        for title in ["✳ some task", "◐ some task", "◓ some task"] {
+            XCTAssertEqual(detector.ruleSet(command: "2.1.246", title: title)?.id, "claude-code",
+                           "\(title) is Claude's own chrome")
+        }
+        // Braille belongs to codex; claiming it for Claude would make identity
+        // a coin flip between the two.
+        XCTAssertNotEqual(detector.ruleSet(command: "2.1.246", title: "⠴ work")?.id, "claude-code")
+    }
+
     // MARK: - Codex (codex-cli 0.147.0)
 
     /// The identity bug itself, pinned: homebrew's codex is a node wrapper, so
