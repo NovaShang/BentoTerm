@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The base Info.plist, merged with the keys Xcode generates from the
+  INFOPLIST_KEY_* build settings in project.yml.
+
+  It exists for exactly one reason: INFOPLIST_KEY_* only carries the keys
+  Apple has a build setting for. Sparkle's keys are not on that list, and a
+  setting Xcode doesn't recognise is dropped in silence — the app builds, the
+  updater comes up with no feed and no public key, and nothing anywhere says
+  why. Anything Apple-defined still belongs in project.yml next to the rest.
+-->
+<plist version="1.0">
+<dict>
+	<!-- The update feed is an asset ON the newest release, reached through
+	     GitHub's own /releases/latest/download redirect. Publishing a release
+	     is therefore publishing the feed: no second place to update, no Pages
+	     site to keep alive. -->
+	<key>SUFeedURL</key>
+	<string>https://github.com/NovaShang/BentoTerm/releases/latest/download/appcast.xml</string>
+	<!-- The public half of the EdDSA key the release workflow signs every
+	     archive with, and the whole reason this update channel can be trusted:
+	     Sparkle installs nothing that doesn't verify against it, so a hijacked
+	     release page or a tampered download is inert.
+
+	     The private half is the repo secret SPARKLE_PRIVATE_KEY, with a copy
+	     in the login Keychain and one alongside the Developer ID certs. LOSING
+	     IT MEANS NO EXISTING INSTALL CAN EVER BE UPDATED AGAIN — changing this
+	     key strands every copy already out there, because they check against
+	     the key THEY shipped with. -->
+	<key>SUPublicEDKey</key>
+	<string>GQdlUUq0q/cPJ/ymfftOUvylZIq5qayZb4rm+GvYxi8=</string>
+	<!-- Check on a schedule out of the box. Without this key Sparkle asks on
+	     first launch instead, in a modal alert that lands in the middle of our
+	     own first-run window. The switch is in Settings → Privacy. -->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<!-- Never install on its own. This app is holding live panes: tmux
+	     sessions survive a relaunch (their server's parent is launchd, not
+	     us), but anything running in a plain local pane does not. When to
+	     restart is the user's call. -->
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<!-- Don't send a system profile with the check. Sparkle's default is off
+	     already; it is spelled out because "what does this send?" is a
+	     question the Privacy panel answers, and the answer should be readable
+	     here too. -->
+	<key>SUSendProfileInfo</key>
+	<false/>
+</dict>
+</plist>

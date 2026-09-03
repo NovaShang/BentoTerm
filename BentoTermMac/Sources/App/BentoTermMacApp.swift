@@ -51,6 +51,11 @@ struct TerminalCommands: Commands {
             Button("Run Setup Again…") { Windows.show(.firstRun) }
         }
 
+        // Where every Mac app keeps it: straight under "About BentoTerm".
+        CommandGroup(after: .appInfo) {
+            CheckForUpdatesMenuItem()
+        }
+
         CommandMenu("Shell") {
             Button("Command Palette…") { BentoTerminalWindow.presentCommandPalette() }
                 .keyboardShortcut("p", modifiers: .command)

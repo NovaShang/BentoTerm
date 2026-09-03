@@ -28,6 +28,13 @@ on:
 permissions:
   contents: write
 
+env:
+  # The Sparkle release whose `sign_update` signs the archive. Kept in step
+  # with the framework version in project.yml — the signature format is stable
+  # across 2.x, but a tool and a framework that disagree is the kind of drift
+  # nobody notices until an update won't install.
+  SPARKLE_VERSION: "2.9.6"
+
 jobs:
   # Resolves the release tag once. Push events get it from github.ref_name;
   # workflow_dispatch reads the manual input.
@@ -156,7 +163,36 @@ jobs:
         run: |
           set -e
           app="build/Build/Products/Release/BentoTerm.app"
-          # Inner first: the bundled tmux (currently the only helper, but the
+
+          # Sparkle first, and inside-out. The framework arrives with its
+          # nested code — Updater.app, the Autoupdate binary, two XPC services
+          # — ADHOC-signed with no team identifier, and Xcode re-signs only the
+          # framework wrapper around them. Notarization rejects the whole
+          # bundle over any one of them, and the failure names a path inside a
+          # dependency rather than anything we wrote. Signing from the deepest
+          # item outward is required: sealing a container first and changing
+          # its contents afterwards invalidates the container.
+          fw="$app/Contents/Frameworks/Sparkle.framework"
+          if [ -d "$fw" ]; then
+            for nested in \
+              "$fw/Versions/"*/XPCServices/*.xpc \
+              "$fw/Versions/"*/Autoupdate \
+              "$fw/Versions/"*/Updater.app \
+              "$fw"; do
+              [ -e "$nested" ] || continue
+              # Versions/Current is a symlink to the real version directory, so
+              # the globs above list everything a second time. Signing the same
+              # bytes twice is wasted rather than wrong, but a log that looks
+              # like a mistake gets read as one.
+              case "$nested" in */Versions/Current/*) continue ;; esac
+              codesign --force --options=runtime --timestamp \
+                --keychain "${KEYCHAIN_PATH}" \
+                --sign "${SIGN_IDENTITY}" \
+                "$nested"
+            done
+          fi
+
+          # Then the bundled tmux (currently the only helper, but the
           # loop stays general). Hardened runtime is required for
           # notarization; --timestamp pins a secure timestamp, which is what
           # staples to. An empty helpers/ dir makes the glob literal, hence
@@ -282,6 +318,58 @@ jobs:
           (cd artifacts && shasum -a 256 BentoTerm-macos-arm64.zip > BentoTerm-macos-arm64.zip.sha256)
           (cd artifacts && shasum -a 256 BentoTerm-macos-arm64.dmg > BentoTerm-macos-arm64.dmg.sha256)
 
+      # ---- update feed ---------------------------------------------------
+      # Sign the archive with the EdDSA key whose public half is baked into the
+      # app, and hand the result to `publish`.
+      #
+      # This signature is what makes an update installable at all: Sparkle
+      # checks it against Info.plist's SUPublicEDKey and refuses everything
+      # else, so a release that skipped this step reaches nobody. Hence the
+      # hard failure on a missing secret rather than a warning — a silently
+      # feed-less release looks exactly like a healthy one until someone
+      # notices their app has stopped offering updates.
+      #
+      # The XML itself is assembled in `publish`, where the release notes
+      # exist. `sign_update` is a macOS binary, so the signing has to happen
+      # here on the Mac runner.
+      - name: Sign the update for Sparkle
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SPARKLE_PRIVATE_KEY:-}" ]; then
+            echo "::error::SPARKLE_PRIVATE_KEY is not set — every existing install would stop seeing updates" >&2
+            exit 1
+          fi
+          tools="${RUNNER_TEMP}/sparkle"
+          mkdir -p "$tools"
+          curl -fsSL -o "${RUNNER_TEMP}/sparkle.tar.xz" \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          tar -xf "${RUNNER_TEMP}/sparkle.tar.xz" -C "$tools"
+
+          key="${RUNNER_TEMP}/sparkle_ed.key"
+          printf '%s' "${SPARKLE_PRIVATE_KEY}" > "$key"
+          # Prints the enclosure's two attributes, already spelled the way the
+          # appcast wants them: sparkle:edSignature="…" length="…"
+          attrs="$("$tools/bin/sign_update" -f "$key" artifacts/BentoTerm-macos-arm64.zip)"
+          rm -f "$key"
+          case "$attrs" in
+            *edSignature=*) ;;
+            *) echo "::error::sign_update produced no signature: $attrs" >&2; exit 1 ;;
+          esac
+
+          # Version facts come out of the BUILT app, not out of the tag: the
+          # tag is what a human typed, and Sparkle compares CFBundleVersion.
+          plist="build/Build/Products/Release/BentoTerm.app/Contents/Info.plist"
+          jq -n \
+            --arg short "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" \
+            --arg build "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" \
+            --arg minOS "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$plist")" \
+            --arg attrs "$attrs" \
+            '{short:$short, build:$build, minOS:$minOS, attrs:$attrs}' \
+            > artifacts/sparkle-appcast.json
+          cat artifacts/sparkle-appcast.json
+
       - name: Tear down signing keychain
         if: always()
         run: |
@@ -311,12 +399,94 @@ jobs:
         run: |
           set -e
           tag="${{ needs.resolve-tag.outputs.tag }}"
+          # Not an asset: the Mac job's handoff for the step below. Moved out
+          # before the wildcard upload rather than filtered out of it, so a
+          # future asset can never be swept in by a pattern nobody re-reads.
+          mv artifacts/sparkle-appcast.json "${RUNNER_TEMP}/sparkle-appcast.json"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" \
               --title "$tag" \
               --generate-notes
           fi
           gh release upload "$tag" artifacts/* --clobber
+
+      # The update feed, published as an asset of the release it describes.
+      #
+      # Apps look for it at /releases/latest/download/appcast.xml, which GitHub
+      # redirects to the newest release's copy — so this file is both the feed
+      # and the announcement, and there is no separate thing to remember to
+      # update. It is written AFTER the release exists because the release
+      # notes are what goes in the update dialog, and `--generate-notes` writes
+      # them a moment ago.
+      - name: Publish the update feed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.resolve-tag.outputs.tag }}"
+          meta="${RUNNER_TEMP}/sparkle-appcast.json"
+          short="$(jq -r .short "$meta")"
+          build="$(jq -r .build "$meta")"
+          min_os="$(jq -r .minOS "$meta")"
+          attrs="$(jq -r .attrs "$meta")"
+
+          # The release body as HTML, because Sparkle renders the description
+          # in a web view and raw markdown there reads as punctuation soup.
+          # Best effort: a feed with plain-looking notes still updates people,
+          # so this must not be what fails a release.
+          body="$(gh release view "$tag" --json body --jq .body)"
+          jq -n --arg text "$body" \
+                '{text:$text, mode:"gfm", context:"${{ github.repository }}"}' \
+                > "${RUNNER_TEMP}/md.json"
+          notes="$(gh api -X POST /markdown --input "${RUNNER_TEMP}/md.json" 2>/dev/null || printf '%s' "$body")"
+
+          # `--generate-notes` produces a bare "Full Changelog" link when a
+          # release has no PRs behind it, which is every release here — fine on
+          # the releases page, useless in a "what's new" dialog. A thin body
+          # falls back to the commit subjects, which in this repo are written
+          # to be read by people.
+          if [ "${#body}" -lt 120 ]; then
+            prev="$(gh release list --limit 2 --json tagName --jq '.[1].tagName // empty')"
+            subjects=""
+            if [ -n "$prev" ]; then
+              subjects="$(gh api "repos/${{ github.repository }}/compare/${prev}...${tag}" \
+                            --jq '.commits[].commit.message | split("\n")[0]' \
+                          | grep -v '^chore(release)' || true)"
+            fi
+            if [ -n "$subjects" ]; then
+              notes="<ul>$(printf '%s\n' "$subjects" \
+                | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's|.*|<li>&</li>|' \
+                | tr -d '\n')</ul>"
+            fi
+          fi
+          # A literal "]]>" in the notes would end the CDATA section early and
+          # produce a feed no parser accepts.
+          notes="${notes//]]>/]]&gt;}"
+
+          repo_url="https://github.com/${{ github.repository }}"
+          cat > appcast.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>BentoTerm</title>
+              <link>${repo_url}/releases/latest/download/appcast.xml</link>
+              <description>Updates for BentoTerm</description>
+              <language>en</language>
+              <item>
+                <title>${short}</title>
+                <pubDate>$(date -R)</pubDate>
+                <sparkle:version>${build}</sparkle:version>
+                <sparkle:shortVersionString>${short}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>${min_os}</sparkle:minimumSystemVersion>
+                <link>${repo_url}/releases/tag/${tag}</link>
+                <description><![CDATA[${notes}]]></description>
+                <enclosure url="${repo_url}/releases/download/${tag}/BentoTerm-macos-arm64.zip" type="application/octet-stream" ${attrs} />
+              </item>
+            </channel>
+          </rss>
+          XML
+          python3 -c "import xml.dom.minidom,sys; xml.dom.minidom.parse('appcast.xml')"
+          gh release upload "$tag" appcast.xml --clobber
 
       # Point the Homebrew tap at the release we just published.
       #

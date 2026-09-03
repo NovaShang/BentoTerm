@@ -26,6 +26,11 @@ packages:
   Citadel:
     url: https://github.com/orlandos-nl/Citadel.git
     from: "0.7.0"
+  # Auto-update, fed by this repo's own GitHub releases. Mac target only —
+  # the iOS app updates through the App Store.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.9.6"
   BentoTmuxKit:
     path: Modules/BentoTmuxKit
   BentoAgentKit:
@@ -170,6 +175,7 @@ targets:
       - package: GhosttyKit
       - package: BentoSessionKit
       - package: BentoUISharedKit
+      - package: Sparkle
     settings:
       base:
         # Both platform targets ship the same user-facing product name,
@@ -190,6 +196,20 @@ targets:
         # (CFBundleShortVersionString). Bump alongside release tags.
         MARKETING_VERSION: "0.6.0"
         CURRENT_PROJECT_VERSION: 7
+        # ---- Sparkle auto-update ----------------------------------------
+        # The feed URL, the public signing key and the two behaviour switches
+        # live in BentoTermMac/Info.plist, NOT here: INFOPLIST_KEY_* only
+        # carries keys Apple has a build setting for, and anything else is
+        # dropped without a word (the app builds, the updater comes up with no
+        # feed, nothing says why). That file is merged with the keys generated
+        # from the settings below.
+        INFOPLIST_FILE: BentoTermMac/Info.plist
+        # Hardened runtime for everything Xcode signs during the build, not
+        # just the outer app the release workflow re-seals by hand. Sparkle
+        # embeds a framework with its own nested helpers (Autoupdate,
+        # Updater.app, XPC services), and notarization rejects the whole
+        # bundle if any one of them is signed without it.
+        ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: BentoTermMac/Resources/BentoTermMac.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

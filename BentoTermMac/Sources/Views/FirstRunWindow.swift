@@ -147,6 +147,12 @@ struct MacSetupPanel: View {
                 SettingsAboutSection(
                     icon: Image(nsImage: NSApp.applicationIconImage),
                     tagline: "A tmux-native terminal for the Mac.")
+                // Directly under the version it is about. Settings only —
+                // during setup there is nothing to update yet, and a fresh
+                // install asking about updates in its first minute is noise.
+                if context == .settings {
+                    SoftwareUpdateSection()
+                }
             }
         }
     }
