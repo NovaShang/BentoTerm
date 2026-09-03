@@ -231,6 +231,11 @@ public final class TerminalViewModel: ObservableObject {
     public var activeTransport: TerminalTransport { transport }
     let tmuxService = TmuxControlMode()
     public let stateDetection = StateDetectionService()
+    /// Panes whose agent has already been written to the recents store, keyed
+    /// pane+agent so a pane that changes hands (claude quits, codex starts in
+    /// the same pane) is remembered again. The poll runs every 2s and the
+    /// write costs a tmux round trip for the directory.
+    var rememberedAgentLaunches: Set<String> = []
     let environment: TerminalEnvironment
 
     /// For non-tmux fallback: direct terminal data callback. Setting this

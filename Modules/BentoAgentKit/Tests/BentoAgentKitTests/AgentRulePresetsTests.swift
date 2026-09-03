@@ -321,3 +321,44 @@ final class AgentRulePresetsTests: XCTestCase {
         XCTAssertEqual(r?.status, .working)
     }
 }
+
+// MARK: - Detection id → a command you can actually run
+
+extension AgentRulePresetsTests {
+    /// The recents rows promise "start this again", so the mapping may only
+    /// answer with a command we stand behind — never a guess assembled from
+    /// the detection id.
+    @MainActor
+    func testDetectionIDsMapOnlyToRunnableCommands() {
+        for set in AgentRuleSet.builtIns {
+            guard let preset = AgentPreset.forDetectionID(set.id) else { continue }
+            let command = preset.launchCommand
+            XCTAssertNotNil(command, "\(set.id) maps to \(preset.rawValue), which has no command")
+            XCTAssertFalse(command?.isEmpty ?? true, "\(set.id): empty command")
+        }
+    }
+
+    @MainActor
+    func testClaudeAndCodexMapToTheirCommands() {
+        XCTAssertEqual(AgentPreset.forDetectionID("claude-code")?.launchCommand, "claude")
+        XCTAssertEqual(AgentPreset.forDetectionID("codex")?.launchCommand, "codex")
+        XCTAssertEqual(AgentPreset.forDetectionID("opencode")?.launchCommand, "opencode")
+    }
+
+    /// Detected but never added to the launcher menu — their install commands
+    /// were never verified, so we have no command to offer.
+    @MainActor
+    func testAgentsWeCanOnlyRecognizeMapToNothing() {
+        for id in ["droid", "qwen", "grok", "kimi", "cline"] {
+            XCTAssertNil(AgentPreset.forDetectionID(id),
+                         "\(id) has detection rules but no verified launch command")
+        }
+    }
+
+    /// The shell and custom entries are not agents; a row built from either
+    /// would be a lie about what clicking it does.
+    func testShellAndCustomCarryNoLaunchCommand() {
+        XCTAssertNil(AgentPreset.none.launchCommand)
+        XCTAssertNil(AgentPreset.custom.launchCommand)
+    }
+}

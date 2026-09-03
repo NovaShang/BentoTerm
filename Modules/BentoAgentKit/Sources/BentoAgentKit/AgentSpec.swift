@@ -37,6 +37,41 @@ public enum AgentPreset: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+public extension AgentPreset {
+    /// The preset behind a detection rule set's id, or nil when we have no
+    /// launch command we can stand behind.
+    ///
+    /// Two different vocabularies meet here. Detection ids name what we can
+    /// RECOGNIZE on screen (droid, qwen, grok, kimi, cline have rules but were
+    /// never added to this menu — their install commands couldn't be verified),
+    /// while `AgentPreset` names what we can RUN. Only the overlap maps, and
+    /// the gap returns nil rather than a guess: this feeds a recents row whose
+    /// whole promise is that clicking it starts the agent again, and a
+    /// command that isn't real opens a pane that exits on sight.
+    static func forDetectionID(_ id: String) -> AgentPreset? {
+        switch id {
+        case "claude-code":  return .claudeCode
+        case "codex":        return .codex
+        case "opencode":     return .opencode
+        case "gemini":       return .gemini
+        case "cursor-agent": return .cursorAgent
+        case "copilot":      return .copilot
+        case "amp":          return .amp
+        case "hermes":       return .hermes
+        case "antigravity":  return .antigravity
+        default:             return nil
+        }
+    }
+
+    /// The command to run, when there is one worth remembering. `.none` and
+    /// `.custom` are excluded — an empty string is a shell, and nil is
+    /// whatever the user typed, neither of which names an agent.
+    var launchCommand: String? {
+        guard let command, !command.isEmpty else { return nil }
+        return command
+    }
+}
+
 /// How to install an agent: the official one-liner, whether it rides on
 /// Node/npm (a real prerequisite for novices — the curl installers don't),
 /// and the docs page for when the one-liner isn't enough.

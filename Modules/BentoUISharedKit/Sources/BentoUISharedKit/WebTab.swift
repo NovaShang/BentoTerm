@@ -63,8 +63,15 @@ public final class WebTab: ObservableObject, Identifiable {
     /// a tab opened with "+" is a cursor waiting in an empty field.
     @Published public var wantsAddressFocus: Bool
 
-    /// Set by the view once its WKWebView exists.
-    weak var webView: WKWebView?
+    /// The live WKWebView, **owned by the tab, not by the view**.
+    ///
+    /// The dock shows one tab at a time, so switching tabs takes the browser
+    /// view out of the hierarchy. If the WebView belonged to the view it would
+    /// die there and come back as a blank one that reloads from scratch —
+    /// scroll position, form input, and anything the page holds in memory gone
+    /// every time you glanced at a file. It lives as long as the tab does; the
+    /// view borrows it and hands it back.
+    var webView: WKWebView?
 
     public init(url: URL?, origin: LinkOrigin?) {
         self.id = "web:" + UUID().uuidString
@@ -222,7 +229,16 @@ public final class WebTab: ObservableObject, Identifiable {
     /// Closing the tab is what closes the tunnels. Nothing invisible keeps
     /// carrying traffic.
     public func stop() {
-        webView?.stopLoading()
+        if let webView {
+            webView.stopLoading()
+            // The tab owns it, so closing the tab is the only thing that
+            // releases it — detach the delegates first so a navigation already
+            // in flight can't call back into a tab that's on its way out.
+            webView.navigationDelegate = nil
+            webView.uiDelegate = nil
+            webView.removeFromSuperview()
+            self.webView = nil
+        }
         for f in forwards.values { PortForwarders.current?.close(f) }
         forwards.removeAll()
         localPorts.removeAll()

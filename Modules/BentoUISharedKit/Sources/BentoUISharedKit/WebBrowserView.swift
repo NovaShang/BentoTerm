@@ -213,14 +213,31 @@ private struct FailurePanel: View {
 
 // MARK: - The WKWebView itself
 
+/// The container the representable actually owns. The WKWebView inside it
+/// belongs to the `WebTab` and gets moved from one container to the next.
+///
+/// The dock shows one tab at a time, so selecting another tab takes this view
+/// out of the hierarchy. When the WebView was the representable's own view,
+/// that killed it: coming back gave you a fresh one that reloaded the URL from
+/// scratch, throwing away scroll position, half-filled forms and everything the
+/// page was holding. Parking the page instead is what makes going back to a tab
+/// feel like going back to it.
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+fileprivate typealias WebContainer = NSView
+#elseif canImport(UIKit)
+fileprivate typealias WebContainer = UIView
+#endif
+
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 private struct WebViewRepresentable: NSViewRepresentable {
     @ObservedObject var tab: WebTab
     let compact: Bool
 
-    func makeNSView(context: Context) -> WKWebView { context.coordinator.makeWebView(compact: compact) }
-    func updateNSView(_ view: WKWebView, context: Context) {
-        context.coordinator.apply(compact: compact, to: view)
+    func makeNSView(context: Context) -> WebContainer {
+        context.coordinator.makeContainer(compact: compact)
+    }
+    func updateNSView(_ view: WebContainer, context: Context) {
+        context.coordinator.update(container: view, compact: compact)
     }
     func makeCoordinator() -> WebViewCoordinator { WebViewCoordinator(tab: tab) }
 }
@@ -229,9 +246,11 @@ private struct WebViewRepresentable: UIViewRepresentable {
     @ObservedObject var tab: WebTab
     let compact: Bool
 
-    func makeUIView(context: Context) -> WKWebView { context.coordinator.makeWebView(compact: compact) }
-    func updateUIView(_ view: WKWebView, context: Context) {
-        context.coordinator.apply(compact: compact, to: view)
+    func makeUIView(context: Context) -> WebContainer {
+        context.coordinator.makeContainer(compact: compact)
+    }
+    func updateUIView(_ view: WebContainer, context: Context) {
+        context.coordinator.update(container: view, compact: compact)
     }
     func makeCoordinator() -> WebViewCoordinator { WebViewCoordinator(tab: tab) }
 }
@@ -242,13 +261,32 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
     private let tab: WebTab
     private var observations: [NSKeyValueObservation] = []
     private var appliedCompact: Bool?
+    /// The WebView this coordinator has already wired itself into. A
+    /// coordinator is made every time the browser view appears; the WebView it
+    /// finds waiting for it usually is not new.
+    private weak var adopted: WKWebView?
 
     init(tab: WebTab) {
         self.tab = tab
         super.init()
     }
 
-    func makeWebView(compact: Bool) -> WKWebView {
+    fileprivate func makeContainer(compact: Bool) -> WebContainer {
+        let container = WebContainer()
+        update(container: container, compact: compact)
+        return container
+    }
+
+    fileprivate func update(container: WebContainer, compact: Bool) {
+        let view = tab.webView ?? makeWebView()
+        adopt(view)
+        install(view, in: container)
+        apply(compact: compact, to: view)
+    }
+
+    /// First time this tab has ever been shown — everything below happens once
+    /// per tab, not once per look at it.
+    private func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
         // A persistent store, so logging into something once is once. Note this
         // is Bento's jar, not Safari's — WebKit gives no app access to Safari's,
@@ -256,23 +294,8 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         config.websiteDataStore = .default()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         let view = WKWebView(frame: .zero, configuration: config)
-        view.navigationDelegate = self
-        // Without a UI delegate, WebKit silently drops every `target="_blank"`
-        // and `window.open` — the link just does nothing, which is exactly how
-        // this shipped.
-        view.uiDelegate = self
         view.allowsBackForwardNavigationGestures = true
         tab.webView = view
-        apply(compact: compact, to: view)
-
-        observations = [
-            view.observe(\.isLoading, options: [.new]) { [weak self] v, _ in
-                MainActor.assumeIsolated { self?.sync(v) }
-            },
-            view.observe(\.title, options: [.new]) { [weak self] v, _ in
-                MainActor.assumeIsolated { self?.tab.noteNavigation(to: v.url, title: v.title) }
-            },
-        ]
         // UA first, THEN the first load — a request that goes out with the
         // default UA is the one that gets the legacy bundle, and reloading
         // afterwards would be visible.
@@ -281,6 +304,45 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
             await tab.load()
         }
         return view
+    }
+
+    /// Point a WebView's delegates and observations at THIS coordinator.
+    ///
+    /// Needed on every fresh coordinator, not just on a new WebView: the
+    /// previous one went away with the view, leaving a live page with nobody
+    /// listening to it.
+    private func adopt(_ view: WKWebView) {
+        guard adopted !== view else { return }
+        adopted = view
+        view.navigationDelegate = self
+        // Without a UI delegate, WebKit silently drops every `target="_blank"`
+        // and `window.open` — the link just does nothing, which is exactly how
+        // this shipped.
+        view.uiDelegate = self
+        observations = [
+            view.observe(\.isLoading, options: [.new]) { [weak self] v, _ in
+                MainActor.assumeIsolated { self?.sync(v) }
+            },
+            view.observe(\.title, options: [.new]) { [weak self] v, _ in
+                MainActor.assumeIsolated { self?.tab.noteNavigation(to: v.url, title: v.title) }
+            },
+        ]
+        // The page kept going while it was parked; catch the chrome up.
+        sync(view)
+        tab.noteNavigation(to: view.url, title: view.title)
+    }
+
+    fileprivate func install(_ view: WKWebView, in container: WebContainer) {
+        guard view.superview !== container else { return }
+        view.removeFromSuperview()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            view.topAnchor.constraint(equalTo: container.topAnchor),
+            view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
     }
 
     /// iOS only, and measured: `preferredContentMode` does not change the UA

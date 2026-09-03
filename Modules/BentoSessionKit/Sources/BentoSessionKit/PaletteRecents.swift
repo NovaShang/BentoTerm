@@ -81,6 +81,23 @@ public enum RecentLaunchPolicy {
         return !versionLike
     }
 
+    /// The subset worth offering as "start this agent again", most-recent
+    /// first. Pure so it can be tested without a store: `PaletteRecents` is a
+    /// UserDefaults-backed singleton, and a test that reached for it would be
+    /// reading whatever the developer ran this morning.
+    ///
+    /// A row with no command is a directory, not an agent — the plain
+    /// split-and-inherit already covers going back to a folder. A row with a
+    /// command we know can't run is dropped for the same reason the store
+    /// repairs those on load.
+    public static func agentLaunches(from launches: [LaunchRecord],
+                                     limit: Int = 6) -> [LaunchRecord] {
+        launches
+            .filter { $0.host == nil && !$0.command.isEmpty && isReplayableCommand($0.command) }
+            .prefix(max(0, limit))
+            .map { $0 }
+    }
+
     /// nil = don't remember this one.
     public static func record(dir: String?, command: String?, host: String? = nil) -> LaunchRecord? {
         guard let dir = normalizedDir(dir) else { return nil }
@@ -164,6 +181,16 @@ public final class PaletteRecents {
         guard let record = RecentLaunchPolicy.record(dir: dir, command: command, host: host)
         else { return }
         recordLaunch(record)
+    }
+
+    /// Recent launches that name a program, most-recent-first.
+    ///
+    /// This is the list behind "split one of these again". A row with no
+    /// command is a directory you worked in, which the ordinary
+    /// split-and-inherit already covers — offering it here would pad the menu
+    /// with rows that do nothing the button above them doesn't.
+    public func agentLaunches(limit: Int = 6) -> [LaunchEntry] {
+        RecentLaunchPolicy.agentLaunches(from: launches, limit: limit)
     }
 
     /// Most-recent-first, deduped on (dir, command, host).

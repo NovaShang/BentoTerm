@@ -104,3 +104,52 @@ import Testing
         #expect(try JSONDecoder().decode([LaunchRecord].self, from: data)[0].host == "box")
     }
 }
+
+// MARK: - "Start that agent again" rows
+
+@Suite("Recent agent rows")
+struct RecentAgentLaunchTests {
+    private func record(_ command: String, _ dir: String) -> LaunchRecord {
+        LaunchRecord(dir: dir, command: command)
+    }
+
+    @Test func aDirectoryWithNoCommandIsNotAnAgentRow() {
+        let rows = RecentLaunchPolicy.agentLaunches(from: [
+            record("", "/a/plain"), record("claude", "/a/repo"),
+        ])
+        #expect(rows.map(\.command) == ["claude"])
+    }
+
+    @Test func orderIsTheStoresOwn() {
+        let rows = RecentLaunchPolicy.agentLaunches(from: [
+            record("codex", "/b"), record("claude", "/a"),
+        ])
+        #expect(rows.map(\.dir) == ["/b", "/a"])
+    }
+
+    @Test func theCapHolds() {
+        let many = (0..<20).map { record("claude", "/repo/\($0)") }
+        #expect(RecentLaunchPolicy.agentLaunches(from: many).count == 6)
+        #expect(RecentLaunchPolicy.agentLaunches(from: many, limit: 2).count == 2)
+    }
+
+    /// A version-number "command" is what builds through 0.3.1 wrote for a
+    /// versioned install. It names no program, so a row promising to start it
+    /// again would open a pane that exits on sight.
+    @Test func aVersionNumberIsNotAProgram() {
+        let rows = RecentLaunchPolicy.agentLaunches(from: [
+            record("2.1.246", "/a/repo"), record("claude", "/a/repo"),
+        ])
+        #expect(rows.map(\.command) == ["claude"])
+    }
+
+    /// Remote rows are excluded while `host` is still reserved: the split they
+    /// would perform runs on the local machine, against a path from somewhere
+    /// else.
+    @Test func remoteRowsStayOut() {
+        let rows = RecentLaunchPolicy.agentLaunches(from: [
+            LaunchRecord(dir: "/a/repo", command: "claude", host: "mbp"),
+        ])
+        #expect(rows.isEmpty)
+    }
+}

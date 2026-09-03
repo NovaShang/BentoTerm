@@ -642,6 +642,18 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                               symbol: "plus.square.on.square"))
             menu.addItem(item("Split — Path & Command…", #selector(splitWithPathCommand(_:)),
                               symbol: "terminal"))
+            // The agents you've had open lately, ready to split off again.
+            // Nothing remembered yet → no separator either: a "Recent Agents"
+            // header over an empty stretch reads as broken, not as empty.
+            let recents = Self.recentAgentItems(target: self,
+                                                action: #selector(splitRecentLaunch(_:)))
+            if !recents.isEmpty {
+                menu.addItem(.separator())
+                let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                menu.addItem(header)
+                recents.forEach { menu.addItem($0) }
+            }
             menu.addItem(.separator())
             menu.addItem(layoutMenuItem())
             menu.addItem(.separator())
@@ -1049,6 +1061,42 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         Task { [viewModel] in await viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) }
     }
 
+    /// Split seeded from a remembered agent launch — the menu item carries the
+    /// record. This is the middle ground the split menu was missing: inheriting
+    /// the current pane is one extreme, typing a folder and a command into a
+    /// dialog is the other, and "the claude I had open in that repo yesterday"
+    /// is what you actually want most mornings.
+    @objc func splitRecentLaunch(_ sender: Any?) {
+        guard splitsAllowed,
+              let record = (sender as? NSMenuItem)?.representedObject as? LaunchRecord
+        else { return }
+        splitRecent(record)
+    }
+
+    /// Same split, reached from something that isn't a menu item (⌘P).
+    func splitRecent(_ record: LaunchRecord) {
+        guard splitsAllowed else { return }
+        Task { [viewModel] in
+            await viewModel.splitPane(horizontal: true,
+                                      seed: .custom(path: record.dir, command: record.command))
+        }
+    }
+
+    /// Rows for the remembered agents, for whichever menu is asking. Empty when
+    /// nothing has been remembered yet, and the caller drops the separator with
+    /// it — a lone "Recent Agents" header over nothing reads as broken.
+    static func recentAgentItems(target: AnyObject?, action: Selector) -> [NSMenuItem] {
+        PaletteRecents.shared.agentLaunches().map { record in
+            let item = NSMenuItem(title: "\(record.command)  ·  \(tildeAbbreviated(record.dir))",
+                                  action: action, keyEquivalent: "")
+            item.target = target
+            item.representedObject = record
+            item.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
+                                 accessibilityDescription: nil)
+            return item
+        }
+    }
+
     /// Split seeded with an explicit directory and command — the dialog itself
     /// is a native directory chooser (with a command popup baked in), seeded at
     /// the active pane's cwd. Same picker as List's New Window.
@@ -1136,6 +1184,24 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         if !launches.isEmpty {
             specs.append(PaletteSectionSpec(id: "launches", title: "Recent Launches",
                                             items: launches, limit: 6))
+        }
+
+        // The same remembered agents as the split menu, but searchable — which
+        // is the half a menu can't do once there are a dozen repos. Splits
+        // HERE, unlike Recent Launches above: same rows, different verb, so
+        // they say so in their titles rather than relying on the section
+        // header alone.
+        let splitRows = PaletteRecents.shared.agentLaunches().map { record in
+            PaletteItem(id: "split:\(record.command):\(record.dir)",
+                        title: "Split \(record.command)",
+                        subtitle: paletteAbbrev(record.dir),
+                        systemImage: "rectangle.split.2x1",
+                        matchText: "split \(record.command) \(record.dir)",
+                        action: .run { [weak self] in self?.splitRecent(record) })
+        }
+        if !splitRows.isEmpty, viewModel.sessionMode != .list {
+            specs.append(PaletteSectionSpec(id: "splitRecents", title: "Split Here",
+                                            items: splitRows, limit: 6))
         }
 
         // Navigation across all three tmux levels. The palette is the one place
@@ -1478,6 +1544,7 @@ public enum BentoPaneAction {
     public static let newTmuxWindow = #selector(GhosttyTiledPaneHost.newTmuxWindow(_:))
     public static let splitDuplicate = #selector(GhosttyTiledPaneHost.splitDuplicateCurrent(_:))
     public static let splitPathCommand = #selector(GhosttyTiledPaneHost.splitWithPathCommand(_:))
+    public static let splitRecent = #selector(GhosttyTiledPaneHost.splitRecentLaunch(_:))
     public static let newWindowDuplicate = #selector(GhosttyTiledPaneHost.newWindowDuplicate(_:))
     public static let newWindowPathCommand = #selector(GhosttyTiledPaneHost.newWindowPathCommand(_:))
     public static let findInPane = #selector(GhosttyTiledPaneHost.findInPane(_:))
@@ -1501,8 +1568,8 @@ public enum BentoPaneAction {
     ]
 
     /// Dispatch an action through the responder chain (nil target → focused host).
-    @MainActor public static func dispatch(_ selector: Selector) {
-        NSApp.sendAction(selector, to: nil, from: nil)
+    @MainActor public static func dispatch(_ selector: Selector, from sender: Any? = nil) {
+        NSApp.sendAction(selector, to: nil, from: sender)
     }
 }
 

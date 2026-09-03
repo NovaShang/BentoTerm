@@ -1010,6 +1010,20 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
                 symbol: nil, title: "New Pane at a Path…",
                 tip: "Split off a pane, choosing the folder and what to run in it.",
                 action: #selector(newPanePathCommandAction)))
+
+            // The middle ground between those two: not "whatever this pane is
+            // running" and not "type it all out", but the agent you already had
+            // open in that repo. Rows carry their record and are dispatched
+            // through the responder chain like every other pane action here.
+            let recents = GhosttyTiledPaneHost.recentAgentItems(
+                target: self, action: #selector(splitRecentAction(_:)))
+            if !recents.isEmpty {
+                menu.addItem(.separator())
+                let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                menu.addItem(header)
+                recents.forEach { menu.addItem($0) }
+            }
         }
 
         menu.addItem(.separator())
@@ -1077,6 +1091,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func newWindowPathCommandAction() { BentoPaneAction.dispatch(BentoPaneAction.newWindowPathCommand) }
     @objc private func newPaneDuplicateAction() { BentoPaneAction.dispatch(BentoPaneAction.splitDuplicate) }
     @objc private func newPanePathCommandAction() { BentoPaneAction.dispatch(BentoPaneAction.splitPathCommand) }
+    /// Forwarded with the menu item as the sender, because the record it
+    /// carries IS the argument.
+    @objc private func splitRecentAction(_ sender: Any?) {
+        BentoPaneAction.dispatch(BentoPaneAction.splitRecent, from: sender)
+    }
     @objc private func newSSHHostAction(_ sender: NSMenuItem) {
         if let host = sender.representedObject as? String { onNewSSHHost?(host) }
     }

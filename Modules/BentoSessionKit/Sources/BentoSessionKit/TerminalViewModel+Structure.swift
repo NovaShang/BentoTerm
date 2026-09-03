@@ -379,7 +379,9 @@ public extension TerminalViewModel {
     /// comes only from a launch the user spelled out — the Agent wizard, "Path &
     /// Command…", the directory panel — and those replay truthfully.
     internal func recordActivePaneLaunch() async {
-        guard usingTmux, let pane = activePaneID else { return }
+        // Local only, for the same reason `rememberAgentLaunch` is: the recents
+        // list is replayed against this machine's filesystem.
+        guard usingTmux, transport.isLocalLink, let pane = activePaneID else { return }
         let dir = await displayValue("#{pane_current_path}", pane: pane)
         PaletteRecents.shared.recordLaunchIfUseful(dir: dir, command: nil)
     }
