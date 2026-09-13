@@ -299,3 +299,83 @@ import BentoFoundationKit
         #expect(cands.first?.fastPath == false)
     }
 }
+
+// MARK: - Link lines (TUI hard-wrapped URLs)
+
+@Suite struct LinkLineChainTests {
+    /// logicalLine at the display cell of `sub`'s first occurrence in the
+    /// given LOGICAL line index.
+    private func linkLine(_ text: String, cols: Int, lineIdx: Int, at sub: String)
+        -> (line: String, cell: Int)? {
+        let t = PathHitTester(screenText: text, cols: cols)
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let line = lines[lineIdx]
+        guard let r = line.range(of: sub) else { return nil }
+        let cell = PathDetector.cellSpan(inLine: line, of: r).start
+        var absRow = 0
+        for l in lines[0..<lineIdx] { absRow += TerminalGeometry.visualRows(l, cols: cols) }
+        return t.logicalLine(absRow: absRow + cell / cols, col: cell % cols)
+    }
+
+    /// Captured from a 49-column phone pane: Claude Code word-wrapped the
+    /// artifact URL onto a second, indented line six columns short of the
+    /// width. Tapping either fragment must yield the whole URL.
+    @Test func claudeCodeWrappedURLJoinsFromEitherLine() throws {
+        let text = "  ⎿  Published ⧉\n"
+                 + "     https://claude.ai/code/artifact/b0d3c96\n"
+                 + "     8-7bef-43e4-8ccc-6916367f306b\n"
+                 + "\n  Read 1 file"
+        let whole = "https://claude.ai/code/artifact/b0d3c968-7bef-43e4-8ccc-6916367f306b"
+        let a = try #require(linkLine(text, cols: 49, lineIdx: 1, at: "artifact"))
+        #expect(a.line == whole)
+        #expect(a.cell == "https://claude.ai/code/".count)
+        let b = try #require(linkLine(text, cols: 49, lineIdx: 2, at: "43e4"))
+        #expect(b.line == whole)
+        #expect(b.cell == "https://claude.ai/code/artifact/b0d3c968-7bef-".count)
+    }
+
+    /// The other shape from the same pane: the first line fills the width
+    /// exactly and the tail is short.
+    @Test func fullWidthLineJoinsShortTail() throws {
+        let text = "⏺ 方案我写成了一页可读的设计文档：\n"
+                 + "  https://claude.ai/code/artifact/b0d3c968-7bef-4\n"
+                 + "  3e4-8ccc-6916367f306b\n"
+        let r = try #require(linkLine(text, cols: 49, lineIdx: 2, at: "8ccc"))
+        #expect(r.line == "https://claude.ai/code/artifact/b0d3c968-7bef-43e4-8ccc-6916367f306b")
+    }
+
+    /// A URL that ends a line near the width, followed by a sentence: the
+    /// next word would have fitted after it, so it is not a continuation.
+    @Test func nextSentenceIsNotAContinuation() throws {
+        let text = "  see https://example.com/docs/getting-star\n"
+                 + "  and then run the build"
+        // 43 cells used, "and" needs 4 more: fits in 48.
+        let r = try #require(linkLine(text, cols: 48, lineIdx: 0, at: "example"))
+        #expect(r.line == "  see https://example.com/docs/getting-star")
+        #expect(r.cell == 14)
+    }
+
+    /// Sentence punctuation on the URL ends the chain even when the next
+    /// word is too long to have fitted.
+    @Test func punctuationEndsTheChain() throws {
+        let text = "  see https://example.com/docs/getting-star.\n"
+                 + "  implementation-details follow"
+        let r = try #require(linkLine(text, cols: 46, lineIdx: 0, at: "example"))
+        #expect(r.line == "  see https://example.com/docs/getting-star.")
+    }
+
+    /// A bullet on the next line is the next list item.
+    @Test func listMarkerEndsTheChain() throws {
+        let text = "- https://example.com/a/very/long/path/here\n"
+                 + "- https://example.com/b"
+        let r = try #require(linkLine(text, cols: 44, lineIdx: 0, at: "example"))
+        #expect(r.line == "- https://example.com/a/very/long/path/here")
+    }
+
+    /// Plain lines are returned untouched, cell included.
+    @Test func unwrappedLineUnchanged() throws {
+        let r = try #require(linkLine("visit https://x.com now\nnext", cols: 80, lineIdx: 0, at: "x.com"))
+        #expect(r.line == "visit https://x.com now")
+        #expect(r.cell == 14)
+    }
+}

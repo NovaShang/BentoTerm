@@ -37,6 +37,10 @@ public struct WebBrowserView: View {
             VStack(spacing: 0) {
                 chrome
                 Divider()
+                if tab.popup != nil {
+                    popupBar
+                    Divider()
+                }
                 if let failure = tab.failure {
                     FailurePanel(failure: failure) {
                         Task { await tab.reload() }
@@ -94,6 +98,28 @@ public struct WebBrowserView: View {
                     .padding(.bottom, 5)
             }
         }
+    }
+
+    /// Shown while a sign-in window covers the page. The page is still there
+    /// underneath; this is the way back to it if the popup never closes
+    /// itself (a login abandoned halfway).
+    private var popupBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "rectangle.on.rectangle")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Text(tab.popupTitle.isEmpty ? "Sign-in window" : tab.popupTitle)
+                .font(.system(size: 11))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Close") { tab.closePopup() }
+                .font(.system(size: 11))
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Color.primary.opacity(0.04))
     }
 
     /// Accepts exactly what ⌘P accepts — `localhost:3000`, `github.com/x`, a
@@ -282,6 +308,13 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         adopt(view)
         install(view, in: container)
         apply(compact: compact, to: view)
+        // The popup sits over the page, in the same container, so it goes
+        // wherever the page goes — and disappears with it.
+        if let popup = tab.popup {
+            popup.navigationDelegate = self
+            popup.uiDelegate = self
+            install(popup, in: container)
+        }
     }
 
     /// First time this tab has ever been shown — everything below happens once
@@ -293,6 +326,10 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         // which is exactly why "Open in Safari" stays in the chrome.
         config.websiteDataStore = .default()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        // Off by default on iOS: a `window.open` that isn't inside the click
+        // itself (a sign-in button that opens its popup after a fetch) would be
+        // dropped silently. Popups are real windows here now, so let them.
+        config.preferences.javaScriptCanOpenWindowsAutomatically = true
         let view = WKWebView(frame: .zero, configuration: config)
         view.allowsBackForwardNavigationGestures = true
         tab.webView = view
@@ -391,6 +428,11 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if webView === tab.popup {
+            tab.popupTitle = webView.title.flatMap { $0.isEmpty ? nil : $0 }
+                ?? webView.url.map(WebTab.shortTitle(for:)) ?? ""
+            return
+        }
         tab.noteNavigation(to: webView.url, title: webView.title)
         sync(webView)
     }
@@ -400,10 +442,12 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
     /// answer than any panel we could put in front of it.
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
+        guard webView !== tab.popup else { return }   // the page underneath is fine
         Task { await tab.noteFailure(error) }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard webView !== tab.popup else { return }
         Task { await tab.noteFailure(error) }
     }
 }
@@ -414,21 +458,43 @@ extension WebViewCoordinator {
 
     /// `target="_blank"` / `window.open`.
     ///
-    /// Returning nil (the default when there is no UI delegate at all) makes
-    /// the link do NOTHING, which reads as the app being broken. A page asking
-    /// for a new tab gets one; if the tab strip has not told us how to make one,
-    /// we at least honour the navigation in this tab rather than swallow it.
+    /// Two different requests hide behind this one callback, and they need
+    /// opposite answers:
+    ///
+    /// - A link the user tapped that names a new tab. It wants a tab, and gets
+    ///   one from whoever owns the tab strip. Returning nil here used to be the
+    ///   whole implementation; nil with no delegate at all makes the link do
+    ///   NOTHING, which reads as the app being broken.
+    /// - Script opening a window — a sign-in popup. That one must be a child of
+    ///   the calling page, built from the configuration WebKit passes in (it
+    ///   refuses anything else), or there is no `window.opener` for the login
+    ///   to report back through. It is shown over this tab and closes itself.
     func webView(_ webView: WKWebView,
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard let url = navigationAction.request.url else { return nil }
-        if let open = tab.onOpenInNewTab {
-            open(url)
-        } else {
-            webView.load(URLRequest(url: url))
+        if navigationAction.navigationType == .linkActivated {
+            if let open = tab.onOpenInNewTab {
+                open(url)
+            } else {
+                webView.load(URLRequest(url: url))
+            }
+            return nil
         }
-        return nil   // we never hand WebKit a second view to manage
+        let popup = WKWebView(frame: .zero, configuration: configuration)
+        popup.customUserAgent = webView.customUserAgent
+        popup.navigationDelegate = self
+        popup.uiDelegate = self
+        tab.adoptPopup(popup)
+        if let container = webView.superview { install(popup, in: container) }
+        return popup   // WebKit loads the request into it
+    }
+
+    /// The popup called `window.close()` — a login that finished.
+    func webViewDidClose(_ webView: WKWebView) {
+        guard webView === tab.popup else { return }
+        tab.closePopup()
     }
 }
 

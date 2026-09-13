@@ -73,6 +73,20 @@ public final class WebTab: ObservableObject, Identifiable {
     /// view borrows it and hands it back.
     var webView: WKWebView?
 
+    /// A window the page opened with `window.open` — in practice a sign-in
+    /// popup (Google's, GitHub's, every OAuth button that isn't a redirect).
+    ///
+    /// It has to be a real child of THIS page, made from the configuration
+    /// WebKit hands over: that is what gives it a `window.opener`, and the
+    /// opener is how the popup reports the login back before closing itself.
+    /// Loading its URL in a new tab instead — which is what shipped — produced
+    /// a Google page that let you sign in and then went nowhere, because the
+    /// page that asked was no longer listening (on the phone it had been
+    /// replaced outright). Shown over the tab with a way to dismiss it; closed
+    /// for us when the page calls `window.close()`.
+    @Published var popup: WKWebView?
+    @Published var popupTitle: String = ""
+
     public init(url: URL?, origin: LinkOrigin?) {
         self.id = "web:" + UUID().uuidString
         self.displayURL = url
@@ -127,6 +141,24 @@ public final class WebTab: ObservableObject, Identifiable {
 
     func goBack() { webView?.goBack() }
     func goForward() { webView?.goForward() }
+
+    /// Take a popup on. Only one at a time: a page opening a second sign-in
+    /// window has abandoned the first.
+    func adoptPopup(_ view: WKWebView) {
+        closePopup()
+        popup = view
+        popupTitle = view.url.map(WebTab.shortTitle(for:)) ?? ""
+    }
+
+    func closePopup() {
+        guard let popup else { return }
+        popup.stopLoading()
+        popup.navigationDelegate = nil
+        popup.uiDelegate = nil
+        popup.removeFromSuperview()
+        self.popup = nil
+        popupTitle = ""
+    }
 
     private func load(_ url: URL) async {
         guard let resolved = await resolve(url) else { return }
@@ -229,6 +261,7 @@ public final class WebTab: ObservableObject, Identifiable {
     /// Closing the tab is what closes the tunnels. Nothing invisible keeps
     /// carrying traffic.
     public func stop() {
+        closePopup()
         if let webView {
             webView.stopLoading()
             // The tab owns it, so closing the tab is the only thing that

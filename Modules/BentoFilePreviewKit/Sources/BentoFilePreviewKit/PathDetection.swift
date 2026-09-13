@@ -743,9 +743,114 @@ public struct PathHitTester {
     /// a URL the path scanner could read whole was invisible to the link
     /// scanner. It also makes link hit-testing free of side effects: the old
     /// reader mutated the live selection to do its reading.
+    ///
+    /// Hard wraps are stitched too. A TUI word-wraps its own output at the
+    /// pane width — Claude Code prints a long URL as a real newline plus
+    /// indent, exactly like the paths `tapCandidates` reassembles:
+    ///
+    ///     ⎿  Published ⧉
+    ///        https://claude.ai/code/artifact/b0d3c96
+    ///        8-7bef-43e4-8ccc-6916367f306b
+    ///
+    /// `read_text` hands that back as two logical lines, so a per-line regex
+    /// sees a URL cut short on the first and no URL at all on the second.
+    /// When the tapped run abuts a wrap boundary, the abutting runs on the
+    /// neighbouring lines are joined onto it and the cell offset is moved
+    /// into the joined text. Unlike a path chain there is no stat oracle to
+    /// discard a wrong join, so a run is only taken as a continuation when it
+    /// could NOT have fitted on the line above — a wrapper never breaks
+    /// before a word that fits, so a short next word is the next sentence.
     public func logicalLine(absRow: Int, col: Int) -> (line: String, cell: Int)? {
         guard absRow >= 0, col >= 0, col < cols, let li = lineIndex(forRow: absRow) else { return nil }
-        return (lines[li], (absRow - starts[li]) * cols + col)
+        let line = lines[li]
+        let cell = (absRow - starts[li]) * cols + col
+        guard let anchor = Self.blankFreeRun(in: line, atCell: cell) else { return (line, cell) }
+
+        var pieces: [(li: Int, range: Range<String.Index>)] = [(li, anchor)]
+        var anchorIdx = 0
+        while pieces.count < 4 {
+            let head = pieces[0]
+            let headLine = lines[head.li]
+            guard head.li > 0,
+                  head.range.lowerBound == PathDetector.effectiveStart(of: headLine),
+                  !PathDetector.isLeadingListMarker(headLine[head.range],
+                                                    before: headLine[..<head.range.lowerBound])
+            else { break }
+            let prev = lines[head.li - 1]
+            guard let tail = Self.blankFreeTail(of: prev),
+                  continues(prev, with: headLine[head.range]) else { break }
+            pieces.insert((head.li - 1, tail), at: 0)
+            anchorIdx += 1
+        }
+        while pieces.count < 4 {
+            let last = pieces[pieces.count - 1]
+            let lastLine = lines[last.li]
+            guard last.range.upperBound == PathDetector.effectiveEnd(of: lastLine),
+                  last.li + 1 < lines.count else { break }
+            // A URL that ends in prose punctuation ended a sentence; the next
+            // line is the next one, however long its first word.
+            if let end = lastLine[last.range].last, ".,;:!?)".contains(end) { break }
+            let nextLine = lines[last.li + 1]
+            guard let next = Self.blankFreeHead(of: nextLine),
+                  !PathDetector.isLeadingListMarker(nextLine[next], before: nextLine[..<next.lowerBound]),
+                  continues(lastLine, with: nextLine[next]) else { break }
+            pieces.append((last.li + 1, next))
+        }
+        guard pieces.count > 1 else { return (line, cell) }
+
+        let joined = pieces.map { String(lines[$0.li][$0.range]) }.joined()
+        let anchorStart = PathDetector.cellSpan(inLine: line, of: anchor).start
+        let before = pieces[..<anchorIdx].reduce(0) {
+            $0 + TerminalGeometry.displayCells(String(lines[$1.li][$1.range]))
+        }
+        return (joined, before + (cell - anchorStart))
+    }
+
+    /// Whether `run`, on the line after `line`, is the wrapped remainder of
+    /// `line`'s last token: the line runs to the wrap width, and the run
+    /// would have overflowed had the wrapper kept it there (one space and the
+    /// run itself past the line's content). Both tests are needed — the
+    /// first alone joins the first word of the next sentence.
+    private func continues(_ line: String, with run: Substring) -> Bool {
+        guard reachesWrapBoundary(line) else { return false }
+        let used = PathDetector.cellSpan(inLine: line,
+                                         of: line.startIndex..<PathDetector.effectiveEnd(of: line)).end
+        return used + 1 + TerminalGeometry.displayCells(String(run)) > cols
+    }
+
+    /// Maximal run of non-blank characters covering `cell`, or nil. Wider
+    /// than `lexicalRun`: a URL keeps quotes and brackets glued to it and the
+    /// URL regex decides where it really ends.
+    private static func blankFreeRun(in line: String, atCell cell: Int) -> Range<String.Index>? {
+        guard let idx = PathDetector.index(inLine: line, atCell: cell),
+              !line[idx].isWhitespace else { return nil }
+        var lo = idx
+        while lo > line.startIndex, !line[line.index(before: lo)].isWhitespace {
+            lo = line.index(before: lo)
+        }
+        var hi = line.index(after: idx)
+        while hi < line.endIndex, !line[hi].isWhitespace { hi = line.index(after: hi) }
+        return lo..<hi
+    }
+
+    /// The non-blank run at the effective start of `line`, or nil.
+    private static func blankFreeHead(of line: String) -> Range<String.Index>? {
+        let start = PathDetector.effectiveStart(of: line)
+        guard start < line.endIndex else { return nil }
+        var hi = start
+        while hi < line.endIndex, !line[hi].isWhitespace { hi = line.index(after: hi) }
+        return start..<hi
+    }
+
+    /// The non-blank run abutting the effective end of `line`, or nil.
+    private static func blankFreeTail(of line: String) -> Range<String.Index>? {
+        let end = PathDetector.effectiveEnd(of: line)
+        guard end > line.startIndex else { return nil }
+        var lo = end
+        while lo > line.startIndex, !line[line.index(before: lo)].isWhitespace {
+            lo = line.index(before: lo)
+        }
+        return lo..<end
     }
 
     /// Candidate roots for relative fragments, gleaned from absolute / `~`
