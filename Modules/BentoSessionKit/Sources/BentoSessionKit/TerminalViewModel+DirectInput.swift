@@ -378,6 +378,14 @@ extension TerminalViewModel {
             if let raw = clean.data(using: .utf8) {
                 stateDetection.recordOutput(pane: paneVM.paneID, data: raw)
             }
+            // The program may have flipped bracketed paste while we were away
+            // (an agent started or exited); the surface still holds the old
+            // mode. Same seed as a fresh pane.
+            let bp = await tmuxService.send(.displayMessage(format: "#{bracket_paste_flag}", target: paneVM.paneID))
+            let flag = bp.isError ? nil : Substring(bp.output.trimmingCharacters(in: .whitespacesAndNewlines))
+            if let mode = Self.bracketedPasteSeed(flag: flag) {
+                paneVM.feedData(mode)
+            }
         }
         await updatePaneStates()
     }

@@ -304,13 +304,24 @@ extension TerminalViewModel {
                 // Fields are SPACE-separated, never ";": ";" is tmux's command
                 // separator and would split display-message into two commands; the
                 // space also makes the format a quoted single arg (see escapeArg).
-                let cur = await tmuxService.send(.displayMessage(format: "#{cursor_y} #{cursor_x}", target: paneVM.paneID))
+                //
+                // The same query carries the pane's bracketed-paste mode. The
+                // snapshot is text only: a program that enabled `?2004h` before
+                // this surface existed (a Claude Code that was already running
+                // when we attached) never gets to tell the engine, so a
+                // multi-line paste went out as raw newlines — Enter per line.
+                let cur = await tmuxService.send(.displayMessage(
+                    format: "#{cursor_y} #{cursor_x} #{bracket_paste_flag}", target: paneVM.paneID))
                 let fields = cur.isError ? [] : cur.output
                     .trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ")
-                if fields.count == 2, let cy = Int(fields[0]), let cx = Int(fields[1]),
+                if fields.count >= 2, let cy = Int(fields[0]), let cx = Int(fields[1]),
                    let cup = "\u{1b}[\(cy + 1);\(cx + 1)H".data(using: .utf8) {
                     paneVM.feedData(cup)
                     DIAG("seed \(paneVM.paneID) CURSOR restore y=\(cy) x=\(cx)")
+                }
+                if let mode = Self.bracketedPasteSeed(flag: fields.count >= 3 ? fields[2] : nil) {
+                    paneVM.feedData(mode)
+                    DIAG("seed \(paneVM.paneID) bracketed paste=\(fields[2])")
                 }
                 seeded = true
                 break
@@ -320,6 +331,19 @@ extension TerminalViewModel {
             }
         }
         await updatePaneStates()
+    }
+
+    /// The `?2004h` / `?2004l` that puts a surface's bracketed-paste mode where
+    /// tmux says the pane's is (`#{bracket_paste_flag}`). tmux -CC does stream
+    /// the program's own mode set live, but only from the moment we attach; a
+    /// seed replays text, not modes. A tmux too old to know the format expands
+    /// it to nothing → nil, leave the engine's state alone.
+    static func bracketedPasteSeed(flag: Substring?) -> Data? {
+        switch flag {
+        case "1": return Data("\u{1b}[?2004h".utf8)
+        case "0": return Data("\u{1b}[?2004l".utf8)
+        default: return nil
+        }
     }
 
 }
