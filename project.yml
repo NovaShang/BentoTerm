@@ -123,20 +123,19 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "BentoTerm"
         PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.app
         # App version surfaced in the Settings About block and reported by
-        # Telemetry (CFBundleShortVersionString). Keep in step with the Mac
-        # target's MARKETING_VERSION — bump alongside release tags.
+        # Telemetry (CFBundleShortVersionString). Bump alongside release tags.
         #
-        # Deliberately still 0.1.1 while the Mac target has moved on: 0.1.1 was
-        # rejected (guideline 2.1, the reviewer could not reach a host) and is
-        # being resubmitted, and a build whose version string has moved on
-        # cannot attach to that version in App Store Connect. Bump to 0.2.0
-        # once 0.1.1 has cleared review.
-        MARKETING_VERSION: "0.1.1"
+        # It does not track the Mac target's version: the two ship through
+        # different doors (a `v*` tag releases only the Mac) and App Store
+        # Connect pins a build to the version string it was built with.
+        # 0.1.1 cleared review and went on sale 2026-08-18; 0.2.0 is the
+        # TestFlight train after it.
+        MARKETING_VERSION: "0.2.0"
         # Build number, distinct from MARKETING_VERSION and never reused: App
         # Store Connect rejects an upload whose (version, build) pair it has
-        # already seen. Builds 1 (2026-08-03), 2 (2026-08-06) and 3
-        # (2026-08-14, the one attached to 0.1.1 now) are spent — hence 4.
-        CURRENT_PROJECT_VERSION: 4
+        # already seen. Builds 1 (2026-08-03), 2 (2026-08-06), 3 (2026-08-14)
+        # and 4 (2026-08-16, the one 0.1.1 shipped with) are spent — hence 5.
+        CURRENT_PROJECT_VERSION: 5
 
   BentoTermTests:
     type: bundle.unit-test
@@ -194,8 +193,8 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         # App version surfaced in Finder/About and reported by Telemetry
         # (CFBundleShortVersionString). Bump alongside release tags.
-        MARKETING_VERSION: "0.6.0"
-        CURRENT_PROJECT_VERSION: 7
+        MARKETING_VERSION: "0.7.0"
+        CURRENT_PROJECT_VERSION: 8
         # ---- Sparkle auto-update ----------------------------------------
         # The feed URL, the public signing key and the two behaviour switches
         # live in BentoTermMac/Info.plist, NOT here: INFOPLIST_KEY_* only

@@ -95,6 +95,7 @@
 		CF9017468025B5A5759689A6 /* BentoFoundationKit in Frameworks */ = {isa = PBXBuildFile; productRef = 61877E38589BE298DB19F0B9 /* BentoFoundationKit */; };
 		D76D3446CE6AD7CDB666ACF4 /* MapleMono-NF-CN-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 09E5962AF470459BAAD68188 /* MapleMono-NF-CN-Regular.ttf */; };
 		D81D7D181DD8DEBDFDDBC5B6 /* SetupPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BE19F47270497DB48FCEFEA /* SetupPanels.swift */; };
+		D89E5EAE6757BEE306FEB206 /* UpdateFeedPlistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322E184A2223B943F665C529 /* UpdateFeedPlistTests.swift */; };
 		D8F2CF6191D71A46645E905F /* AggregateLiveActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2FD9EC7C56ACAE8C00B21DC /* AggregateLiveActivityController.swift */; };
 		D91A2F0B90BCAE4198E80791 /* BentoTermMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BF84CFBF93345463C8E1B86 /* BentoTermMacApp.swift */; };
 		D93760E8F2BD1A183B59EB9C /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E804089DD209F7C46B4099B9 /* KeychainService.swift */; };
@@ -153,6 +154,7 @@
 		27D86F2E4B8D192F26BA4668 /* AppUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdater.swift; sourceTree = "<group>"; };
 		290C740D8E9D4EB5520195EF /* TmuxResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmuxResolver.swift; sourceTree = "<group>"; };
 		31809EE7FD547FC85DF4F628 /* SSHKeyGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHKeyGenerator.swift; sourceTree = "<group>"; };
+		322E184A2223B943F665C529 /* UpdateFeedPlistTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateFeedPlistTests.swift; sourceTree = "<group>"; };
 		3584533185D6686FE3BA1548 /* GhosttyTiledPaneHost_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyTiledPaneHost_macOS.swift; sourceTree = "<group>"; };
 		3645AA617BF76F6076FAD817 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		3A5DE5DE84EA3CF488E80469 /* SSHService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHService.swift; sourceTree = "<group>"; };
@@ -428,6 +430,7 @@
 				F6BF81C6F8E8DCF8DF46D418 /* OpenTargetsMacTests.swift */,
 				F3D1B826E7150998CF4FA1BB /* PreviewDockModelTests.swift */,
 				4D474D020DBC9FFCE14875D1 /* RemoteTmuxSessionsTests.swift */,
+				322E184A2223B943F665C529 /* UpdateFeedPlistTests.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -819,6 +822,7 @@
 				DBE9099B783192484E965E16 /* OpenTargetsMacTests.swift in Sources */,
 				DC68501D8E3453C185AFCAD2 /* PreviewDockModelTests.swift in Sources */,
 				918F6CE6C34D9D282F317765 /* RemoteTmuxSessionsTests.swift in Sources */,
+				D89E5EAE6757BEE306FEB206 /* UpdateFeedPlistTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -967,7 +971,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BentoTermiOS/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
@@ -979,7 +983,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.1;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.app;
 				PRODUCT_NAME = BentoTerm;
 				SDKROOT = iphoneos;
@@ -1086,7 +1090,7 @@
 				CODE_SIGN_ENTITLEMENTS = BentoTermMac/Resources/BentoTermMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BentoTermMac/Info.plist;
@@ -1099,7 +1103,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.6.0;
+				MARKETING_VERSION = 0.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.mac;
 				PRODUCT_NAME = BentoTerm;
 				SDKROOT = macosx;
@@ -1177,7 +1181,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BentoTermiOS/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = BentoTerm;
@@ -1189,7 +1193,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.1;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.app;
 				PRODUCT_NAME = BentoTerm;
 				SDKROOT = iphoneos;
@@ -1204,7 +1208,7 @@
 				CODE_SIGN_ENTITLEMENTS = BentoTermMac/Resources/BentoTermMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BentoTermMac/Info.plist;
@@ -1217,7 +1221,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.6.0;
+				MARKETING_VERSION = 0.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.mac;
 				PRODUCT_NAME = BentoTerm;
 				SDKROOT = macosx;
