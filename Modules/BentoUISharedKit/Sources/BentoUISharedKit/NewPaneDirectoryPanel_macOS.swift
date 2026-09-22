@@ -101,11 +101,9 @@ public func presentNewPaneDirectoryPanel(
         panel.directoryURL = URL(fileURLWithPath: (initialDirectory as NSString).expandingTildeInPath)
     }
     guard panel.runModal() == .OK, let url = panel.url else { return }
-    // Every caller of this panel (Split, New Window from the sidebar, New
-    // Window from the toolbar) is CREATING something at a directory the user
-    // just picked by hand — the strongest possible signal that they'll want it
-    // again. Recording here covers all of them at once.
-    PaletteRecents.shared.recordLaunchIfUseful(dir: url.path, command: accessory.chosenCommand)
+    // Not recorded here: every caller feeds `onCreate` into a `.custom` seed,
+    // and `TerminalViewModel.resolveSeed` records that one under the session's
+    // host. A record here would be host-blind and file the same launch twice.
     onCreate(url.path, accessory.chosenCommand)
 }
 #endif

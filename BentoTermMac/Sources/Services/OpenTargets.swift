@@ -74,7 +74,11 @@ public final class OpenTargetProvider {
     }
 
     public func recentTargets() -> [OpenTarget] {
-        launchSource().map { record in
+        // Local rows only: a target opens a session on the LOCAL server (see
+        // `route`), and a directory remembered on an ssh host names nothing
+        // here. Remote rows are offered by the split menus of a window
+        // attached to that host instead.
+        launchSource().filter { $0.host == nil }.map { record in
             let program = record.command.isEmpty ? "shell" : record.command
             let where_ = tildeAbbreviated(record.dir)
             return OpenTarget(kind: .recentLaunch(record),
@@ -127,7 +131,7 @@ public final class OpenTargetProvider {
             return .sshShell(alias: alias)
 
         case .recentLaunch(let record):
-            // Local only for now (`host` is reserved, never written).
+            // `recentTargets` never offers a remote row; this is the backstop.
             guard record.host == nil else { return nil }
             let name = TmuxSessionNaming.sessionName(
                 forDirectory: record.dir, existing: Set(sessionSource()))

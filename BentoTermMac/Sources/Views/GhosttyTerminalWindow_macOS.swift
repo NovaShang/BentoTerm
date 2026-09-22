@@ -1473,6 +1473,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// a window opened from a tmux command line shows up here too.
     private func rebindActiveToolbar(_ tab: SessionTab) {
         activeCancellables.removeAll()
+        toolbar.launchHost = tab.viewModel.launchHost
         tab.viewModel.$windows
             .combineLatest(tab.viewModel.$activeWindowID)
             .receive(on: RunLoop.main)

@@ -224,6 +224,11 @@ public final class TerminalViewModel: ObservableObject {
     // module-local here before and shadowed it).
     public let host: BentoFoundationKit.Host
     let transport: TerminalTransport
+    /// The machine a remembered launch from this session belongs to, as
+    /// `LaunchRecord.host` spells it: nil on this Mac, the host's name (the
+    /// ssh alias, on macOS) over a link. Both the recording and the recents
+    /// menus key on it, so a remote window remembers and offers its own rows.
+    public var launchHost: String? { transport.isLocalLink ? nil : host.displayName }
     /// The live transport, exposed for app-level features that need
     /// transport-specific capabilities (path-preview's file fetch picks its
     /// source off the concrete SSH client, which can open an SFTP channel;

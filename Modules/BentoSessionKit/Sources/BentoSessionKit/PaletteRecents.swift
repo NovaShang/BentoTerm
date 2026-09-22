@@ -5,17 +5,18 @@ import Foundation
 /// definition. This file owns it so the shared engine (TerminalViewModel
 /// records launches) and the macOS palette can share the same store.
 ///
-/// `host` is nil for everything today and means "this Mac". It exists NOW,
-/// unused, purely so that remembering a launch on a remote machine later is a
-/// new value rather than a store migration: the synthesized `Codable` encodes a
-/// nil optional by omitting the key and decodes a missing key as nil, so JSON
-/// written before this field existed still decodes, and JSON written today is
-/// still readable by a build that predates it.
+/// `host` is nil for a launch on this Mac and the ssh alias for one on a
+/// remote box (`TerminalViewModel.launchHost`). A row is only ever offered
+/// back on the machine it was recorded on: its directory names nothing
+/// anywhere else. The synthesized `Codable` encodes a nil optional by omitting
+/// the key and decodes a missing key as nil, so JSON written before this field
+/// existed still decodes, and local rows stay readable by a build that
+/// predates it.
 public struct LaunchRecord: Codable, Equatable, Sendable {
     public let dir: String
     /// "" = plain shell.
     public let command: String
-    /// nil = local. Reserved for remote entries; nothing writes it yet.
+    /// nil = local; otherwise the host the directory lives on.
     public let host: String?
 
     public init(dir: String, command: String, host: String? = nil) {
@@ -90,10 +91,15 @@ public enum RecentLaunchPolicy {
     /// split-and-inherit already covers going back to a folder. A row with a
     /// command we know can't run is dropped for the same reason the store
     /// repairs those on load.
+    ///
+    /// Only rows from `host` — the machine the split will run on. A window
+    /// attached to a remote tmux used to get this Mac's rows, and splitting
+    /// one sent a local path to the remote shell.
     public static func agentLaunches(from launches: [LaunchRecord],
+                                     host: String? = nil,
                                      limit: Int = 6) -> [LaunchRecord] {
         launches
-            .filter { $0.host == nil && !$0.command.isEmpty && isReplayableCommand($0.command) }
+            .filter { $0.host == host && !$0.command.isEmpty && isReplayableCommand($0.command) }
             .prefix(max(0, limit))
             .map { $0 }
     }
@@ -183,14 +189,15 @@ public final class PaletteRecents {
         recordLaunch(record)
     }
 
-    /// Recent launches that name a program, most-recent-first.
+    /// Recent launches that name a program, most-recent-first, on `host`
+    /// (nil = this Mac).
     ///
     /// This is the list behind "split one of these again". A row with no
     /// command is a directory you worked in, which the ordinary
     /// split-and-inherit already covers — offering it here would pad the menu
     /// with rows that do nothing the button above them doesn't.
-    public func agentLaunches(limit: Int = 6) -> [LaunchEntry] {
-        RecentLaunchPolicy.agentLaunches(from: launches, limit: limit)
+    public func agentLaunches(host: String? = nil, limit: Int = 6) -> [LaunchEntry] {
+        RecentLaunchPolicy.agentLaunches(from: launches, host: host, limit: limit)
     }
 
     /// Most-recent-first, deduped on (dir, command, host).

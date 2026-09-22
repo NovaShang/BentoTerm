@@ -77,6 +77,17 @@ import BentoUISharedKit
         #expect(recents[1].title == "shell  ·  /tmp")
     }
 
+    /// A target opens a session on the local server, so a row remembered on an
+    /// ssh host is not offered at all — not as a dead row either.
+    @Test func remoteLaunchesAreNotTargets() {
+        let recents = OpenTargetProvider(
+            sessions: { [] }, sshHosts: { [] },
+            launches: { [LaunchRecord(dir: "/srv/repo", command: "claude", host: "build-box"),
+                         LaunchRecord(dir: "/tmp", command: "claude")] }
+        ).recentTargets()
+        #expect(recents.map(\.title) == ["claude  ·  /tmp"])
+    }
+
     @Test func targetsCarryNoPaletteOrSwiftUITypes() {
         // The contract that lets the Dock menu and App Intents consume this:
         // a target is inert data. Equality across two independently built

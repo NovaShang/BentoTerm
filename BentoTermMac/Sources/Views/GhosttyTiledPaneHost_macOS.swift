@@ -645,7 +645,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             // The agents you've had open lately, ready to split off again.
             // Nothing remembered yet → no separator either: a "Recent Agents"
             // header over an empty stretch reads as broken, not as empty.
-            let recents = Self.recentAgentItems(target: self,
+            let recents = Self.recentAgentItems(host: viewModel.launchHost, target: self,
                                                 action: #selector(splitRecentLaunch(_:)))
             if !recents.isEmpty {
                 menu.addItem(.separator())
@@ -1082,11 +1082,12 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         }
     }
 
-    /// Rows for the remembered agents, for whichever menu is asking. Empty when
-    /// nothing has been remembered yet, and the caller drops the separator with
-    /// it — a lone "Recent Agents" header over nothing reads as broken.
-    static func recentAgentItems(target: AnyObject?, action: Selector) -> [NSMenuItem] {
-        PaletteRecents.shared.agentLaunches().map { record in
+    /// Rows for the remembered agents on `host` (the session's `launchHost`),
+    /// for whichever menu is asking. Empty when nothing has been remembered
+    /// there yet, and the caller drops the separator with it — a lone "Recent
+    /// Agents" header over nothing reads as broken.
+    static func recentAgentItems(host: String?, target: AnyObject?, action: Selector) -> [NSMenuItem] {
+        PaletteRecents.shared.agentLaunches(host: host).map { record in
             let item = NSMenuItem(title: "\(record.command)  ·  \(tildeAbbreviated(record.dir))",
                                   action: action, keyEquivalent: "")
             item.target = target
@@ -1191,7 +1192,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // HERE, unlike Recent Launches above: same rows, different verb, so
         // they say so in their titles rather than relying on the section
         // header alone.
-        let splitRows = PaletteRecents.shared.agentLaunches().map { record in
+        let splitRows = PaletteRecents.shared.agentLaunches(host: viewModel.launchHost).map { record in
             PaletteItem(id: "split:\(record.command):\(record.dir)",
                         title: "Split \(record.command)",
                         subtitle: paletteAbbrev(record.dir),

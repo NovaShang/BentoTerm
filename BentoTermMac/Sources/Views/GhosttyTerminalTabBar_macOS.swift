@@ -80,6 +80,12 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         }
     }
 
+    /// Where the active tab's session runs (`TerminalViewModel.launchHost`):
+    /// nil = this Mac. The "+" menu's Recent Agents rows come from here, so a
+    /// tab on a remote tmux offers what was launched THERE. Set by the window
+    /// whenever it rebinds the toolbar to a tab.
+    var launchHost: String?
+
     private func applySessionAvailability() {
         syncToolbarItems()
         setMenuText(sessionsButton, sessionsText)
@@ -1016,7 +1022,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             // open in that repo. Rows carry their record and are dispatched
             // through the responder chain like every other pane action here.
             let recents = GhosttyTiledPaneHost.recentAgentItems(
-                target: self, action: #selector(splitRecentAction(_:)))
+                host: launchHost, target: self, action: #selector(splitRecentAction(_:)))
             if !recents.isEmpty {
                 menu.addItem(.separator())
                 let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")

@@ -143,13 +143,22 @@ struct RecentAgentLaunchTests {
         #expect(rows.map(\.command) == ["claude"])
     }
 
-    /// Remote rows are excluded while `host` is still reserved: the split they
-    /// would perform runs on the local machine, against a path from somewhere
-    /// else.
-    @Test func remoteRowsStayOut() {
-        let rows = RecentLaunchPolicy.agentLaunches(from: [
-            LaunchRecord(dir: "/a/repo", command: "claude", host: "mbp"),
-        ])
-        #expect(rows.isEmpty)
+    /// Rows are offered only on the machine they were recorded on: the split
+    /// runs there, and a path from anywhere else names nothing.
+    @Test func rowsAreScopedToTheHostThatWillSplit() {
+        let rows = [
+            LaunchRecord(dir: "/srv/repo", command: "claude", host: "build-box"),
+            LaunchRecord(dir: "/Users/me/repo", command: "codex"),
+        ]
+        #expect(RecentLaunchPolicy.agentLaunches(from: rows).map(\.dir) == ["/Users/me/repo"])
+        #expect(RecentLaunchPolicy.agentLaunches(from: rows, host: "build-box").map(\.dir) == ["/srv/repo"])
+        #expect(RecentLaunchPolicy.agentLaunches(from: rows, host: "other").isEmpty)
+    }
+
+    /// A launch recorded on a remote box keeps that box's name, so it can be
+    /// found again there and nowhere else.
+    @Test func aRemoteLaunchRemembersItsHost() {
+        let record = RecentLaunchPolicy.record(dir: "/srv/repo", command: "claude", host: "build-box")
+        #expect(record?.host == "build-box")
     }
 }

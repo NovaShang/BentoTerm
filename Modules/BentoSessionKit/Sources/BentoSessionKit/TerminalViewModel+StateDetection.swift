@@ -181,11 +181,9 @@ extension TerminalViewModel {
     /// Once per pane per agent: the directory costs a tmux round trip, and the
     /// poll would otherwise pay it every two seconds for every agent on screen.
     func rememberAgentLaunch(pane: TmuxPaneID, isAgent: Bool) async {
-        // Local sessions only. These rows are replayed by splitting on THIS
-        // machine, and a path from the box you ssh'd into names nothing here —
-        // `LaunchRecord.host` exists for the day that changes, and until
-        // something writes it a remote row can only be wrong.
-        guard isAgent, usingTmux, transport.isLocalLink else { return }
+        // Filed under `launchHost`: the row is replayed by splitting on the
+        // machine the path lives on, and only offered there.
+        guard isAgent, usingTmux else { return }
         guard let agentID = stateDetection.identifiedAgent(for: pane),
               let command = AgentPreset.forDetectionID(agentID)?.launchCommand
         else { return }
@@ -197,7 +195,7 @@ extension TerminalViewModel {
             rememberedAgentLaunches.remove(key)
             return
         }
-        PaletteRecents.shared.recordLaunchIfUseful(dir: dir, command: command)
+        PaletteRecents.shared.recordLaunchIfUseful(dir: dir, command: command, host: launchHost)
     }
 
     /// Fetch a pane's live visible screen (no scrollback, plain text) for the

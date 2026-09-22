@@ -185,7 +185,7 @@ extension TerminalViewModel {
             // recents list exists. Recorded here rather than at the macOS
             // window so the iPad wizard feeds the same list.
             PaletteRecents.shared.recordLaunchIfUseful(
-                dir: spec.workingDir, command: spec.agentCommand)
+                dir: spec.workingDir, command: spec.agentCommand, host: launchHost)
             await launchTmux(
                 sessionName: spec.sessionName,
                 groupWith: nil,
