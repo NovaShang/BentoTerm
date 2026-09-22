@@ -42,26 +42,30 @@ private struct Representable: NSViewRepresentable {
     let url: URL
     let stamp: Date?
 
-    func makeNSView(context: Context) -> QLPreviewView {
-        let view = QLPreviewView(frame: .zero, style: .normal) ?? QLPreviewView()
+    func makeNSView(context: Context) -> FittingPreviewView {
+        let view = FittingPreviewView(frame: .zero, style: .normal) ?? FittingPreviewView()
         view.autostarts = true          // video/audio don't need a second click
         return view
     }
 
-    func updateNSView(_ view: QLPreviewView, context: Context) {
+    func updateNSView(_ view: FittingPreviewView, context: Context) {
         if context.coordinator.url != url {
             context.coordinator.url = url
             context.coordinator.stamp = stamp
+            view.previewItemChanged()
             view.previewItem = url as NSURL
         } else if context.coordinator.stamp != stamp {
             context.coordinator.stamp = stamp
+            // The file changed on disk: the page is re-laid-out, so its width
+            // has to be learned again.
+            view.previewItemChanged()
             view.refreshPreviewItem()
         }
     }
 
     /// QLPreviewView holds a live rendering session; leaving it open when the
     /// tab closes keeps the extension (and the file) alive.
-    static func dismantleNSView(_ view: QLPreviewView, coordinator: Coordinator) {
+    static func dismantleNSView(_ view: FittingPreviewView, coordinator: Coordinator) {
         view.close()
     }
 
