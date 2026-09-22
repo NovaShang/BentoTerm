@@ -534,6 +534,39 @@ struct InputHexEncodingTests {
         try? await Task.sleep(for: .milliseconds(100))
         #expect(sent.current == ["send-keys -t %0 -H 00 1b ff\n"])
     }
+
+    /// tmux's yacc parser overflows at 10000 arguments, and `-H` spends one
+    /// argument per byte — so a paste bigger than that died whole, with the
+    /// `%error` swallowed by the `.discard` slot. Every command must stay under
+    /// the cap, and the bytes must come out in order and complete.
+    @Test func longInputSplitsIntoCommandsUnderTheParserLimit() async {
+        let (service, _) = makeAttachedService()
+        let sent = SendableBox<[String]>([])
+        service.sendToSSH = { cmd in sent.update { $0.append(cmd) } }
+
+        // 30000 bytes: three times the limit that used to lose the lot.
+        let payload = Data((0..<30_000).map { UInt8($0 % 251) })
+        service.sendData(to: TmuxPaneID(0), data: payload)
+        try? await Task.sleep(for: .milliseconds(100))
+
+        let commands = sent.current
+        #expect(commands.count > 1)
+        for cmd in commands {
+            let args = cmd.trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(separator: " ").count
+            #expect(args < 10_000)
+        }
+
+        // Reassembled, the run is exactly what went in — no gap at a seam, no
+        // byte repeated across one.
+        var rebuilt = Data()
+        for cmd in commands {
+            let hex = cmd.trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(separator: " ").dropFirst(4)   // send-keys -t %0 -H
+            rebuilt.append(contentsOf: hex.map { UInt8($0, radix: 16)! })
+        }
+        #expect(rebuilt == payload)
+    }
 }
 
 @Suite("Chunked input")

@@ -51,6 +51,9 @@ struct SendableSSHClient: @unchecked Sendable {
 private struct SSHMutableState: Sendable {
     var state: SSHConnectionState = .disconnected
     var stdinWriter: SendableStdinWriter?
+    /// The most recently enqueued write. Each new write awaits it before
+    /// touching the channel, which is what keeps `write` FIFO — see there.
+    var writeChain: Task<Void, Never>?
 }
 
 /// Manages an SSH connection and interactive shell session.
@@ -164,6 +167,7 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
                 self.mutableState.withLock {
                     $0.state = .disconnected
                     $0.stdinWriter = nil
+                    $0.writeChain = nil
                 }
                 self.onStateChanged?(.disconnected)
             }
@@ -239,6 +243,7 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
                 self?.mutableState.withLock {
                     $0.state = errorState
                     $0.stdinWriter = nil
+                    $0.writeChain = nil
                 }
                 onState?(errorState)
             }
@@ -247,13 +252,24 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
 
     // MARK: - Input
 
+    /// Send bytes to the remote shell, in call order.
+    ///
+    /// Each write is chained onto the previous one rather than getting a `Task`
+    /// of its own: independent tasks reach the channel in whatever order the
+    /// scheduler runs them, so two writes issued back to back could swap. That
+    /// is invisible for single keystrokes and destructive for anything sent as
+    /// several calls — a paste, which the tmux layer splits into a run of
+    /// `send-keys` commands, would arrive with its middle shuffled.
     func write(_ data: Data) {
-        guard let wrapper = mutableState.withLock({ $0.stdinWriter }) else { return }
-
-        Task {
-            var buffer = ByteBufferAllocator().buffer(capacity: data.count)
-            buffer.writeBytes(data)
-            try? await wrapper.writer.write(buffer)
+        mutableState.withLock { state in
+            guard let wrapper = state.stdinWriter else { return }
+            let previous = state.writeChain
+            state.writeChain = Task {
+                await previous?.value
+                var buffer = ByteBufferAllocator().buffer(capacity: data.count)
+                buffer.writeBytes(data)
+                try? await wrapper.writer.write(buffer)
+            }
         }
     }
 
@@ -312,6 +328,7 @@ final class SSHService: @unchecked Sendable, TerminalTransport {
 
         mutableState.withLock {
             $0.stdinWriter = nil
+            $0.writeChain = nil
             $0.state = .disconnected
         }
 

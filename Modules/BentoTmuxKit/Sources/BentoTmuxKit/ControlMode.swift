@@ -502,17 +502,9 @@ public final class TmuxControlMode: @unchecked Sendable {
         }
 
         guard let data else { return }
-        // Byte-table hex encoding (lowercase, 2 digits, space-separated):
-        // avoids a String(format:) allocation per byte on the keystroke/paste
-        // hot path.
-        var hex = [UInt8]()
-        hex.reserveCapacity(data.count * 3)
-        for b in data {
-            if !hex.isEmpty { hex.append(0x20) }
-            hex.append(Self.hexDigits[Int(b >> 4)])
-            hex.append(Self.hexDigits[Int(b & 0x0F)])
-        }
-        let cmd = "send-keys -t \(pane) -H \(String(decoding: hex, as: UTF8.self))\n"
+        // One command per chunk — see `maxInputBytesPerCommand`. Built before
+        // the lock so the hex encoding isn't done while holding it.
+        let commands = Self.sendKeysCommands(pane: pane, data: data)
         // send-keys gets a (empty) %begin/%end response like any command.
         // Sending it UNREGISTERED desynced the FIFO response matching: every
         // keystroke/focus-report flush donated an empty block to whichever
@@ -522,14 +514,58 @@ public final class TmuxControlMode: @unchecked Sendable {
         // going true and the greeting arriving, this channel is still a plain
         // shell — a scroll fling here typed hundreds of `send-keys` lines at a
         // zsh prompt, each echoing `command not found` back into the parser.
+        // All chunks go out under ONE lock acquisition: a command from another
+        // caller landing between them would put its bytes in the middle of the
+        // paste, and its response block in the wrong place in the FIFO.
         let sent = responseLock.withLock { state -> Bool in
             guard state.greetingConsumed else { return false }
-            state.nextEntryID += 1
-            state.pendingQueue.append(PendingEntry(id: state.nextEntryID, kind: .discard))
-            sendToSSH?(cmd)
+            for cmd in commands {
+                state.nextEntryID += 1
+                state.pendingQueue.append(PendingEntry(id: state.nextEntryID, kind: .discard))
+                sendToSSH?(cmd)
+            }
             return true
         }
         if !sent { log("tmux dropped pre-greeting pane input (\(data.count) bytes)") }
+    }
+
+    /// Bytes carried by ONE `send-keys -H` command.
+    ///
+    /// tmux parses commands with a yacc grammar whose stack is 10000 entries
+    /// deep, and `-H` makes every byte a separate argument — so a command
+    /// carrying 10000 bytes or more dies with `parse error: yacc stack
+    /// overflow` and tmux drops the WHOLE thing. That error arrives in a
+    /// `.discard` slot below, so an over-long paste simply vanished: nothing
+    /// typed, nothing reported. Measured on tmux 3.5a and 3.7b: 9999 bytes
+    /// through, 10000 lost — about 3300 CJK characters, well inside what
+    /// someone pastes into an agent prompt.
+    ///
+    /// 4096 leaves room for the command's own tokens, and keeps a single
+    /// command short enough that a paste still moves in visible pieces rather
+    /// than one all-or-nothing block.
+    static let maxInputBytesPerCommand = 4096
+
+    /// `data` as a run of `send-keys -H` commands, each within the parser's
+    /// reach. Byte-table hex encoding (lowercase, 2 digits, space-separated)
+    /// avoids a String(format:) allocation per byte on the keystroke/paste hot
+    /// path.
+    static func sendKeysCommands(pane: TmuxPaneID, data: Data) -> [String] {
+        var commands: [String] = []
+        var offset = data.startIndex
+        while offset < data.endIndex {
+            let end = data.index(offset, offsetBy: maxInputBytesPerCommand,
+                                 limitedBy: data.endIndex) ?? data.endIndex
+            var hex = [UInt8]()
+            hex.reserveCapacity((end - offset) * 3)
+            for b in data[offset..<end] {
+                if !hex.isEmpty { hex.append(0x20) }
+                hex.append(hexDigits[Int(b >> 4)])
+                hex.append(hexDigits[Int(b & 0x0F)])
+            }
+            commands.append("send-keys -t \(pane) -H \(String(decoding: hex, as: UTF8.self))\n")
+            offset = end
+        }
+        return commands
     }
 
     private static let hexDigits = Array("0123456789abcdef".utf8)
