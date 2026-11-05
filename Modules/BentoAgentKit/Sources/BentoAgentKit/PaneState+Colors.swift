@@ -1,4 +1,5 @@
 import Foundation
+import BentoFoundationKit
 #if canImport(AppKit)
 import AppKit
 #elseif canImport(UIKit)
@@ -12,7 +13,7 @@ import UIKit
 public extension PaneState {
     /// The canonical state palette as 0xRRGGBB — ONE source of truth for every
     /// surface (Tiled pane chrome, List window rows, iOS dots). `doneUnseenHex`
-    /// (blue) isn't a PaneState case — an agent that finished its turn while
+    /// (green) isn't a PaneState case — an agent that finished its turn while
     /// unfocused — but it lives here with the rest so nothing re-hardcodes it.
     static var workingHex: UInt32    { 0x0A85FF }   // blue  — in progress / active
     static var idleHex: UInt32       { 0x8E8E93 }   // gray
@@ -29,19 +30,9 @@ public extension PaneState {
     }
 
     #if canImport(AppKit)
-    static func nsColor(hex: UInt32) -> NSColor {
-        NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-                green: CGFloat((hex >> 8) & 0xFF) / 255,
-                blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
-    }
-    var nsColor: NSColor { Self.nsColor(hex: dotColorHex) }
+    var nsColor: NSColor { NSColor(hex: dotColorHex) }
     #elseif canImport(UIKit)
-    static func uiColor(hex: UInt32) -> UIColor {
-        UIColor(red: CGFloat((hex >> 16) & 0xFF) / 255,
-                green: CGFloat((hex >> 8) & 0xFF) / 255,
-                blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
-    }
-    var uiColor: UIColor { Self.uiColor(hex: dotColorHex) }
+    var uiColor: UIColor { UIColor(hex: dotColorHex) }
     #endif
 
     /// Alpha for the translucent state wash overlaid on the whole pane (over the
@@ -57,17 +48,6 @@ public extension PaneState {
         }
     }
 
-    #if canImport(AppKit)
-    /// Translucent wash color for this state, or nil when it should show no tint.
-    var tintNSColor: NSColor? {
-        tintAlpha > 0 ? nsColor.withAlphaComponent(tintAlpha) : nil
-    }
-    #elseif canImport(UIKit)
-    var tintUIColor: UIColor? {
-        tintAlpha > 0 ? uiColor.withAlphaComponent(tintAlpha) : nil
-    }
-    #endif
-
     /// Accent color (0xRRGGBB) for pane *chrome* — the title-bar band and the
     /// border — when the state should stand out. nil for idle = neutral chrome.
     /// Working/awaiting reuse the dot's blue/amber; "done, unseen" (green) isn't
@@ -80,14 +60,4 @@ public extension PaneState {
         case .idle:          return nil
         }
     }
-
-    #if canImport(AppKit)
-    var chromeAccentNSColor: NSColor? {
-        chromeAccentHex.map { Self.nsColor(hex: $0) }
-    }
-    #elseif canImport(UIKit)
-    var chromeAccentUIColor: UIColor? {
-        chromeAccentHex.map { Self.uiColor(hex: $0) }
-    }
-    #endif
 }

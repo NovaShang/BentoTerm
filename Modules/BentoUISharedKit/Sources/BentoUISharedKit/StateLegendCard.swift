@@ -1,5 +1,6 @@
 import SwiftUI
 import BentoAgentKit
+import BentoFoundationKit
 
 // Restored verbatim from ArchitectureDiagramView.swift, which was deleted with
 // the relay-era host/phone drawing it was named for. The legend itself is not

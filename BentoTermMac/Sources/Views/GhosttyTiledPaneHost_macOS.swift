@@ -77,13 +77,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// is normally one character cell tall — see layoutCells).
     static let fallbackTitleBarHeight: CGFloat = 20
 
-    /// NSColor from a 0xRRGGBB terminal color.
-    static func bgColor(_ rgb: UInt32) -> NSColor {
-        NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255,
-                green: CGFloat((rgb >> 8) & 0xFF) / 255,
-                blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
-    }
-
     public init(viewModel: TerminalViewModel, theme: TerminalTheme) {
         self.viewModel = viewModel
         self.theme = theme
@@ -92,7 +85,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // Paint the host in the terminal background color (not black) so the
         // one-cell divider column between side-by-side panes reads as the pane
         // background bleeding through, not an empty gap. Geometry is unchanged.
-        layer?.backgroundColor = Self.bgColor(theme.background).cgColor
+        layer?.backgroundColor = NSColor(hex: theme.background).cgColor
 
         dividerOverlay.host = self
         dividerOverlay.autoresizingMask = [.width, .height]
@@ -167,7 +160,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// to every live surface.
     private func reapplyTheme() {
         theme = ThemeStore.shared.makeTerminalTheme()
-        layer?.backgroundColor = Self.bgColor(theme.background).cgColor
+        layer?.backgroundColor = NSColor(hex: theme.background).cgColor
         // A font change (size OR family) changes the pixel size of one cell, so
         // the cached cell metrics and last-pushed tmux client size are now stale.
         // Drop them: the next surface size report re-learns cellPx (the `cellPx
@@ -1692,13 +1685,11 @@ final class PaneCellView: NSView {
         didSet { titleBar.agentFinishedUnseen = agentFinishedUnseen; updateStateTint(); applyBorder() }
     }
 
-    /// Translucent wash over the surface that mirrors the title-bar dot:
-    /// done-unseen → blue, otherwise the per-state color (nil = idle = no wash).
+    /// Translucent wash over the surface that mirrors the title-bar glyph
+    /// (nil = idle = no wash) — the shared `PaneChrome.Status` table.
     private func stateTintColor() -> NSColor? {
-        if agentFinishedUnseen {
-            return PaneTitleBar.doneColor.withAlphaComponent(0.10)
-        }
-        return paneState.tintNSColor
+        PaneChromeColors.wash(PaneChrome.Status(state: paneState,
+                                                agentFinishedUnseen: agentFinishedUnseen))
     }
 
     private func updateStateTint() {
@@ -1758,7 +1749,7 @@ final class PaneCellView: NSView {
         // past the edge.
         layer?.masksToBounds = true
         layer?.borderWidth = 0.5
-        layer?.borderColor = GhosttyPaneColors.neutralHairline().cgColor
+        layer?.borderColor = PaneChromeColors.neutralHairline().cgColor
         addSubview(titleBar)
 
         // State wash sits above the terminal surface (added in `embed`) but below
@@ -1935,7 +1926,7 @@ final class PaneTitleBar: NSView {
     /// "Done, unseen" green (a finished ✓). Also drives the pane's state wash +
     /// band (see PaneCellView.stateTintColor / chromeAccent). Sourced from the
     /// shared palette so the List sidebar's green check matches.
-    static let doneColor = PaneState.nsColor(hex: PaneState.doneUnseenHex)
+    static let doneColor = NSColor(hex: PaneState.doneUnseenHex)
 
     /// What this pane's chrome is announcing — the shared mapping the iOS strip
     /// and the List sidebar rows also render.
@@ -1945,7 +1936,7 @@ final class PaneTitleBar: NSView {
 
     /// The leading glyph + tint for the current state.
     private func stateSymbol() -> (name: String, color: NSColor) {
-        (status.symbol, PaneState.nsColor(hex: status.glyphHex))
+        (status.symbol, NSColor(hex: status.glyphHex))
     }
 
     private func updateStateIcon() {
@@ -1961,7 +1952,7 @@ final class PaneTitleBar: NSView {
     /// Accent for the band/ink: done-unseen wins, otherwise the per-state color
     /// (nil for idle → neutral chrome).
     private func chromeAccent() -> NSColor? {
-        status.accentHex.map { PaneState.nsColor(hex: $0) }
+        status.accentHex.map { NSColor(hex: $0) }
     }
 
     /// Recompute the band background + label/button ink from (state, active).
@@ -1970,8 +1961,8 @@ final class PaneTitleBar: NSView {
         // the window highlight color, so focus reads from the title bar too — not
         // just the border (the border alone is too quiet for an idle gray pane).
         let accent = chromeAccent() ?? (isActive ? GhosttyPaneColors.focusAccent() : nil)
-        layer?.backgroundColor = GhosttyPaneColors.titleBand(accent: accent, active: isActive).cgColor
-        let ink = GhosttyPaneColors.ink(accent: accent, active: isActive)
+        layer?.backgroundColor = PaneChromeColors.titleBand(accent: accent, active: isActive).cgColor
+        let ink = PaneChromeColors.ink(accent: accent, active: isActive)
         label.textColor = ink
         zoomButton.contentTintColor = ink
         menuButton.contentTintColor = ink
@@ -1993,7 +1984,7 @@ final class PaneTitleBar: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = GhosttyPaneColors.titleBand(accent: nil, active: false).cgColor
+        layer?.backgroundColor = PaneChromeColors.titleBand(accent: nil, active: false).cgColor
 
         stateIcon.imageScaling = .scaleProportionallyUpOrDown
         updateStateIcon()
@@ -2088,23 +2079,12 @@ final class PaneTitleBar: NSView {
     }
 }
 
-/// The macOS host's pane colors. The band/ink language itself lives in the
-/// shared `PaneChromeColors` (the iOS strip renders the identical chrome); what
-/// stays here is the one genuinely platform-sourced color — the window
-/// highlight the focused pane wears.
+/// The one genuinely platform-sourced pane color — the window highlight the
+/// focused pane wears. Everything else (band, ink, hairlines) is the shared
+/// `PaneChromeColors`, which the iOS strip renders identically.
 @MainActor
 enum GhosttyPaneColors {
     static let accentNSColor = NSColor(srgbRed: 0.30, green: 0.90, blue: 0.62, alpha: 1.0)
-
-    static var isDark: Bool { PaneChromeColors.isDark }
-
-    static func titleBand(accent: NSColor?, active: Bool) -> NSColor {
-        PaneChromeColors.titleBand(accent: accent, active: active)
-    }
-
-    static func ink(accent: NSColor?, active: Bool) -> NSColor {
-        PaneChromeColors.ink(accent: accent, active: active)
-    }
 
     /// The system/window highlight color (the user's macOS accent) as a concrete
     /// sRGB color — the focus color for the active pane's border + title band.
@@ -2117,11 +2097,6 @@ enum GhosttyPaneColors {
     /// glance regardless of its agent state (which the title bar / dot / wash carry).
     static func focusBorder(active: Bool) -> NSColor {
         active ? focusAccent() : PaneChromeColors.idleBorder()
-    }
-
-    /// Neutral hairline for the title-bar default before chrome is computed.
-    static func neutralHairline() -> NSColor {
-        PaneChromeColors.neutralHairline()
     }
 }
 
@@ -2156,7 +2131,7 @@ final class DividerOverlay: NSView {
     // MARK: - Drawing (visual feedback)
 
     override func draw(_ dirtyRect: NSRect) {
-        let lineColor = GhosttyPaneColors.isDark
+        let lineColor = PaneChromeColors.isDark
             ? NSColor(white: 1, alpha: 0.18) : NSColor(white: 0, alpha: 0.18)
         for d in dividers {
             strokeLine(vertical: d.vertical, at: d.position, span: d.hotRect,

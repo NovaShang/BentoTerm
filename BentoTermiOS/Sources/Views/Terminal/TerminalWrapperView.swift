@@ -130,8 +130,9 @@ struct TerminalWrapperView: View {
         // change.
         let bg = paneBridge.terminalBgColor ?? ThemeStore.shared.current.bgColor
         if let signal = foregroundPaneSignal {
-            return Color(uiColor: STTheme.fusedBackground(bg: bg, state: signal.state,
-                                                          doneUnseen: signal.doneUnseen))
+            return Color(uiColor: PaneChromeColors.washed(
+                bg, status: PaneChrome.Status(state: signal.state,
+                                              agentFinishedUnseen: signal.doneUnseen)))
         }
         return Color(uiColor: bg)
     }
@@ -642,14 +643,14 @@ struct TerminalWrapperView: View {
             HStack(spacing: 6) {
                 Image(systemName: TerminalSizingMode.thisDevice.symbol)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(Color.stInkDim)
+                    .foregroundStyle(Color.bentoInkDim)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(mismatch.title)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.stInk)
+                        .foregroundStyle(Color.bentoInk)
                     Text("\(mismatch.actionTitle) · \(mismatch.compactDetail)")
                         .font(.caption2)
-                        .foregroundStyle(Color.stInkDim)
+                        .foregroundStyle(Color.bentoInkDim)
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
@@ -3004,7 +3005,7 @@ private struct BarItemGlass: ViewModifier {
     /// wear plain glass.
     private var tint: Color? {
         if let hex = state.chromeAccentHex {
-            let base = Color(PaneState.uiColor(hex: hex))
+            let base = Color(hex: hex)
             return isActive ? base : base.opacity(0.5)
         }
         return isActive ? Color.bentoEmerald : nil
@@ -3025,7 +3026,7 @@ private struct WindowTab: View {
             // inactive: the state color.
             Image(systemName: stateIconName)
                 .font(.system(size: 12))
-                .foregroundStyle(isActive ? Color.white : Color(STTheme.dotColor(for: state)))
+                .foregroundStyle(isActive ? Color.white : Color(hex: state.dotColorHex))
 
             Text(name.isEmpty ? "window" : name)
                 .font(.system(.footnote, design: .monospaced))

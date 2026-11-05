@@ -674,8 +674,7 @@ final class TerminalContainerVC: UIViewController {
         // (Drop targets are previewed by the parent's PaneDropZoneOverlayView,
         // not the border.)
         view.layer.borderWidth = active ? 2.0 : 0.5
-        let faint = UIColor(white: STTheme.isLight ? 0 : 1, alpha: STTheme.isLight ? 0.09 : 0.06)
-        view.layer.borderColor = (active ? view.tintColor : faint).cgColor
+        view.layer.borderColor = (active ? view.tintColor : PaneChromeColors.idleBorder()).cgColor
     }
 
     // MARK: - Binding
@@ -901,9 +900,12 @@ extension TerminalContainerVC {
     /// terminal bg — it's the shared chrome; see `PaneTitleBar.updateChrome`.)
     private func applyBackgrounds(animated: Bool) {
         let bgColor = resolvedTerminalBackground()
-        let surround = STTheme.fusedBackground(
-            bg: bgColor, state: titleBar.paneState, doneUnseen: titleBar.agentFinishedUnseen)
-        let tint = titleBar.paneState.tintUIColor ?? .clear
+        let status = PaneChrome.Status(state: titleBar.paneState,
+                                       agentFinishedUnseen: titleBar.agentFinishedUnseen)
+        // The surround is the terminal bg FUSED with the same wash the surface
+        // wears, so the band and an empty washed terminal read as one color.
+        let surround = PaneChromeColors.washed(bgColor, status: status)
+        let tint = PaneChromeColors.wash(status) ?? .clear
         let apply = {
             self.view.backgroundColor = surround
             self.surface.backgroundColor = bgColor
@@ -1682,7 +1684,7 @@ final class PaneTitleBar: UIView {
     private func updateChrome() {
         // Done-unseen wins the band, otherwise the per-state color (nil for
         // idle → neutral band) — the shared chrome precedence.
-        let accent: UIColor? = status.accentHex.map { PaneState.uiColor(hex: $0) }
+        let accent: UIColor? = status.accentHex.map { UIColor(hex: $0) }
         backgroundColor = PaneChromeColors.titleBand(accent: accent, active: isActivePane)
         titleLabel.textColor = PaneChromeColors.ink(accent: accent, active: isActivePane)
         // Same ink as the title: a mode is information, not an alarm, and it must
@@ -1702,7 +1704,7 @@ final class PaneTitleBar: UIView {
 
     /// The leading glyph for the current state.
     private func updateStateVisuals() {
-        let color = PaneState.uiColor(hex: status.glyphHex)
+        let color = UIColor(hex: status.glyphHex)
         stateIcon.image = UIImage(systemName: status.symbol, withConfiguration:
             UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
         stateIcon.tintColor = color
@@ -1760,8 +1762,8 @@ final class SelectionHandle: UIView {
 
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
-        let accent = STTheme.isLight ? STTheme.ChromeLight.accent : STTheme.ChromeDark.accent
-        ctx.setFillColor(accent.cgColor)
+        // systemBlue resolves against this view's trait during draw.
+        ctx.setFillColor(UIColor.systemBlue.cgColor)
         let cx = bounds.midX
         let top = Self.inset
         ctx.fill(CGRect(x: cx - stemWidth / 2, y: top, width: stemWidth, height: cellHeight))

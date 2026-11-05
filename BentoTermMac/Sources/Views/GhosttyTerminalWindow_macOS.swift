@@ -1201,11 +1201,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // rendered bg) still wins in `applyWindowBackground`, so a custom ghostty
         // `background =` is honored the moment a surface reports; this is only the
         // pre-first-report fallback, and it must track the theme, not a stale config.
-        let bg = ThemeStore.shared.current.bg
-        return NSColor(
-            srgbRed: CGFloat((bg >> 16) & 0xff) / 255,
-            green: CGFloat((bg >> 8) & 0xff) / 255,
-            blue: CGFloat(bg & 0xff) / 255, alpha: 1)
+        return NSColor(hex: ThemeStore.shared.current.bg)
     }
 
     @objc private func themeChanged() {

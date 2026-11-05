@@ -15,12 +15,14 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../BentoTmuxKit"),
+        .package(path: "../BentoFoundationKit"),
     ],
     targets: [
         .target(
             name: "BentoAgentKit",
             dependencies: [
                 .product(name: "BentoTmuxKit", package: "BentoTmuxKit"),
+                .product(name: "BentoFoundationKit", package: "BentoFoundationKit"),
             ]
         ),
         .testTarget(

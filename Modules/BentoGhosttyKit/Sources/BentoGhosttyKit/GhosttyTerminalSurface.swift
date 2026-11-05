@@ -92,7 +92,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         // Non-zero initial frame so the Metal layer can size itself before layout.
         super.init(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         isOpaque = true
-        backgroundColor = UIColor(rgb: theme.background)
+        backgroundColor = UIColor(hex: theme.background)
         isMultipleTouchEnabled = true
         contentScaleFactor = traitCollection.displayScale > 0 ? traitCollection.displayScale : UIScreen.main.scale
     }
@@ -796,7 +796,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
 
     public func applyTheme(_ theme: TerminalTheme) {
         self.theme = theme
-        backgroundColor = UIColor(rgb: theme.background)
+        backgroundColor = UIColor(hex: theme.background)
         // Light/dark can flip with the font size untouched, so this sits outside
         // the recreate branch.
         syncColorScheme()
@@ -1402,15 +1402,5 @@ private final class TermTextRange: UITextRange {
     override var isEmpty: Bool { from == to }
 }
 
-private extension UIColor {
-    convenience init(rgb: UInt32) {
-        self.init(
-            red: CGFloat((rgb >> 16) & 0xFF) / 255.0,
-            green: CGFloat((rgb >> 8) & 0xFF) / 255.0,
-            blue: CGFloat(rgb & 0xFF) / 255.0,
-            alpha: 1.0
-        )
-    }
-}
 extension GhosttyTerminalSurface: @preconcurrency GhosttySurfaceUserdata {}
 #endif

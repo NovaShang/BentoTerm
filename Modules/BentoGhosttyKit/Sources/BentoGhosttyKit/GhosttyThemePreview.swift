@@ -49,13 +49,8 @@ public struct GhosttyThemePreview: View {
 /// title strip with the state dot. It also puts the state colour in front of
 /// the user one page before the Agents panel explains it.
 struct PreviewTitleBar: View {
-    /// The working blue, from the same constant the real chrome reads.
-    private static let working = Color(
-        .sRGB,
-        red: Double((0x0A85FF >> 16) & 0xFF) / 255,
-        green: Double((0x0A85FF >> 8) & 0xFF) / 255,
-        blue: Double(0x0A85FF & 0xFF) / 255,
-        opacity: 1)
+    /// The working blue — `PaneState.workingHex`, which this kit can't import.
+    private static let working = Color(hex: 0x0A85FF)
 
     var body: some View {
         HStack(spacing: 6) {
