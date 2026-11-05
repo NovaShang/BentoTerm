@@ -194,9 +194,9 @@ public final class TerminalViewModel: ObservableObject {
     @Published public var stateVersion: Int = 0
 
     /// Per-pane state for EVERY pane in the session (all windows), computed by
-    /// the one detection pipeline in `updatePaneStates`. Current-window panes
+    /// the one state pipeline in `updatePaneStates`. Current-window panes
     /// mirror their PaneViewModel's `paneState`; background-window panes are
-    /// classified the same way (control mode streams their output and titles).
+    /// classified the same way (their hook options come on the same list-panes).
     /// This is what `windowState` aggregates, so the List sidebar/tabs judge a
     /// window exactly like the Tiled pane chrome judges a pane. Repaints ride
     /// `stateVersion`.
@@ -235,7 +235,8 @@ public final class TerminalViewModel: ObservableObject {
     /// a local pty cannot). Core stays agnostic.
     public var activeTransport: TerminalTransport { transport }
     let tmuxService = TmuxControlMode()
-    public let stateDetection = StateDetectionService()
+    /// Last lines each pane printed — voice context and the awaiting snippet.
+    let recentOutput = PaneRecentText()
     /// Panes whose agent has already been written to the recents store, keyed
     /// pane+agent so a pane that changes hands (claude quits, codex starts in
     /// the same pane) is remembered again. The poll runs every 2s and the

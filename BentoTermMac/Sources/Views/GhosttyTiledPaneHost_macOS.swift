@@ -417,8 +417,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                                    paneID: TmuxPaneID) {
         var bag = Set<AnyCancellable>()
 
-        // Drive the title-bar status dot from the pane's detected state (reuses
-        // the shared StateDetectionService via PaneViewModel.paneState).
+        // Drive the title-bar status dot from the pane's state (what its
+        // agent's hooks report, via PaneViewModel.paneState).
         container.paneState = paneVM.paneState
         paneVM.$paneState
             .receive(on: RunLoop.main)

@@ -30,7 +30,6 @@
 		354615115BE921DEC8C6DE30 /* BentoFilePreviewKit in Frameworks */ = {isa = PBXBuildFile; productRef = 9FFB4D8CEA3A5CDB1A432888 /* BentoFilePreviewKit */; };
 		3950D8BD2F972C35BDB2A658 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3645AA617BF76F6076FAD817 /* SettingsView.swift */; };
 		3D3B8AC20677BBB849C2DF23 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = BD4901C69ED106A98CD7DB60 /* PrivacyInfo.xcprivacy */; };
-		3D67EEB3E772360974793D3B /* TmuxParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3F63F6D86CDEDA846856B83 /* TmuxParserTests.swift */; };
 		3F30B5C6B5CA2BFDE7A74A3D /* BentoSessionKit in Frameworks */ = {isa = PBXBuildFile; productRef = F74675C2740074CBC8EC842D /* BentoSessionKit */; };
 		465061AE560B23038B642DA5 /* BentoVoiceKit in Frameworks */ = {isa = PBXBuildFile; productRef = 8751A521D533146E842020F6 /* BentoVoiceKit */; };
 		475D2876AF4699EE4EAA6D78 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 6841288DF357052B6F14EE92 /* GhosttyKit */; };
@@ -211,7 +210,6 @@
 		C8A93C8F7766BB9121338FE8 /* BentoSessionKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BentoSessionKit; path = Modules/BentoSessionKit; sourceTree = SOURCE_ROOT; };
 		C924A57EB55D22991ED5C268 /* TmuxCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmuxCLI.swift; sourceTree = "<group>"; };
 		CB216D478BA58A44F2461265 /* HostListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostListView.swift; sourceTree = "<group>"; };
-		D3F63F6D86CDEDA846856B83 /* TmuxParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TmuxParserTests.swift; sourceTree = "<group>"; };
 		DF4BEA61D534A1D4C7D58CED /* KeyboardAccessoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardAccessoryView.swift; sourceTree = "<group>"; };
 		E45F481C0D9BA30F23DFFEFE /* BentoTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BentoTheme.swift; sourceTree = "<group>"; };
 		E4CA9766A043F5494CE71E70 /* DockMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockMenu.swift; sourceTree = "<group>"; };
@@ -388,7 +386,6 @@
 				4803E3F5247DDE54AEFD2E4B /* HostStoreTests.swift */,
 				1D7B784F5CB1662B40CCE085 /* SessionManagerTests.swift */,
 				8CA929E54636F2D487A90169 /* SSHFailureMessageTests.swift */,
-				D3F63F6D86CDEDA846856B83 /* TmuxParserTests.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -909,7 +906,6 @@
 				076D9075BDE6553238396FBE /* HostStoreTests.swift in Sources */,
 				0004FD435221A6B8EE0D4CE3 /* SSHFailureMessageTests.swift in Sources */,
 				FB0EF75CDC5E51471F576E14 /* SessionManagerTests.swift in Sources */,
-				3D67EEB3E772360974793D3B /* TmuxParserTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

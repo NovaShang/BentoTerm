@@ -6,7 +6,7 @@ import BentoAgentKit
 import BentoFoundationKit
 
 extension TerminalViewModel {
-    // MARK: - State Detection
+    // MARK: - Agent State
 
     func startStatePolling() {
         // Idempotent: never stack a second poller — each leaked poller adds
@@ -53,16 +53,14 @@ extension TerminalViewModel {
 
         for paneVM in paneViewModels {
             let current = paneVM.paneState
-            let (newState, isAgent) = await classifyPane(
-                id: paneVM.paneID, command: paneVM.pane.currentCommand,
-                title: paneVM.pane.title ?? "", current: current)
+            let (newState, isAgent) = Self.classifyPane(paneVM.pane)
             newStates[paneVM.paneID] = newState
 
             if paneVM.paneState != newState {
                 // Transition INTO awaiting/blocked — fire haptic + snippet.
                 if case .awaitingInput = newState {
                     sawNewAwaiting = true
-                    let snippet = stateDetection.recentText(for: paneVM.paneID, lines: 3)
+                    let snippet = recentOutput.recentText(for: paneVM.paneID, lines: 3)
                     if !snippet.isEmpty { latestPrompt = snippet }
                 }
                 paneVM.paneState = newState
@@ -72,7 +70,7 @@ extension TerminalViewModel {
             if updateSeen(paneVM, from: current, to: newState, isAgent: isAgent) {
                 changed = true
             }
-            await rememberAgentLaunch(pane: paneVM.paneID, isAgent: isAgent)
+            await rememberAgentLaunch(pane: paneVM.paneID, agent: isAgent ? paneVM.pane.agent : nil)
             newDone[paneVM.paneID] = paneVM.agentFinishedUnseen
 
             if case .awaitingInput = paneVM.paneState {
@@ -98,9 +96,7 @@ extension TerminalViewModel {
         let live = Set(paneViewModels.map(\.paneID))
         for pane in sessionPanes where !live.contains(pane.id) {
             let current = paneStates[pane.id] ?? .idle
-            let (state, isAgent) = await classifyPane(
-                id: pane.id, command: pane.currentCommand,
-                title: pane.title ?? "", current: current)
+            let (state, isAgent) = Self.classifyPane(pane)
             newStates[pane.id] = state
             if paneStates[pane.id] != state { changed = true }
 
@@ -111,7 +107,7 @@ extension TerminalViewModel {
             if (paneDoneUnseen[pane.id] ?? false) != done { changed = true }
             // Background windows count too: an agent you left running in
             // another tmux window is exactly the one you want to start again.
-            await rememberAgentLaunch(pane: pane.id, isAgent: isAgent)
+            await rememberAgentLaunch(pane: pane.id, agent: isAgent ? pane.agent : nil)
         }
         paneStates = newStates
         paneDoneUnseen = newDone
@@ -131,61 +127,30 @@ extension TerminalViewModel {
     }
 
     /// THE per-pane state judgment — the single pipeline behind both the Tiled
-    /// pane chrome and the List window dots. Recognized coding agents go through
-    /// the region/priority rule engine (title is the cheap pass; a spinner
-    /// resolves to .working with no tmux round-trip — otherwise capture the live
-    /// screen and re-classify). Everything else stays on the legacy
-    /// activity/profile path.
-    func classifyPane(id: TmuxPaneID, command: String?, title: String,
-                              current: PaneState) async -> (state: PaneState, isAgent: Bool) {
-        switch stateDetection.classifyAgent(command: command, title: title, snapshot: nil,
-                                            pane: id, current: current) {
-        case .notAgent:
-            return (stateDetection.detectState(pane: id, currentCommand: command, title: title), false)
-        case .state(let s):
-            return (s, true)
-        case .needsSnapshot:
-            guard let snap = await captureSnapshot(id) else {
-                // The capture failed. If the pane has never been identified,
-                // the snapshot was only an identity probe — it is not an agent
-                // pane, and must not be counted as one.
-                guard stateDetection.identifiedAgent(for: id) != nil else {
-                    return (stateDetection.detectState(pane: id, currentCommand: command, title: title), false)
-                }
-                return (current, true)
-            }
-            switch stateDetection.classifyAgent(
-                command: command, title: title, snapshot: snap, pane: id, current: current) {
-            case .state(let s):
-                return (s, true)
-            case .notAgent:
-                // The snapshot was the identity probe (a `node` pane that could
-                // have been an agent), and the screen says it isn't one.
-                return (stateDetection.detectState(pane: id, currentCommand: command, title: title), false)
-            case .needsSnapshot:
-                return (current, true)
-            }
-        }
+    /// pane chrome and the List window dots. It is only what the agent's hooks
+    /// wrote into the pane's `@bento_agent` / `@bento_state` options, which
+    /// ride along on the list-panes poll; a pane without them gets no dot.
+    static func classifyPane(_ pane: Pane) -> (state: PaneState, isAgent: Bool) {
+        AgentHookState.classify(agent: pane.agent, state: pane.agentState,
+                                command: pane.currentCommand)
     }
 
     /// Remember "an agent ran here" so it can be started again later — the
     /// list behind the Recent Agents rows in the split menu and ⌘P.
     ///
-    /// The command comes from the DETECTED agent, never from tmux's
+    /// The command comes from the agent id the hook wrote, never from tmux's
     /// `pane_current_command`. That value is the executed file's name, which on
     /// a versioned install is a number — `2.1.246` names no program, and rows
     /// like that are exactly what poisoned this store in builds through 0.3.1
-    /// (see `RecentLaunchPolicy.isReplayableCommand`). Detection already knows
-    /// who it is regardless of how the binary was installed, so this asks it.
+    /// (see `RecentLaunchPolicy.isReplayableCommand`).
     ///
     /// Once per pane per agent: the directory costs a tmux round trip, and the
     /// poll would otherwise pay it every two seconds for every agent on screen.
-    func rememberAgentLaunch(pane: TmuxPaneID, isAgent: Bool) async {
+    func rememberAgentLaunch(pane: TmuxPaneID, agent agentID: String?) async {
         // Filed under `launchHost`: the row is replayed by splitting on the
         // machine the path lives on, and only offered there.
-        guard isAgent, usingTmux else { return }
-        guard let agentID = stateDetection.identifiedAgent(for: pane),
-              let command = AgentPreset.forDetectionID(agentID)?.launchCommand
+        guard usingTmux, let agentID,
+              let command = AgentPreset.forAgentID(agentID)?.launchCommand
         else { return }
         let key = "\(pane)|\(agentID)"
         guard !rememberedAgentLaunches.contains(key) else { return }
@@ -196,13 +161,6 @@ extension TerminalViewModel {
             return
         }
         PaletteRecents.shared.recordLaunchIfUseful(dir: dir, command: command, host: launchHost)
-    }
-
-    /// Fetch a pane's live visible screen (no scrollback, plain text) for the
-    /// agent rule engine. nil on error.
-    func captureSnapshot(_ id: TmuxPaneID) async -> String? {
-        let resp = await tmuxService.send(.capturePane(id: id, lines: nil))
-        return resp.isError ? nil : resp.output
     }
 
     /// Maintain the "done, unseen" flag. An agent pane that transitions into

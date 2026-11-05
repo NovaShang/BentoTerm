@@ -1667,8 +1667,6 @@ final class PaneContainerVC: UIViewController {
         // Split entries only exist in Tiled mode — in List a split would build
         // a third shape, so the pane menu hides them (checked at menu-open).
         vc.showsSplitActions = { [weak self] in self?.viewModel?.sessionMode == .tiled }
-        vc.onSetProfile = { [weak self] id in self?.viewModel?.setPaneProfile(id, for: paneID) }
-        vc.currentProfileID = { [weak self] in self?.viewModel?.paneProfile(for: paneID) }
         vc.moveTargets = { [weak self] in
             guard let vm = self?.viewModel else { return [] }
             Task { await vm.refreshTmuxSessions() }   // warm for the next open
@@ -2451,7 +2449,7 @@ extension PaneContainerVC {
     /// Point the floating toolbar's menu at the active pane.
     ///
     /// Shown for a plain session too: the menu drops its tmux entries there and
-    /// keeps Find / Paste / Change Profile, which are about the terminal and
+    /// keeps Find / Paste, which are about the terminal and
     /// have nothing to do with tmux. Hiding the whole button (what this used to
     /// do for anything without a `paneVM`) took search and paste with it, and on
     /// a phone the bar is the only way to reach either.
