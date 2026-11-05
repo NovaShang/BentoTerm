@@ -26,6 +26,21 @@ import BentoSessionKit
 /// surprising. Directory basenames are full of dots (`foo.bar`, `.config`,
 /// dotted version dirs), which is exactly why this exists.
 public enum TmuxSessionNaming {
+    /// What a session is called when nobody named it.
+    public static let defaultName = "bento"
+
+    /// A name the user typed, made addressable: only the two target
+    /// separators are replaced — spaces and the rest are the user's to keep,
+    /// and tmux takes them. nil when there's nothing left to name it by.
+    /// (Left alone, tmux would quietly rename `foo.bar` to `foo_bar` and every
+    /// later `-t foo.bar` would miss it.)
+    public static func typed(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed.replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: ".", with: "-")
+    }
+
     /// Strip everything tmux can't address, collapse the damage, and never
     /// return an empty string.
     public static func sanitize(_ raw: String) -> String {

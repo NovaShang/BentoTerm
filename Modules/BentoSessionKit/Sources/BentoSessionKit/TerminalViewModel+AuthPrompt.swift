@@ -103,9 +103,9 @@ extension TerminalViewModel {
         case .passphrase:
             // "Enter passphrase for key '/Users/me/.ssh/id_ed25519':"
             let path = prompt.text.split(separator: "'").dropFirst().first.map(String.init)
-            return "sshPassphrase:\(path ?? prompt.text)"
+            return SecretKeys.sshPassphrase(keyPath: path ?? prompt.text)
         case .password, .verificationCode:
-            return "sshPassword:\(host.name)"
+            return SecretKeys.sshPassword(host: host.name)
         }
     }
 

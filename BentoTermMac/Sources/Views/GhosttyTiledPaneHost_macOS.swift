@@ -1162,7 +1162,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         let recentFiles = PaletteRecents.shared.files.map { entry in
             PaletteItem(id: "recent:" + entry.path,
                         title: (entry.path as NSString).lastPathComponent,
-                        subtitle: paletteAbbrev(entry.path),
+                        subtitle: tildeAbbreviated(entry.path),
                         systemImage: "clock",
                         matchText: (entry.path as NSString).lastPathComponent,
                         action: .preview(path: entry.path, line: nil))
@@ -1190,7 +1190,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         let splitRows = PaletteRecents.shared.agentLaunches(host: viewModel.launchHost).map { record in
             PaletteItem(id: "split:\(record.command):\(record.dir)",
                         title: "Split \(record.command)",
-                        subtitle: paletteAbbrev(record.dir),
+                        subtitle: tildeAbbreviated(record.dir),
                         systemImage: "rectangle.split.2x1",
                         matchText: "split \(record.command) \(record.dir)",
                         action: .run { [weak self] in self?.splitRecent(record) })
@@ -1300,7 +1300,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         ]
     }
 
-    private func paletteAbbrev(_ path: String) -> String { tildeAbbreviated(path) }
 
     /// Pane menu → Move to Session → <name>. The menu already selected the
     /// pane, so activePaneID is the one to move (same convention as the other

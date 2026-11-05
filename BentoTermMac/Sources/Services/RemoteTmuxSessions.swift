@@ -84,7 +84,7 @@ public enum RemoteTmuxSessions {
         // A password we were told to remember is a password we can use here.
         // Without one, BatchMode keeps ssh from sitting on a prompt that has no
         // window to appear in.
-        let stored = MacKeychain.load("sshPassword:\(alias)")
+        let stored = MacKeychain.load(SecretKeys.sshPassword(host: alias))
         var env = ProcessInfo.processInfo.environment
         var askpass: URL?
         if let stored, let helper = try? makeAskpassHelper() {

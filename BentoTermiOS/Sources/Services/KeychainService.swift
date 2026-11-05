@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import BentoFoundationKit
 
 enum KeychainError: LocalizedError {
     case duplicateItem
@@ -180,7 +181,7 @@ struct HostCredentialStore: Sendable {
     }
 
     static func macKeychainAccount(for hostID: UUID) -> String {
-        "macKeychain:\(hostID.uuidString)"
+        SecretKeys.macKeychain(hostID: hostID)
     }
 
     // MARK: Queries

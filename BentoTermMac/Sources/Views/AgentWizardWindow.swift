@@ -26,7 +26,7 @@ struct AgentWizardWindow: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Launch") { Task { await launch() } }
+                Button("Launch") { launch() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canLaunch)
@@ -47,22 +47,12 @@ struct AgentWizardWindow: View {
         }
     }
 
-    private func launch() async {
-        do {
-            model.error = nil
-            // Agent sessions always spin up in Bento's own in-app libghostty
-            // window (tmux -CC over a local pty) — sessions never bounce out
-            // to a third-party terminal anymore.
-            let coreSpec = BentoAgentKit.AgentSpec(
-                sessionName: model.spec.sessionName,
-                workingDir: model.spec.workingDir,
-                agentCommand: model.spec.agentCommand,
-                layout: BentoAgentKit.TmuxLayout(rawValue: model.spec.layout.rawValue) ?? .solo
-            )
-            await MainActor.run { BentoTerminalWindow.newWindow(agent: coreSpec) }
-            dismiss()
-        } catch {
-            model.error = "\(error)"
-        }
+    /// Agent sessions always spin up in Bento's own in-app libghostty window
+    /// (tmux -CC over a local pty) — sessions never bounce out to a
+    /// third-party terminal anymore.
+    private func launch() {
+        model.error = nil
+        BentoTerminalWindow.newWindow(agent: model.spec)
+        dismiss()
     }
 }

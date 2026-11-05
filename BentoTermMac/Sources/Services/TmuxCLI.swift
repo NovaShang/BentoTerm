@@ -1,6 +1,7 @@
 import Foundation
 import BentoFoundationKit
 import BentoSessionKit
+import BentoUISharedKit
 
 /// TmuxCLI shells out to a tmux binary. The Mac app never proxies the
 /// tmux protocol — sessions open in Bento's own in-app terminal, and these
@@ -49,20 +50,10 @@ enum TmuxCLI {
         return sessions.sorted { $0.lastActivity > $1.lastActivity }
     }
 
-    /// Attach to a tmux session: open an in-app libghostty window attached
-    /// over a local pty + tmux -CC. Sessions always open in Bento's own
-    /// terminal — the third-party terminal attach paths were removed with
-    /// the "Open tmux sessions in" setting. (Window selection within the
-    /// session is handled inside the native UI; the `window` arg is ignored
-    /// here until per-window tabs land.)
-    static func attach(session localSession: LocalTmuxSessionName, window: Int? = nil) async throws {
-        await MainActor.run { BentoTerminalWindow.focusOrOpen(localSession.id) }
-    }
-
     /// Enumerate every window inside `session`. Used to drive the
     /// per-session submenu so users can jump straight to "the claude
     /// window" instead of attaching + typing prefix-n a few times.
-    static func listWindows(session localSession: LocalTmuxSessionName) async -> [TmuxWindow] {
+    static func listWindows(session localSession: LocalTmuxSessionName) async -> [LocalWindowInfo] {
         let session = localSession.rawValue
         // Format mirrors listSessions: pipe-separated fields, easy to
         // split unambiguously since tmux disallows `|` in names.
@@ -71,16 +62,15 @@ enum TmuxCLI {
             "list-windows", "-t", session, "-F",
             "#{window_index}|#{window_name}|#{?window_active,1,0}|#{window_panes}"
         ]) else { return [] }
-        var windows: [TmuxWindow] = []
+        var windows: [LocalWindowInfo] = []
         for parts in rows {
             guard parts.count == 4, let idx = Int(parts[0]), let panes = Int(parts[3]) else {
                 continue
             }
-            windows.append(TmuxWindow(
-                session: localSession,
+            windows.append(LocalWindowInfo(
                 index: idx,
                 name: parts[1],
-                active: parts[2] == "1",
+                isActive: parts[2] == "1",
                 paneCount: panes
             ))
         }

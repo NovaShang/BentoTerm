@@ -16,19 +16,3 @@ struct TmuxSession: Identifiable, Hashable {
 
     var id: String { name.rawValue }
 }
-
-/// One row of `tmux list-windows -t <session>`. Window names default to
-/// the running command (e.g. "claude", "vim") when the user hasn't set
-/// one explicitly via `Ctrl-b ,`.
-struct TmuxWindow: Identifiable, Hashable {
-    /// Owning session — needed because window indices repeat across
-    /// sessions (every session has its own window 0, 1, 2…).
-    let session: LocalTmuxSessionName
-    let index: Int
-    let name: String
-    let active: Bool
-    let paneCount: Int
-
-    /// Scoped so a (session, index) pair is unique across the whole list.
-    var id: String { "\(session.rawValue):\(index)" }
-}

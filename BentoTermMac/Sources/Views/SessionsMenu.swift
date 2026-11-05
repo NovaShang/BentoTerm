@@ -16,9 +16,9 @@ import BentoUISharedKit
 //
 // What it knew is preserved in the AppKit version — per-session submenus, the
 // windows list, rename/kill for a session you are not in, the attached-vs-open
-// glyph distinction — with one correction: its window rows called
-// `TmuxCLI.attach(session:window:)`, which documents that it ignores `window:`,
-// so picking window 3 landed wherever the session happened to be. See
+// glyph distinction — with one correction: its window rows attached through a
+// call that ignored the window, so picking window 3 landed wherever the session
+// happened to be. See
 // `BentoTerminalWindow.focusOrOpen(_:windowIndex:)`.
 //
 // The two NSAlert helpers below survive unchanged and are used by that menu.

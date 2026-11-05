@@ -31,13 +31,9 @@ public enum BentoTerminalWindow {
     /// The session created when the window opens with no previous session.
     /// User-configurable (Settings → Sessions); defaults to the app name.
     public nonisolated static let defaultSessionNameKey = "default_session_name"
-    private nonisolated static let fallbackDefaultSessionName = "bento"
     public nonisolated static var defaultSessionName: String {
-        let raw = UserDefaults.standard.string(forKey: defaultSessionNameKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty else { return fallbackDefaultSessionName }
-        // tmux uses ':' and '.' as target separators — keep them out of names.
-        return raw.replacingOccurrences(of: ":", with: "-").replacingOccurrences(of: ".", with: "-")
+        TmuxSessionNaming.typed(UserDefaults.standard.string(forKey: defaultSessionNameKey) ?? "")
+            ?? TmuxSessionNaming.defaultName
     }
 
     /// App-provided hooks for toolbar actions that live in the app target.
@@ -80,9 +76,9 @@ public enum BentoTerminalWindow {
     /// Open/focus `id` and land on the window with tmux INDEX `windowIndex`.
     ///
     /// The whole point of listing another session's windows in a menu is to
-    /// arrive in the one you picked. `TmuxCLI.attach` takes a `window:` and
-    /// documents that it ignores it, so the old menu-bar version of this quietly
-    /// landed on whatever window the session was last on.
+    /// arrive in the one you picked. The old menu-bar version of this attached
+    /// with a window argument that was ignored, so it quietly landed on
+    /// whatever window the session was last on.
     ///
     /// The select cannot be issued with the open: the window's tmux ID isn't
     /// known until the control channel has attached and listed them, and the

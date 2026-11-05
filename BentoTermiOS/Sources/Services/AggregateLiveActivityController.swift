@@ -24,16 +24,13 @@ final class AggregateLiveActivityController: @unchecked Sendable {
         guard activity != nil || ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let summaries = sessions.prefix(4).map { entry -> BentoActivityAttributes.ContentState.SessionSummary in
             let status: BentoActivityAttributes.ContentState.Status
-            switch entry.viewModel.phase {
-            case .tmuxReady, .shellReady: status = .active
-            case .sshConnecting, .choosingSession, .starting: status = .connecting
+            switch entry.viewModel.phase.liveness {
+            case .live: status = .active
+            case .connecting: status = .connecting
             case .suspended: status = .suspended
             case .ended: status = .disconnected
             }
-            let awaiting = entry.viewModel.paneViewModels.reduce(0) { acc, p in
-                if case .awaitingInput = p.paneState { return acc + 1 }
-                return acc
-            }
+            let awaiting = entry.viewModel.awaitingPaneCount
             let label = entry.key.tmuxSessionName.isEmpty
                 ? entry.host.displayName
                 : "\(entry.host.displayName) · \(entry.key.tmuxSessionName)"

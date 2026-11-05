@@ -21,12 +21,6 @@ import BentoUISharedKit
 /// channel instead — the only thing that knows which machine to ask.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
-    @Published var tmuxSessions: [TmuxSession] = []
-    /// Windows per session, fetched alongside the session list so the
-    /// menu's submenu can render without a per-open async fetch (NSMenu
-    /// would already be on screen by the time tmux replied).
-    @Published var tmuxWindows: [LocalTmuxSessionName: [TmuxWindow]] = [:]
-
     private var pollTimer: Timer?
     /// KVO token for `NSApp.effectiveAppearance` — drives follow-system light/dark.
     private var appearanceObservation: NSKeyValueObservation?
@@ -338,12 +332,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     func refresh() async {
         let sessions = await TmuxCLI.listSessions()
-        tmuxSessions = sessions
         // Fan-out the per-session window queries concurrently. Each call
         // is a single `tmux list-windows` shell-out (a few ms), so even
         // with many sessions this finishes well under the 5s poll period.
-        var fresh: [LocalTmuxSessionName: [TmuxWindow]] = [:]
-        await withTaskGroup(of: (LocalTmuxSessionName, [TmuxWindow]).self) { group in
+        var fresh: [LocalTmuxSessionName: [LocalWindowInfo]] = [:]
+        await withTaskGroup(of: (LocalTmuxSessionName, [LocalWindowInfo]).self) { group in
             for s in sessions {
                 group.addTask { (s.name, await TmuxCLI.listWindows(session: s.name)) }
             }
@@ -351,7 +344,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 fresh[name] = wins
             }
         }
-        tmuxWindows = fresh
         // Describe the sessions before announcing them: pushing the names is
         // what wakes the launcher up, and it should redraw with the counts
         // already in hand rather than a frame later.
@@ -365,10 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // The window rows travel with the session so the toolbar's
                 // Sessions menu can offer them the moment it opens — an async
                 // fetch would land after the menu is already on screen.
-                windows: wins.map {
-                    LocalWindowInfo(index: $0.index, name: $0.name,
-                                    isActive: $0.active, paneCount: $0.paneCount)
-                })
+                windows: wins)
         })
         // Drive the terminal window's tab strip with the full session list.
         BentoTerminalWindow.setLocalServerSessions(sessions.map(\.name))

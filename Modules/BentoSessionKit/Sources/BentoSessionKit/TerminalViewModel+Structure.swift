@@ -276,6 +276,15 @@ public extension TerminalViewModel {
         }
     }
 
+    /// Panes across the whole session waiting on the user — the count a
+    /// session row and the Live Activity badge.
+    var awaitingPaneCount: Int {
+        paneViewModels.reduce(0) { count, pane in
+            if case .awaitingInput = pane.paneState { return count + 1 }
+            return count
+        }
+    }
+
     // MARK: - Creation (identical in both modes; only the landing differs)
 
     /// The active pane's live working directory (nil if unknown). Seeds the New

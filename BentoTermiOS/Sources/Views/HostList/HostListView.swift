@@ -410,12 +410,7 @@ struct ActiveSessionRow: View {
         self.viewModel = entry.viewModel
     }
 
-    private var awaitingPanes: Int {
-        viewModel.paneViewModels.reduce(0) { acc, p in
-            if case .awaitingInput = p.paneState { return acc + 1 }
-            return acc
-        }
-    }
+    private var awaitingPanes: Int { viewModel.awaitingPaneCount }
 
     private var paneCount: Int { viewModel.paneViewModels.count }
 
@@ -424,20 +419,15 @@ struct ActiveSessionRow: View {
     }
 
     private var statusColor: Color {
-        switch viewModel.phase {
-        case .tmuxReady, .shellReady:                       return .bentoEmerald
-        case .sshConnecting, .choosingSession, .starting:   return .bentoSalmon
-        case .suspended:                                    return .bentoInkDim
-        case .ended:                                        return .bentoRed
+        switch viewModel.phase.liveness {
+        case .live:       return .bentoEmerald
+        case .connecting: return .bentoSalmon
+        case .suspended:  return .bentoInkDim
+        case .ended:      return .bentoRed
         }
     }
 
-    private var isLive: Bool {
-        switch viewModel.phase {
-        case .tmuxReady, .shellReady: return true
-        default: return false
-        }
-    }
+    private var isLive: Bool { viewModel.phase.liveness == .live }
 
     private var subtitle: String {
         if paneCount > 0 {
