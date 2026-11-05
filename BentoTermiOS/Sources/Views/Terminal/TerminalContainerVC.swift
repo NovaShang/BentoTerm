@@ -1496,13 +1496,12 @@ extension TerminalContainerVC {
     }
 
     private func promptMoveToNewSession() {
-        let alert = UIAlertController(
-            title: "Move to New Session",
-            message: "The pane keeps running — it becomes a window of the new session.",
-            preferredStyle: .alert)
-        alert.addTextField { $0.placeholder = "Session name" }
+        let copy = SessionPromptCopy.movePaneToNewSession
+        let alert = UIAlertController(title: copy.title, message: copy.message,
+                                      preferredStyle: .alert)
+        alert.addTextField { $0.placeholder = copy.placeholder }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Move", style: .default) { [weak self, weak alert] _ in
+        alert.addAction(UIAlertAction(title: copy.confirm, style: .default) { [weak self, weak alert] _ in
             guard let name = alert?.textFields?.first?.text, !name.isEmpty else { return }
             self?.onMoveToSession?(name)
         })

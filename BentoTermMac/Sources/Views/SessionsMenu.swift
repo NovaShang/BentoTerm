@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import BentoSessionKit
 import BentoFoundationKit
+import BentoUISharedKit
 
 // The `SessionsMenuView` that used to live here is gone, and its behavior now
 // lives in `TerminalToolbarController.sessionSwitchSection` as a hand-built
@@ -29,12 +30,12 @@ import BentoFoundationKit
 func promptRename(current: String) -> String? {
     NSApp.activate(ignoringOtherApps: true)
     let alert = NSAlert()
-    alert.messageText = "Rename “\(current)”"
-    alert.informativeText = ""
+    alert.messageText = SessionPromptCopy.renameSession.title
+    alert.informativeText = SessionPromptCopy.renameSession.message ?? ""
     // Suppress the default Bento icon on the left — a rename prompt doesn't
     // need a branded badge.
     alert.icon = NSImage(size: NSSize(width: 1, height: 1))
-    alert.addButton(withTitle: "Rename")
+    alert.addButton(withTitle: SessionPromptCopy.renameSession.confirm)
     alert.addButton(withTitle: "Cancel")
 
     let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
@@ -54,10 +55,11 @@ func promptRename(current: String) -> String? {
 func confirmKill(session: String) -> Bool {
     NSApp.activate(ignoringOtherApps: true)
     let alert = NSAlert()
-    alert.messageText = "Kill “\(session)”?"
-    alert.informativeText = "Everything running in it stops. Closing a window or quitting BentoTerm only detaches — this does not."
+    let copy = SessionPromptCopy.killSession(session)
+    alert.messageText = copy.title
+    alert.informativeText = copy.message ?? ""
     alert.alertStyle = .warning
-    alert.addButton(withTitle: "Kill Session")
+    alert.addButton(withTitle: copy.confirm)
     alert.addButton(withTitle: "Cancel")
     return alert.runModal() == .alertFirstButtonReturn
 }

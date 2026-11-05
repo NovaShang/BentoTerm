@@ -173,6 +173,18 @@ public extension TerminalViewModel {
         return true
     }
 
+    /// The mode switch a control asks for: leave a zoomed pane first, so the
+    /// transformed session isn't hidden behind it, then `setMode`. Picking the
+    /// mode the session is already in does nothing. Returns false when
+    /// `setMode` declined — flattening a mixed external structure — so the
+    /// caller can confirm and call `setMode(mode, force: true)`.
+    @discardableResult
+    func requestMode(_ mode: TmuxSessionMode) async -> Bool {
+        guard mode != sessionMode else { return true }
+        if let zoomed = zoomedPaneID { toggleZoom(zoomed) }
+        return await setMode(mode)
+    }
+
     // MARK: - Grouping & naming
 
     /// Session panes grouped by window, in `list-panes -s` order (window
@@ -989,6 +1001,27 @@ public extension TerminalViewModel {
                 .breakPane(source: paneID, targetSession: $0)) })
     }
 
+    /// `movePane` for a UI that can ask: an unsettled target calls
+    /// `chooseLanding` with the session name and the move runs again with the
+    /// answer. A nil answer (the user cancelled) moves nothing and returns
+    /// `.needsLandingChoice`.
+    @discardableResult
+    func movePane(_ paneID: TmuxPaneID, toSession target: String,
+                  chooseLanding: @MainActor (String) async -> MoveLanding?) async -> MoveResult {
+        await Self.move(toSession: target, chooseLanding: chooseLanding) { landing in
+            await self.movePane(paneID, toSession: target, landing: landing)
+        }
+    }
+
+    /// `moveWindow` for a UI that can ask — see `movePane(_:toSession:chooseLanding:)`.
+    @discardableResult
+    func moveWindow(_ windowID: TmuxWindowID, toSession target: String,
+                    chooseLanding: @MainActor (String) async -> MoveLanding?) async -> MoveResult {
+        await Self.move(toSession: target, chooseLanding: chooseLanding) { landing in
+            await self.moveWindow(windowID, toSession: target, landing: landing)
+        }
+    }
+
     /// Move a whole window into another session: the Focus/List window row's
     /// counterpart of `movePane`, with the same landing rules — a Focus
     /// window IS one pane, so a Parallel target absorbs that pane into its
@@ -1156,5 +1189,19 @@ public extension TerminalViewModel {
             value = String(value.dropFirst().dropLast())
         }
         return value.isEmpty ? nil : value
+    }
+}
+
+extension TerminalViewModel {
+    /// The ask-and-retry every move UI used to spell out for itself: try with
+    /// `.auto`, and only if the target is unsettled, ask once and try again
+    /// with the explicit landing.
+    static func move(toSession target: String,
+                     chooseLanding: @MainActor (String) async -> MoveLanding?,
+                     attempt: (MoveLanding) async -> MoveResult) async -> MoveResult {
+        let first = await attempt(.auto)
+        guard first == .needsLandingChoice,
+              let landing = await chooseLanding(target) else { return first }
+        return await attempt(landing)
     }
 }

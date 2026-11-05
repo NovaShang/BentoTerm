@@ -193,17 +193,17 @@ struct TerminalWrapperView: View {
                     Task { await viewModel.splitPane(horizontal: true, seed: .custom(path: path, command: command)) }
                 }
             }
-            .alert(closeWindowAlertTitle, isPresented: Binding(
+            .alert(closeWindowPrompt.title, isPresented: Binding(
                 get: { pendingCloseWindow != nil },
                 set: { if !$0 { pendingCloseWindow = nil } }
             )) {
-                Button("Close Window", role: .destructive) {
+                Button(closeWindowPrompt.confirm, role: .destructive) {
                     if let id = pendingCloseWindow { viewModel.closeWindow(id) }
                     pendingCloseWindow = nil
                 }
                 Button("Cancel", role: .cancel) { pendingCloseWindow = nil }
             } message: {
-                Text("The processes running in it will be terminated.")
+                Text(closeWindowPrompt.message ?? "")
             }
             .alert(pendingSizeTakeover?.confirmTitle ?? "", isPresented: Binding(
                 get: { pendingSizeTakeover != nil },
@@ -217,8 +217,8 @@ struct TerminalWrapperView: View {
             } message: {
                 Text(pendingSizeTakeover?.confirmMessage ?? "")
             }
-            .alert("Kill this session?", isPresented: $pendingKillSession) {
-                Button("Kill Session", role: .destructive) {
+            .alert(killSessionPrompt.title, isPresented: $pendingKillSession) {
+                Button(killSessionPrompt.confirm, role: .destructive) {
                     // Leave the screen now; the kill awaits tmux's reply before it
                     // tears the connection down (see `killSession`), and holding
                     // the alert open for that round trip would look like a hang.
@@ -227,7 +227,7 @@ struct TerminalWrapperView: View {
                 }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("Every window and pane in this session is closed and its processes are terminated. This can't be undone.")
+                Text(killSessionPrompt.message ?? "")
             }
             .onChange(of: viewModel.isTmuxReady) { _, ready in
                 if ready {
@@ -914,14 +914,8 @@ struct TerminalWrapperView: View {
         if tips.shouldShow(.modeToggleIntro) {
             tips.markShown(.modeToggleIntro)
         }
-        guard newMode != viewModel.sessionMode else { return }
-        // Leaving a focused (zoomed) pane before transforming keeps the result
-        // visible.
-        if let z = viewModel.zoomedPaneID {
-            viewModel.toggleZoom(z)
-        }
         Task {
-            let ok = await viewModel.setMode(newMode)
+            let ok = await viewModel.requestMode(newMode)
             if !ok { showMixedFlattenAlert = true }
         }
     }
@@ -963,13 +957,13 @@ struct TerminalWrapperView: View {
                     .offset(x: 3, y: -3)
             }
         }
-        .alert("Switch to Focus mode?", isPresented: $showMixedFlattenAlert) {
-            Button("Flatten", role: .destructive) {
+        .alert(SessionPromptCopy.flatten.title, isPresented: $showMixedFlattenAlert) {
+            Button(SessionPromptCopy.flatten.confirm, role: .destructive) {
                 Task { await viewModel.setMode(.list, force: true) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This session contains a complex layout created outside BentoTerm. Switching will flatten every pane into its own window.")
+            Text(SessionPromptCopy.flatten.message ?? "")
         }
     }
 
@@ -1124,30 +1118,21 @@ struct TerminalWrapperView: View {
             ForEach(TerminalSizingMode.allCases, id: \.rawValue) { mode in
                 Button { setSizing(mode) } label: {
                     if mode == viewModel.sizingMode {
-                        Label(iosTitle(mode), systemImage: "checkmark")
+                        Label(mode.title, systemImage: "checkmark")
                     } else {
-                        Label(iosTitle(mode), systemImage: mode.symbol)
+                        Label(mode.title, systemImage: mode.symbol)
                     }
                 }
             }
         } header: {
             // Naming the owner is the whole point on a second device: without it
             // the menu shows a checked mode that this device cannot act on.
-            if viewModel.sizingMode == .thisDevice, let owner = viewModel.sizingOwner,
-               !viewModel.sizingOwnerIsMe {
+            if let owner = viewModel.sizingMode.foreignOwner(viewModel.sizingOwner,
+                                                             ownerIsMe: viewModel.sizingOwnerIsMe) {
                 Text("Session Size — set by \(owner.displayName)")
             } else {
                 Text("Session Size")
             }
-        }
-    }
-
-    /// Same states as the Mac, said in this device's words.
-    private func iosTitle(_ mode: TerminalSizingMode) -> String {
-        switch mode {
-        case .tracking:   return "Follow the Active Device"
-        case .smallest:   return "Fit Every Device"
-        case .thisDevice: return "Size to This Device"
         }
     }
 
@@ -1178,9 +1163,12 @@ struct TerminalWrapperView: View {
         }
     }
 
-    private var closeWindowAlertTitle: String {
-        let name = pendingCloseWindow.map { viewModel.windowDisplayName($0) } ?? ""
-        return "Close “\(name)”?"
+    private var closeWindowPrompt: SessionPromptCopy.Prompt {
+        SessionPromptCopy.closeWindow(pendingCloseWindow.map { viewModel.windowDisplayName($0) } ?? "")
+    }
+
+    private var killSessionPrompt: SessionPromptCopy.Prompt {
+        SessionPromptCopy.killSession(viewModel.activeTmuxSessionName)
     }
 
     @ViewBuilder
@@ -1695,35 +1683,33 @@ final class PaneContainerVC: UIViewController {
     }
 
     /// Pane menu → Move to Session: run the move; an unsettled target (fresh
-    /// 1×1 with no remembered mode, or a mixed external structure) bounces
-    /// back as a landing prompt, then re-runs with the explicit choice.
-    private func movePane(_ paneID: TmuxPaneID, toSessionNamed name: String,
-                          landing: MoveLanding = .auto) {
+    /// 1×1 with no remembered mode, or a mixed external structure) asks where
+    /// to land, then re-runs with the explicit choice.
+    private func movePane(_ paneID: TmuxPaneID, toSessionNamed name: String) {
         Task { [weak self] in
-            guard let self, let vm = self.viewModel else { return }
-            if await vm.movePane(paneID, toSession: name, landing: landing)
-                == .needsLandingChoice {
-                self.promptMoveLanding(session: name) { [weak self] choice in
-                    self?.movePane(paneID, toSessionNamed: name, landing: choice)
-                }
+            guard let vm = self?.viewModel else { return }
+            await vm.movePane(paneID, toSession: name) { [weak self] session in
+                await self?.askMoveLanding(session: session)
             }
         }
     }
 
-    private func promptMoveLanding(session: String,
-                                   _ proceed: @escaping (MoveLanding) -> Void) {
-        let alert = UIAlertController(
-            title: "Move to “\(session)”",
-            message: "That session isn't settled into Parallel or Focus yet. Where should this land?",
-            preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Into Current Window (Parallel)", style: .default) { _ in
-            proceed(.joinCurrentWindow)
-        })
-        alert.addAction(UIAlertAction(title: "As New Window (Focus)", style: .default) { _ in
-            proceed(.newWindow)
-        })
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        present(alert, animated: true)
+    private func askMoveLanding(session: String) async -> MoveLanding? {
+        let copy = SessionPromptCopy.landing(session)
+        return await withCheckedContinuation { continuation in
+            let alert = UIAlertController(title: copy.title, message: copy.message,
+                                          preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: copy.joinCurrentWindow, style: .default) { _ in
+                continuation.resume(returning: .joinCurrentWindow)
+            })
+            alert.addAction(UIAlertAction(title: copy.newWindow, style: .default) { _ in
+                continuation.resume(returning: .newWindow)
+            })
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+                continuation.resume(returning: nil)
+            })
+            present(alert, animated: true)
+        }
     }
 
     /// Every pane on iOS lives on the other end of an ssh connection, so a
@@ -2594,7 +2580,7 @@ extension PaneContainerVC {
 ///
 /// State dots refresh on every state poll without an explicit `.id`: the
 /// @ObservedObject view model bumps `stateVersion` (@Published) each cycle,
-/// which re-runs this body and re-derives `windowState`. (`.id(stateVersion)`
+/// which re-runs this body and re-derives `windowStatus`. (`.id(stateVersion)`
 /// on the scroll content would also reset the user's horizontal scroll
 /// position every poll, so it's deliberately not used here.)
 ///
@@ -2611,7 +2597,7 @@ struct WindowTabBar: View {
     @State private var showCustomSheet = false
     @State private var pendingMove: TmuxWindowID?
     @State private var moveSessionName = ""
-    @State private var landingChoice: (window: TmuxWindowID, session: String)?
+    @StateObject private var landingPrompt = MoveLandingPrompt()
     /// The tab a dragged tab is currently hovering over — it lifts to show the
     /// slot the drop would take.
     @State private var dropTarget: TmuxWindowID?
@@ -2697,17 +2683,17 @@ struct WindowTabBar: View {
             // (BarItemGlass); the bar itself stays bare.
             Color.clear
         )
-        .alert(closeAlertTitle, isPresented: Binding(
+        .alert(closePrompt.title, isPresented: Binding(
             get: { pendingClose != nil },
             set: { if !$0 { pendingClose = nil } }
         )) {
-            Button("Close Window", role: .destructive) {
+            Button(closePrompt.confirm, role: .destructive) {
                 if let id = pendingClose { viewModel.closeWindow(id) }
                 pendingClose = nil
             }
             Button("Cancel", role: .cancel) { pendingClose = nil }
         } message: {
-            Text("The processes running in it will be terminated.")
+            Text(closePrompt.message ?? "")
         }
         .sheet(isPresented: $showCustomSheet) {
             NewWindowSheet(title: "New Window",
@@ -2715,12 +2701,13 @@ struct WindowTabBar: View {
                 Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
             }
         }
-        .alert("Move to New Session", isPresented: Binding(
+        .alert(SessionPromptCopy.moveWindowToNewSession.title, isPresented: Binding(
             get: { pendingMove != nil },
             set: { if !$0 { pendingMove = nil } }
         )) {
-            TextField("Session name", text: $moveSessionName)
-            Button("Move") {
+            TextField(SessionPromptCopy.moveWindowToNewSession.placeholder ?? "",
+                      text: $moveSessionName)
+            Button(SessionPromptCopy.moveWindowToNewSession.confirm) {
                 // Same landing pipeline as a menu pick: a typed name may
                 // match an EXISTING session, so the prompt can still follow.
                 if let id = pendingMove { moveWindow(id, to: moveSessionName) }
@@ -2728,28 +2715,9 @@ struct WindowTabBar: View {
             }
             Button("Cancel", role: .cancel) { pendingMove = nil }
         } message: {
-            Text("The window keeps running — it moves to the new session.")
+            Text(SessionPromptCopy.moveWindowToNewSession.message ?? "")
         }
-        .confirmationDialog(
-            "Move to “\(landingChoice?.session ?? "")”",
-            isPresented: Binding(
-                get: { landingChoice != nil },
-                set: { if !$0 { landingChoice = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Into Current Window (Parallel)") {
-                if let c = landingChoice { moveWindow(c.window, to: c.session, landing: .joinCurrentWindow) }
-                landingChoice = nil
-            }
-            Button("As New Window (Focus)") {
-                if let c = landingChoice { moveWindow(c.window, to: c.session, landing: .newWindow) }
-                landingChoice = nil
-            }
-            Button("Cancel", role: .cancel) { landingChoice = nil }
-        } message: {
-            Text("That session isn't settled into Parallel or Focus yet. Where should this land?")
-        }
+        .moveLandingDialog(landingPrompt)
     }
 
     /// Landing a dragged tab on `target` gives it that tab's position — drop
@@ -2778,20 +2746,16 @@ struct WindowTabBar: View {
         Task { await viewModel.shiftWindow(id, earlier: earlier) }
     }
 
-    /// Run the move; an unsettled target bounces back as the landing dialog.
-    private func moveWindow(_ id: TmuxWindowID, to session: String,
-                            landing: MoveLanding = .auto) {
+    /// Run the move; an unsettled target asks through the landing dialog.
+    private func moveWindow(_ id: TmuxWindowID, to session: String) {
         Task {
-            if await viewModel.moveWindow(id, toSession: session, landing: landing)
-                == .needsLandingChoice {
-                landingChoice = (id, session)
-            }
+            await viewModel.moveWindow(id, toSession: session,
+                                       chooseLanding: landingPrompt.ask)
         }
     }
 
-    private var closeAlertTitle: String {
-        let name = pendingClose.map { viewModel.windowDisplayName($0) } ?? ""
-        return "Close “\(name)”?"
+    private var closePrompt: SessionPromptCopy.Prompt {
+        SessionPromptCopy.closeWindow(pendingClose.map { viewModel.windowDisplayName($0) } ?? "")
     }
 
     /// The two creation seeds — same pair as the iPad/macOS sidebar.

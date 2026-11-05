@@ -860,12 +860,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // Under `manual` the interesting fact is WHO owns the size, not which
         // mode is checked — a device that can't reflow the session needs to be
         // told which other device to go touch.
-        let noteText: String
-        if sizingMode == .thisDevice, let owner = sizingOwner, !sizingOwnerIsMe {
-            noteText = "Sized by \(owner.displayName). Choose “\(TerminalSizingMode.thisDevice.title)” to take over."
-        } else {
-            noteText = sizingMode.explanation
-        }
+        let noteText = sizingMode.ownerNote(owner: sizingOwner, ownerIsMe: sizingOwnerIsMe)
         let note = NSMenuItem(title: noteText, action: nil, keyEquivalent: "")
         note.isEnabled = false
         sub.addItem(note)

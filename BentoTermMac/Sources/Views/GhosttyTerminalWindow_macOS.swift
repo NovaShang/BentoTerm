@@ -1298,13 +1298,13 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         guard let tab = activeTab, !tab.isPlain else { return }
         let vm = tab.viewModel
         Task { [weak self] in
-            let switched = await vm.setMode(mode)
+            let switched = await vm.requestMode(mode)
             guard !switched, let self else { return }
+            let copy = SessionPromptCopy.flatten
             let alert = NSAlert()
-            alert.messageText = "Switch to Focus mode?"
-            alert.informativeText = "This session contains a complex layout created "
-                + "outside Bento. Switching will flatten every pane into its own window."
-            alert.addButton(withTitle: "Flatten")
+            alert.messageText = copy.title
+            alert.informativeText = copy.message ?? ""
+            alert.addButton(withTitle: copy.confirm)
             alert.addButton(withTitle: "Cancel")
             alert.beginSheetModal(for: self.window) { [weak self] response in
                 if response == .alertFirstButtonReturn {
@@ -1414,11 +1414,12 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // Kill Session is destructive AND irreversible — every window/pane and
         // its running processes die. Confirm first (parity with iOS) so a stray
         // click doesn't silently end a session with work in it.
+        let copy = SessionPromptCopy.killSession(name)
         let alert = NSAlert()
-        alert.messageText = "Kill session “\(name)”?"
-        alert.informativeText = "Every window and pane in this session is closed and its running processes are terminated. This can’t be undone."
+        alert.messageText = copy.title
+        alert.informativeText = copy.message ?? ""
         alert.alertStyle = .warning
-        let killButton = alert.addButton(withTitle: "Kill Session")
+        let killButton = alert.addButton(withTitle: copy.confirm)
         alert.addButton(withTitle: "Cancel")
         killButton.keyEquivalent = ""   // require a deliberate click, not Return
         if #available(macOS 11.0, *) { killButton.hasDestructiveAction = true }
@@ -1871,9 +1872,11 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     fileprivate func sessionDot() -> SessionDot {
         if tab.isPlain { return .plain }   // no tmux → a terminal glyph, not a dot
         let vm = tab.viewModel
+        // Same priority as a window's status (`windowStatus`): something still
+        // running outranks something that finished while you were away.
         if vm.agentsWaiting > 0    { return .awaiting }
-        if vm.agentsDoneUnseen > 0 { return .doneUnseen }
         if vm.agentsWorking > 0    { return .working }
+        if vm.agentsDoneUnseen > 0 { return .doneUnseen }
         return .idle           // open, no agent activity → filled gray
     }
 
@@ -1962,18 +1965,11 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     private func presentRenameSheet() {
         guard let tab = activeTab else { return }
-        let alert = NSAlert()
-        alert.messageText = "Rename Session"
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = tab.viewModel.activeTmuxSessionName ?? ""
-        field.placeholderString = "session name"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            tab.viewModel.renameSession(to: field.stringValue)
+        Task { [window] in
+            guard let name = await window?.askName(SessionPromptCopy.renameSession,
+                                                  initial: tab.viewModel.activeTmuxSessionName ?? "")
+            else { return }
+            tab.viewModel.renameSession(to: name)
         }
     }
 
@@ -2022,29 +2018,22 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     private func promptRenameWindow(_ id: TmuxWindowID) {
         let vm = tab.viewModel
-        let alert = NSAlert()
-        alert.messageText = "Rename Window"
-        alert.informativeText = "tmux stops auto-naming this window from what's running in it."
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = vm.windowBodyName(id)
-        field.placeholderString = "window name"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            vm.renameWindow(id, to: field.stringValue)
+        Task { [window] in
+            guard let name = await window?.askName(SessionPromptCopy.renameWindow,
+                                                  initial: vm.windowBodyName(id))
+            else { return }
+            vm.renameWindow(id, to: name)
         }
     }
 
     private func confirmCloseWindow(_ id: TmuxWindowID) {
         let vm = tab.viewModel
+        let copy = SessionPromptCopy.closeWindow(vm.windowDisplayName(id))
         let alert = NSAlert()
-        alert.messageText = "Close “\(vm.windowDisplayName(id))”?"
-        alert.informativeText = "Everything running in its panes stops."
+        alert.messageText = copy.title
+        alert.informativeText = copy.message ?? ""
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Close Window")
+        alert.addButton(withTitle: copy.confirm)
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
@@ -2053,47 +2042,23 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     }
 
     private func promptMoveToNewSession(_ id: TmuxWindowID) {
-        let alert = NSAlert()
-        alert.messageText = "Move to New Session"
-        alert.informativeText = "The window keeps running — it moves to the new session."
-        alert.addButton(withTitle: "Move")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.placeholderString = "session name"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
+        Task { [weak self, window] in
+            guard let name = await window?.askName(SessionPromptCopy.moveWindowToNewSession)
+            else { return }
             // A typed name may match an EXISTING session, so this goes through
             // the same landing pipeline as a menu pick rather than assuming new.
-            self?.moveWindow(id, to: field.stringValue)
+            self?.moveWindow(id, to: name)
         }
     }
 
     /// Run the move; a target session that hasn't settled into Parallel or Focus
-    /// bounces back and asks where the window should land (same pipeline the
-    /// sidebar uses — see `TerminalViewModel.moveWindow`).
-    private func moveWindow(_ id: TmuxWindowID, to session: String,
-                            landing: MoveLanding = .auto) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            guard await self.tab.viewModel.moveWindow(id, toSession: session, landing: landing)
-                == .needsLandingChoice else { return }
-            let alert = NSAlert()
-            alert.messageText = "Move to “\(session)”"
-            alert.informativeText =
-                "That session isn't settled into Parallel or Focus yet. Where should this land?"
-            alert.addButton(withTitle: "Into Current Window (Parallel)")
-            alert.addButton(withTitle: "As New Window (Focus)")
-            alert.addButton(withTitle: "Cancel")
-            alert.beginSheetModal(for: self.window) { [weak self] response in
-                switch response {
-                case .alertFirstButtonReturn:
-                    self?.moveWindow(id, to: session, landing: .joinCurrentWindow)
-                case .alertSecondButtonReturn:
-                    self?.moveWindow(id, to: session, landing: .newWindow)
-                default: break
-                }
+    /// asks where the window should land (same pipeline the sidebar uses — see
+    /// `TerminalViewModel.moveWindow`).
+    private func moveWindow(_ id: TmuxWindowID, to session: String) {
+        let vm = tab.viewModel
+        Task { [window] in
+            await vm.moveWindow(id, toSession: session) { session in
+                await window?.askMoveLanding(session: session)
             }
         }
     }
@@ -2265,3 +2230,49 @@ private final class LayoutHookView: NSView {
     }
 }
 #endif
+
+// MARK: - Session prompts as sheets
+
+extension NSWindow {
+    /// The landing question for a move into an unsettled session, as a sheet
+    /// on this window; nil = cancelled. Pass it as a move's `chooseLanding`.
+    func askMoveLanding(session: String) async -> MoveLanding? {
+        let copy = SessionPromptCopy.landing(session)
+        let alert = NSAlert()
+        alert.messageText = copy.title
+        alert.informativeText = copy.message
+        alert.addButton(withTitle: copy.joinCurrentWindow)
+        alert.addButton(withTitle: copy.newWindow)
+        alert.addButton(withTitle: "Cancel")
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: self) { response in
+                switch response {
+                case .alertFirstButtonReturn:  continuation.resume(returning: .joinCurrentWindow)
+                case .alertSecondButtonReturn: continuation.resume(returning: .newWindow)
+                default:                       continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    /// A one-field name prompt as a sheet on this window: the typed text, or
+    /// nil if cancelled.
+    func askName(_ prompt: SessionPromptCopy.Prompt, initial: String = "") async -> String? {
+        let alert = NSAlert()
+        alert.messageText = prompt.title
+        alert.informativeText = prompt.message ?? ""
+        alert.addButton(withTitle: prompt.confirm)
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = initial
+        field.placeholderString = prompt.placeholder
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: self) { response in
+                continuation.resume(returning: response == .alertFirstButtonReturn
+                                    ? field.stringValue : nil)
+            }
+        }
+    }
+}

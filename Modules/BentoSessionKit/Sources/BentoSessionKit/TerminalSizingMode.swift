@@ -76,6 +76,22 @@ public enum TerminalSizingMode: String, Sendable, CaseIterable {
         }
     }
 
+    /// The device that governs this session's size when it is NOT this one —
+    /// the thing a second device most needs to be told, since its menu shows a
+    /// checked mode it cannot act on. nil unless `.thisDevice` is owned
+    /// elsewhere.
+    public func foreignOwner(_ owner: TmuxSizingOwner?, ownerIsMe: Bool) -> TmuxSizingOwner? {
+        guard self == .thisDevice, !ownerIsMe else { return nil }
+        return owner
+    }
+
+    /// The line under the choices: which device to go touch when another one
+    /// owns the size, otherwise what this mode means for the other devices.
+    public func ownerNote(owner: TmuxSizingOwner?, ownerIsMe: Bool) -> String {
+        guard let foreign = foreignOwner(owner, ownerIsMe: ownerIsMe) else { return explanation }
+        return "Sized by \(foreign.displayName). Choose “\(Self.thisDevice.title)” to take over."
+    }
+
     public var symbol: String {
         switch self {
         case .tracking:   return "arrow.up.left.and.arrow.down.right"

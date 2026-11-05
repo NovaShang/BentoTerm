@@ -22,7 +22,7 @@ public struct WindowSidebar: View {
     @State private var moveSessionName = ""
     @State private var pendingRename: TmuxWindowID?
     @State private var renameText = ""
-    @State private var landingChoice: (window: TmuxWindowID, session: String)?
+    @StateObject private var landingPrompt = MoveLandingPrompt()
 
     public init(viewModel: TerminalViewModel) {
         self.viewModel = viewModel
@@ -47,45 +47,46 @@ public struct WindowSidebar: View {
             newWindowButton
         }
         .confirmationDialog(
-            closeDialogTitle,
+            closePrompt.title,
             isPresented: Binding(
                 get: { pendingClose != nil },
                 set: { if !$0 { pendingClose = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("Close Window", role: .destructive) {
+            Button(closePrompt.confirm, role: .destructive) {
                 if let id = pendingClose { viewModel.closeWindow(id) }
                 pendingClose = nil
             }
             Button("Cancel", role: .cancel) { pendingClose = nil }
         } message: {
-            Text("The processes running in it will be terminated.")
+            Text(closePrompt.message ?? "")
         }
         .sheet(isPresented: $showCustomSheet) {
             NewWindowForm { path, command in
                 Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
             }
         }
-        .alert("Rename Window", isPresented: Binding(
+        .alert(SessionPromptCopy.renameWindow.title, isPresented: Binding(
             get: { pendingRename != nil },
             set: { if !$0 { pendingRename = nil } }
         )) {
-            TextField("Window name", text: $renameText)
-            Button("Rename") {
+            TextField(SessionPromptCopy.renameWindow.placeholder ?? "", text: $renameText)
+            Button(SessionPromptCopy.renameWindow.confirm) {
                 if let id = pendingRename { viewModel.renameWindow(id, to: renameText) }
                 pendingRename = nil
             }
             Button("Cancel", role: .cancel) { pendingRename = nil }
         } message: {
-            Text("tmux stops auto-naming this window from what's running in it.")
+            Text(SessionPromptCopy.renameWindow.message ?? "")
         }
-        .alert("Move to New Session", isPresented: Binding(
+        .alert(SessionPromptCopy.moveWindowToNewSession.title, isPresented: Binding(
             get: { pendingMove != nil },
             set: { if !$0 { pendingMove = nil } }
         )) {
-            TextField("Session name", text: $moveSessionName)
-            Button("Move") {
+            TextField(SessionPromptCopy.moveWindowToNewSession.placeholder ?? "",
+                      text: $moveSessionName)
+            Button(SessionPromptCopy.moveWindowToNewSession.confirm) {
                 // Same landing pipeline as a menu pick: a typed name may
                 // match an EXISTING session, so the prompt can still follow.
                 if let id = pendingMove { moveWindow(id, to: moveSessionName) }
@@ -93,28 +94,9 @@ public struct WindowSidebar: View {
             }
             Button("Cancel", role: .cancel) { pendingMove = nil }
         } message: {
-            Text("The window keeps running — it moves to the new session.")
+            Text(SessionPromptCopy.moveWindowToNewSession.message ?? "")
         }
-        .confirmationDialog(
-            "Move to “\(landingChoice?.session ?? "")”",
-            isPresented: Binding(
-                get: { landingChoice != nil },
-                set: { if !$0 { landingChoice = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Into Current Window (Parallel)") {
-                if let c = landingChoice { moveWindow(c.window, to: c.session, landing: .joinCurrentWindow) }
-                landingChoice = nil
-            }
-            Button("As New Window (Focus)") {
-                if let c = landingChoice { moveWindow(c.window, to: c.session, landing: .newWindow) }
-                landingChoice = nil
-            }
-            Button("Cancel", role: .cancel) { landingChoice = nil }
-        } message: {
-            Text("That session isn't settled into Parallel or Focus yet. Where should this land?")
-        }
+        .moveLandingDialog(landingPrompt)
     }
 
     /// Drag a row to rearrange the session's windows — the order here IS tmux's
@@ -141,20 +123,16 @@ public struct WindowSidebar: View {
         Task { await viewModel.shiftWindow(id, earlier: earlier) }
     }
 
-    /// Run the move; an unsettled target bounces back as the landing dialog.
-    private func moveWindow(_ id: TmuxWindowID, to session: String,
-                            landing: MoveLanding = .auto) {
+    /// Run the move; an unsettled target asks through the landing dialog.
+    private func moveWindow(_ id: TmuxWindowID, to session: String) {
         Task {
-            if await viewModel.moveWindow(id, toSession: session, landing: landing)
-                == .needsLandingChoice {
-                landingChoice = (id, session)
-            }
+            await viewModel.moveWindow(id, toSession: session,
+                                       chooseLanding: landingPrompt.ask)
         }
     }
 
-    private var closeDialogTitle: String {
-        let name = pendingClose.map { viewModel.windowDisplayName($0) } ?? ""
-        return "Close “\(name)”?"
+    private var closePrompt: SessionPromptCopy.Prompt {
+        SessionPromptCopy.closeWindow(pendingClose.map { viewModel.windowDisplayName($0) } ?? "")
     }
 
     /// Selection mirrors the session's current window; picking a row is
