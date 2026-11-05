@@ -47,17 +47,4 @@ public extension PaneState {
         case .awaitingInput: return 0.12
         }
     }
-
-    /// Accent color (0xRRGGBB) for pane *chrome* — the title-bar band and the
-    /// border — when the state should stand out. nil for idle = neutral chrome.
-    /// Working/awaiting reuse the dot's blue/amber; "done, unseen" (green) isn't
-    /// a PaneState, so the view layers that color on itself. One source of truth
-    /// for both platforms, alongside `dotColorHex` / `tintAlpha`.
-    var chromeAccentHex: UInt32? {
-        switch self {
-        case .working:       return Self.workingHex
-        case .awaitingInput: return Self.awaitingHex
-        case .idle:          return nil
-        }
-    }
 }

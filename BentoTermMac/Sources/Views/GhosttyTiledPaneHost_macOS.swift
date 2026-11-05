@@ -447,33 +447,35 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                          in: cellFrames, excluding: source)
     }
 
-    private func handlePaneDrag(source paneID: TmuxPaneID, phase: PaneDragPhase) {
+    private func handlePaneDrag(source paneID: TmuxPaneID, phase: PaneDrag.Phase) {
         switch phase {
+        case .began:
+            guard dragSourceID == nil else { return }
+            dragSourceID = paneID
+            cells[paneID]?.container.alphaValue = 0.6
+            NSCursor.closedHand.push()
+
         case .moved(let windowPoint):
-            if dragSourceID == nil {
-                dragSourceID = paneID
-                cells[paneID]?.container.alphaValue = 0.6
-                NSCursor.closedHand.push()
-            }
             updateDropOverlay(landing(at: windowPoint, excluding: paneID))
 
         case .ended(let windowPoint):
             let drop = landing(at: windowPoint, excluding: paneID)
-            dropOverlay?.removeFromSuperview()
-            dropOverlay = nil
-            cells[paneID]?.container.alphaValue = 1.0
-            if dragSourceID != nil {
-                dragSourceID = nil
-                NSCursor.pop()
-            }
+            endPaneDrag(paneID)
             guard let drop else { return }
-            switch PaneDrag.action(source: paneID, landing: drop) {
-            case let .dock(source, target, horizontal, before):
-                viewModel.movePane(source, splitting: target,
-                                   horizontal: horizontal, before: before)
-            case let .swap(source, target):
-                viewModel.swapPanes(source, with: target)
-            }
+            viewModel.perform(PaneDrag.action(source: paneID, landing: drop))
+
+        case .cancelled:
+            endPaneDrag(paneID)
+        }
+    }
+
+    private func endPaneDrag(_ paneID: TmuxPaneID) {
+        dropOverlay?.removeFromSuperview()
+        dropOverlay = nil
+        cells[paneID]?.container.alphaValue = 1.0
+        if dragSourceID != nil {
+            dragSourceID = nil
+            NSCursor.pop()
         }
     }
 
@@ -1569,13 +1571,6 @@ public enum BentoPaneAction {
 
 // MARK: - Pane container (title bar + terminal surface)
 
-/// Phase of a title-bar drag used for drag-to-dock. Points are in window
-/// coordinates; the host converts and hit-tests against its cells.
-enum PaneDragPhase {
-    case moved(NSPoint)
-    case ended(NSPoint)
-}
-
 /// The translucent landing preview shown while a pane drag hovers a target:
 /// the whole pane for a center/swap drop (with a ⇄ badge — the one zone whose
 /// meaning isn't its own shape), the docked half for an edge drop. Hit-test
@@ -1635,7 +1630,7 @@ final class PaneCellView: NSView {
     var onClick: (() -> Void)?
     /// Fired while the title bar is dragged beyond the click slop — the
     /// drag-to-dock gesture. Clicks under the threshold stay clicks.
-    var onPaneDrag: ((PaneDragPhase) -> Void)?
+    var onPaneDrag: ((PaneDrag.Phase) -> Void)?
     var onZoom: (() -> Void)? {
         didSet { titleBar.onZoom = onZoom }
     }
@@ -1847,6 +1842,7 @@ final class PaneCellView: NSView {
         let p = event.locationInWindow
         if !dragActive, hypot(p.x - dragStart.x, p.y - dragStart.y) > Self.dragSlop {
             dragActive = true
+            onPaneDrag?(.began)
         }
         if dragActive {
             onPaneDrag?(.moved(p))

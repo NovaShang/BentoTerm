@@ -2276,7 +2276,7 @@ extension PaneContainerVC {
                          in: paneFrames, excluding: source)
     }
 
-    private func handleTitleSwap(source paneID: TmuxPaneID, phase: TitleDragPhase) {
+    private func handleTitleSwap(source paneID: TmuxPaneID, phase: PaneDrag.Phase) {
         // Rearranging only makes sense between visible tiles. In focus /
         // single-pane layout there's nothing to land on, so ignore the drag.
         guard !isFocusLayout else { return }
@@ -2289,13 +2289,7 @@ extension PaneContainerVC {
             let drop = landing(atWindowPoint: p, excluding: paneID)
             endTitleDrag(paneID)
             guard let drop else { return }
-            switch PaneDrag.action(source: paneID, landing: drop) {
-            case let .dock(source, target, horizontal, before):
-                viewModel?.movePane(source, splitting: target,
-                                    horizontal: horizontal, before: before)
-            case let .swap(source, target):
-                viewModel?.swapPanes(source, with: target)
-            }
+            viewModel?.perform(PaneDrag.action(source: paneID, landing: drop))
         case .cancelled:
             endTitleDrag(paneID)
         }
@@ -2630,7 +2624,7 @@ struct WindowTabBar: View {
                         // Body name only — the chips are small, the "N:" index
                         // prefix adds noise here (the sidebar keeps it).
                         WindowTab(name: viewModel.windowBodyName(window.id),
-                                  state: viewModel.windowState(window.id),
+                                  status: viewModel.windowStatus(window.id).chrome,
                                   paneCount: viewModel.panes(in: window.id).count,
                                   isActive: window.id == viewModel.activeWindowID)
                             .id(window.id)
@@ -2642,7 +2636,7 @@ struct WindowTabBar: View {
                                 // it reads as a thing in transit rather than as
                                 // a second "current window".
                                 WindowTab(name: viewModel.windowBodyName(window.id),
-                                          state: viewModel.windowState(window.id),
+                                          status: viewModel.windowStatus(window.id).chrome,
                                           paneCount: viewModel.panes(in: window.id).count,
                                           isActive: false)
                             }
@@ -2819,7 +2813,7 @@ struct WindowTabBar: View {
                 .foregroundStyle(Color.bentoInkDim)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .modifier(BarItemGlass(isActive: false, state: .idle))
+                .modifier(BarItemGlass(isActive: false))
                 .contentShape(Capsule())
         }
     }
@@ -2970,8 +2964,8 @@ struct NewWindowSheet: View {
 /// Liquid-glass capsule for the window tab bar's chips — each tab and the
 /// "+" button. The bar itself stays transparent so the terminal flows through
 /// it; only the items wear glass. iOS 26: the chip's glass is tinted by its
-/// window's state (`chromeAccentHex` — working blue, awaiting amber, idle
-/// plain); the active chip wears the full color, inactive chips a weakened
+/// window's status (`PaneChrome.Status.accentHex` — working blue, awaiting
+/// amber, done green, idle plain); the active chip wears the full color, inactive chips a weakened
 /// version of the same, so the bar shows every window's state at a glance
 /// while the active tab stays the strongest. Earlier systems: the flat bento
 /// chip with the emerald ring. The chip's content (dot, label, badge) is
@@ -2979,7 +2973,7 @@ struct NewWindowSheet: View {
 /// the material.
 private struct BarItemGlass: ViewModifier {
     var isActive: Bool
-    var state: PaneState = .idle
+    var status: PaneChrome.Status = .idle
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -2997,14 +2991,14 @@ private struct BarItemGlass: ViewModifier {
         }
     }
 
-    /// State accent for the glass, from the canonical palette (working blue /
-    /// awaiting amber) — full strength when active, half when not, so the
-    /// state reads on every chip and the active one is the loudest. Idle has
-    /// no state accent: the active chip wears the theme accent (emerald) so a
-    /// resting window's selected tab still stands out; inactive idle chips
-    /// wear plain glass.
+    /// Status accent for the glass, from the canonical palette (working blue /
+    /// awaiting amber / done green) — full strength when active, half when
+    /// not, so the status reads on every chip and the active one is the
+    /// loudest. Idle has no accent: the active chip wears the theme accent
+    /// (emerald) so a resting window's selected tab still stands out; inactive
+    /// idle chips wear plain glass.
     private var tint: Color? {
-        if let hex = state.chromeAccentHex {
+        if let hex = status.accentHex {
             let base = Color(hex: hex)
             return isActive ? base : base.opacity(0.5)
         }
@@ -3014,19 +3008,20 @@ private struct BarItemGlass: ViewModifier {
 
 private struct WindowTab: View {
     var name: String
-    var state: PaneState
+    var status: PaneChrome.Status
     var paneCount: Int
     var isActive: Bool
 
     var body: some View {
         HStack(spacing: 6) {
-            // State icon — same glyph language as the sidebar rows: play =
-            // working, question = awaiting, hollow ring = idle. Active: white,
-            // matching the text (the tinted chip owns the color then);
-            // inactive: the state color.
-            Image(systemName: stateIconName)
+            // Status icon — the sidebar rows' and pane titles' glyph language
+            // (`PaneChrome.Status`): play = working, question = awaiting,
+            // check = done while you were elsewhere, hollow ring = idle.
+            // Active: white, matching the text (the tinted chip owns the color
+            // then); inactive: the status color.
+            Image(systemName: status.symbol)
                 .font(.system(size: 12))
-                .foregroundStyle(isActive ? Color.white : Color(hex: state.dotColorHex))
+                .foregroundStyle(isActive ? Color.white : Color(hex: status.glyphHex))
 
             Text(name.isEmpty ? "window" : name)
                 .font(.system(.footnote, design: .monospaced))
@@ -3053,16 +3048,8 @@ private struct WindowTab: View {
         // Glass chip on iOS 26, tinted by the window's state — active wears
         // the full color, inactive a weakened version of the same. Flat bento
         // chip with the emerald ring on earlier systems (deployment target 17).
-        .modifier(BarItemGlass(isActive: isActive, state: state))
+        .modifier(BarItemGlass(isActive: isActive, status: status))
         .contentShape(Capsule())
-    }
-
-    private var stateIconName: String {
-        switch state {
-        case .working:       return "play.circle.fill"
-        case .awaitingInput: return "questionmark.circle.fill"
-        case .idle:          return "circle"
-        }
     }
 }
 

@@ -9,18 +9,6 @@ import BentoFoundationKit
 import BentoGhosttyKit
 import BentoUISharedKit
 
-/// Phases of a pane title-bar drag (tiled mode), reported to the parent so it
-/// can resolve the pane + drop zone under the finger (center = swap, edge =
-/// dock). Points are in WINDOW coordinates (`gesture.location(in: nil)`) so
-/// the parent can hit-test across all panes. Mirrors the macOS host's
-/// `PaneDragPhase`.
-enum TitleDragPhase {
-    case began
-    case moved(CGPoint)
-    case ended(CGPoint)
-    case cancelled
-}
-
 /// Hosts a single libghostty terminal surface for one pane.
 /// Owns its narrow title bar (above the terminal) and the gesture wiring for
 /// voice press, pane selection tap, and double-tap-to-keyboard.
@@ -113,7 +101,7 @@ final class TerminalContainerVC: UIViewController {
     /// User is dragging this pane's title bar (tiled mode) onto another pane.
     /// Parent VC resolves the target + drop zone and swaps (center) or docks
     /// (edge). Mirrors the macOS host's title-bar drag-to-dock.
-    var onTitleDrag: ((_ phase: TitleDragPhase) -> Void)?
+    var onTitleDrag: ((_ phase: PaneDrag.Phase) -> Void)?
 
     /// The surface reported its current size (cols × rows + cell px) after
     /// layout. Parent VC uses this to drive tmux client resize (refresh-client

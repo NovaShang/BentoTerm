@@ -56,6 +56,18 @@ public enum WindowDisplayStatus: Equatable, Sendable {
         case .doneUnseen: return "doneUnseen"
         }
     }
+
+    /// A window row or tab says the same four things a pane's chrome does, so
+    /// every window surface reads glyph and color from the pane table rather
+    /// than keeping a parallel one.
+    public var chrome: PaneChrome.Status {
+        switch self {
+        case .working:    return .working
+        case .awaiting:   return .awaitingInput
+        case .doneUnseen: return .doneUnseen
+        case .idle:       return .idle
+        }
+    }
 }
 
 /// Where a cross-session move lands in the target session. `.auto` derives
@@ -239,17 +251,10 @@ public extension TerminalViewModel {
         return (sawWorking ? .working : nil, sawDone)
     }
 
-    /// Aggregate agent state for a window's row/tab, highest priority first:
-    /// any pane awaiting input → awaiting; else any working → working; else
-    /// idle.
-    func windowState(_ windowID: TmuxWindowID) -> PaneState {
-        aggregateWindowStatus(windowID).state ?? .idle
-    }
-
-    /// A window's display status, richest first — the same aggregate as
-    /// `windowState` PLUS the blue "done, unseen" layer, which isn't a
-    /// PaneState (an agent finished its turn in a window you weren't looking
-    /// at). Priority: awaiting → working → done → idle.
+    /// A window's display status for its row/tab: the panes' aggregate agent
+    /// state PLUS the green "done, unseen" layer, which isn't a PaneState (an
+    /// agent finished its turn in a window you weren't looking at). Priority:
+    /// awaiting → working → done → idle.
     func windowStatus(_ windowID: TmuxWindowID) -> WindowDisplayStatus {
         let aggregate = aggregateWindowStatus(windowID)
         switch aggregate.state {

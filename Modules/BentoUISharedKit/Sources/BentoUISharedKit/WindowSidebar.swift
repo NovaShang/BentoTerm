@@ -237,20 +237,9 @@ public struct WindowSidebar: View {
         #endif
     }
 
-    /// A window row says the same four things a pane's chrome does, so it reads
-    /// from the same table rather than keeping a parallel one.
-    private func chromeStatus(_ status: WindowDisplayStatus) -> PaneChrome.Status {
-        switch status {
-        case .working:    return .working
-        case .awaiting:   return .awaitingInput
-        case .doneUnseen: return .doneUnseen
-        case .idle:       return .idle
-        }
-    }
-
     /// The canonical palette hex for a status, or nil for idle (default color).
     private func statusHex(_ status: WindowDisplayStatus) -> UInt32? {
-        chromeStatus(status).accentHex
+        status.chrome.accentHex
     }
 
     /// The ⌘N shortcut hint for a row — macOS only, since ⌘0..⌘9 maps to the
@@ -278,7 +267,7 @@ public struct WindowSidebar: View {
     /// green check, idle = a quiet hollow gray ring (same `.circle` family, but
     /// empty = at rest).
     private func stateIcon(_ status: WindowDisplayStatus) -> some View {
-        let s = chromeStatus(status)
+        let s = status.chrome
         return glyph(s.symbol, s.glyphHex)
     }
 
