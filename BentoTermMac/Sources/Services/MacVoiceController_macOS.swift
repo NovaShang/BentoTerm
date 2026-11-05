@@ -83,8 +83,6 @@ struct MacVoicePreviewView: View {
 /// state away: the bubble jumped straight to full size instead of growing.)
 @MainActor
 public final class MacVoiceOverlay: NSView {
-    public static let preferredSize = NSSize(width: 360, height: 580)
-
     private let hosting: NSHostingView<VoiceCompassView>
     private let controller: MacVoiceController
 

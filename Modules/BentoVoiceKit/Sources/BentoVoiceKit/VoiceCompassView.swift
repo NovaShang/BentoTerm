@@ -95,6 +95,24 @@ public struct VoiceCompassView: View {
             if minX <= maxX { shift = min(max(anchor.x, minX), maxX) - anchor.x }
             return Placement(bubbleBelow: below, bubbleShift: shift)
         }
+
+        /// Where to center the compass for a press at `point`: the press itself,
+        /// pulled in only as far as the RING needs (`Metrics.ringReach`) to stay
+        /// on screen. The bubble isn't reserved for — `resolve` moves it
+        /// instead — so the compass stays under the finger/cursor almost
+        /// everywhere. An axis too small for the ring centers instead of
+        /// letting an inverted range flip the clamp.
+        public static func clampedAnchor(_ point: CGPoint, in bounds: CGRect,
+                                         insets: EdgeInsets = EdgeInsets(),
+                                         margin: CGFloat = 8) -> CGPoint {
+            let reach = Metrics.ringReach + margin
+            let minX = bounds.minX + insets.leading + reach
+            let maxX = bounds.maxX - insets.trailing - reach
+            let minY = bounds.minY + insets.top + reach
+            let maxY = bounds.maxY - insets.bottom - reach
+            return CGPoint(x: minX <= maxX ? min(max(point.x, minX), maxX) : bounds.midX,
+                           y: minY <= maxY ? min(max(point.y, minY), maxY) : bounds.midY)
+        }
     }
 
     /// Observed directly: the shared controller's published state IS the overlay's

@@ -52,31 +52,27 @@ enum STTheme {
     /// User-selected terminal font for the CHROME beside the terminal, matching
     /// what the surface renders inside it.
     ///
-    /// The stored value is a real family name now (the picker enumerates every
-    /// monospaced family on the device); the legacy token cases stay because an
-    /// install that hasn't opened the Appearance panel since the change still
-    /// holds one, and they resolve to the same faces they always did. Anything
-    /// else is passed to `UIFont(name:)` as a family, with the system monospace
-    /// as the last resort — the same shape as
-    /// `ThemeStore.ghosttyFontFamily`, so the chrome and the terminal can't
-    /// disagree about which font was picked.
+    /// The family comes from `ThemeStore.ghosttyFontFamily` — the very answer
+    /// the engine is configured with — so the chrome and the terminal can't
+    /// disagree about which font was picked. (This used to keep its own token
+    /// table, which defaulted to Maple while the engine defaulted to its
+    /// built-in face, and didn't know "jetbrains".) nil means the engine's
+    /// built-in default, which isn't a font UIKit can load, so the system
+    /// monospace stands in.
     static var terminalFont: UIFont {
         let size = terminalFontSize
-        let family = UserDefaults.standard.string(forKey: "terminal_font_family") ?? "Maple Mono NF CN"
+        let token = ThemeStore.storedFontFamilyToken
+        guard let family = ThemeStore.ghosttyFontFamily(forToken: token) else {
+            return .monospacedSystemFont(
+                ofSize: size, weight: token == "system-medium" ? .medium : .regular)
+        }
         switch family {
-        case "maple-nf-cn", "Maple Mono NF CN":
+        case "Maple Mono NF CN":
             return UIFont(name: "MapleMono-NF-CN-Regular", size: size)
-                ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        case "menlo":
-            return UIFont(name: "Menlo-Regular", size: size)
-                ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        case "courier":
+                ?? namedFont(family: family, size: size)
+        case "Courier New":
             return UIFont(name: "CourierNewPSMT", size: size)
-                ?? UIFont(name: "Courier", size: size)
-                ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        case "sf-mono", "system", "system-medium":
-            return UIFont.monospacedSystemFont(
-                ofSize: size, weight: family == "system-medium" ? .medium : .regular)
+                ?? namedFont(family: family, size: size)
         default:
             return namedFont(family: family, size: size)
         }

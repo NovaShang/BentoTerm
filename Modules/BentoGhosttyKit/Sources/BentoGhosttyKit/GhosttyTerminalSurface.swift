@@ -983,9 +983,8 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// Current selection, when it makes a usable needle (single-line, non-empty).
     /// Seeds the find field the way ⌘E does on the Mac.
     public func selectionAsNeedle() -> String? {
-        guard let surface, let text = GhosttySel.selectedText(surface),
-              !text.isEmpty, !text.contains("\n") else { return nil }
-        return text
+        guard let surface else { return nil }
+        return SearchBarModel.needle(fromSelection: GhosttySel.selectedText(surface))
     }
 
     public func handleStartSearch(needle: String?) { onSearchStartRequested?(needle) }

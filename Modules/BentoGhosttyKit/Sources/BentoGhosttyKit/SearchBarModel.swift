@@ -65,6 +65,27 @@ public final class SearchBarModel {
         onQueryChanged?(currentText)
     }
 
+    /// Step to the next / previous hit for what the field says NOW. Every
+    /// navigate control (Return, ⇧Return, the chevrons) goes through these:
+    /// a chevron tapped inside the debounce window used to step through the
+    /// previous needle's hits on the Mac.
+    public func next(currentText: String) {
+        flushPendingQuery(currentText)
+        onNext?()
+    }
+
+    public func previous(currentText: String) {
+        flushPendingQuery(currentText)
+        onPrevious?()
+    }
+
+    /// A selection that can seed the find field: single-line and non-empty.
+    /// A multi-line selection is a region, not a needle.
+    public nonisolated static func needle(fromSelection text: String?) -> String? {
+        guard let text, !text.isEmpty, !text.contains("\n") else { return nil }
+        return text
+    }
+
     public func cancelPendingQuery() {
         debounce?.cancel()
         debounce = nil

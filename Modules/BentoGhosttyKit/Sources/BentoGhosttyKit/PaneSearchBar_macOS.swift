@@ -161,8 +161,8 @@ final class PaneSearchBar: NSView, NSTextFieldDelegate {
 
     // MARK: - Actions
 
-    @objc private func previousTapped() { model.onPrevious?() }
-    @objc private func nextTapped() { model.onNext?() }
+    @objc private func previousTapped() { model.previous(currentText: field.stringValue) }
+    @objc private func nextTapped() { model.next(currentText: field.stringValue) }
     @objc private func closeTapped() { model.onClose?() }
 
     // MARK: - NSTextFieldDelegate
@@ -181,10 +181,11 @@ final class PaneSearchBar: NSView, NSTextFieldDelegate {
             // Both Return and ⇧Return arrive as insertNewline:, so the modifier
             // has to be read off the live event.
             let shift = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
-            // Flush any pending keystroke first, or the first Return navigates
-            // the previous needle's results.
-            model.flushPendingQuery(field.stringValue)
-            if shift { model.onPrevious?() } else { model.onNext?() }
+            if shift {
+                model.previous(currentText: field.stringValue)
+            } else {
+                model.next(currentText: field.stringValue)
+            }
             return true
         case #selector(NSResponder.insertTab(_:)),
              #selector(NSResponder.insertBacktab(_:)):

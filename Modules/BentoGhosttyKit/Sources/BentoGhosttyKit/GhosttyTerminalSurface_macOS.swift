@@ -1955,9 +1955,8 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// START_SEARCH) seeds the field and searches immediately.
     public func beginSearch(prefill: String? = nil) {
         let bar = searchBar ?? makeSearchBar()
-        // A multi-line selection is a region, not a needle — don't seed from it.
-        let seed = prefill ?? surface.flatMap { GhosttySel.selectedText($0) }
-        if let seed, !seed.isEmpty, !seed.contains("\n") {
+        if let seed = SearchBarModel.needle(
+            fromSelection: prefill ?? surface.flatMap { GhosttySel.selectedText($0) }) {
             bar.query = seed
             bar.model.setQuery(seed)   // counts for a seed that never went through typing
             runSearch(seed)
@@ -1991,8 +1990,9 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
 
     /// ⌘E — Use Selection for Find (the standard macOS pair with ⌘F/⌘G).
     public func useSelectionForFind() {
-        guard let surface, let text = GhosttySel.selectedText(surface),
-              !text.isEmpty, !text.contains("\n") else { return }
+        guard let surface,
+              let text = SearchBarModel.needle(fromSelection: GhosttySel.selectedText(surface))
+        else { return }
         let bar = searchBar ?? makeSearchBar()
         bar.query = text
         bar.model.setQuery(text)

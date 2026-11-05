@@ -530,13 +530,13 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         } else {
             overlay = MacVoiceOverlay(controller: voiceController,
                                       frame: NSRect(origin: .zero,
-                                                    size: MacVoiceOverlay.preferredSize))
+                                                    size: VoiceCompassView.Metrics.size))
             addSubview(overlay)   // on top of the panes + divider overlay
             voiceOverlay = overlay
         }
 
         // Center the overlay at the press point (screen → host coords).
-        let size = MacVoiceOverlay.preferredSize
+        let size = VoiceCompassView.Metrics.size
         var local = NSPoint(x: bounds.midX, y: bounds.midY)
         if let window {
             local = convert(window.convertPoint(fromScreen: screenPt), from: nil)
@@ -547,16 +547,13 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // anywhere else and it jumped inward, away from the pointer. The bubble
         // handles the edges itself now (flips below near the top, slides
         // sideways near a side), so the anchor barely has to move.
-        let reach = VoiceCompassView.Metrics.ringReach + 8
-        let anchor = NSPoint(
-            x: min(max(local.x, reach), max(bounds.width - reach, reach)),
-            y: min(max(local.y, reach), max(bounds.height - reach, reach)))
+        let area = CGRect(origin: .zero, size: bounds.size)
+        let anchor = VoiceCompassView.Placement.clampedAnchor(local, in: area)
         // No y-flip here: this host is `isFlipped` (see above), so its coords are
         // already the y-down space `Placement` works in. Flipping anyway inverted
         // the rule — a press at the BOTTOM of the window put the bubble below it,
         // off screen.
-        overlay.placement = .resolve(anchor: CGPoint(x: anchor.x, y: anchor.y),
-                                     in: CGRect(origin: .zero, size: bounds.size))
+        overlay.placement = .resolve(anchor: anchor, in: area)
         overlay.frame = NSRect(x: anchor.x - size.width / 2, y: anchor.y - size.height / 2,
                                width: size.width, height: size.height)
         overlay.isHidden = false

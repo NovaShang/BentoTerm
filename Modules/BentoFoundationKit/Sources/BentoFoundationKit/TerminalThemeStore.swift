@@ -293,19 +293,28 @@ public final class ThemeStore: ObservableObject {
     }
 
     /// Selected font-family token (e.g. "jetbrains"); nil = engine default.
-    public var fontFamilyToken: String? {
+    public var fontFamilyToken: String? { Self.storedFontFamilyToken }
+
+    /// ghostty font-family name for the selected token, or nil for the default.
+    public var ghosttyFontFamily: String? { Self.ghosttyFontFamily(forToken: fontFamilyToken) }
+
+    /// The stored token, readable off the main actor (UserDefaults is
+    /// thread-safe) — for chrome that sizes itself before any view exists.
+    nonisolated public static var storedFontFamilyToken: String? {
         UserDefaults.standard.string(forKey: "terminal_font_family")
     }
 
-    /// ghostty font-family name for the selected token, or nil for the default.
-    public var ghosttyFontFamily: String? {
-        switch fontFamilyToken {
+    /// The font family the engine is configured with for `token`: the legacy
+    /// tokens map to their faces, a real family name passes through, and the
+    /// system/default tokens are nil (ghostty's built-in default).
+    nonisolated public static func ghosttyFontFamily(forToken token: String?) -> String? {
+        switch token {
         case "menlo":        return "Menlo"
         case "courier":      return "Courier New"
         case "jetbrains":    return "JetBrains Mono"
         case "maple-nf-cn":  return "Maple Mono NF CN"
         case "sf-mono", "system", "system-medium", nil, "": return nil
-        default:             return fontFamilyToken
+        default:             return token
         }
     }
 

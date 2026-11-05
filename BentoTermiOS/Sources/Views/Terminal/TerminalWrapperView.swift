@@ -695,32 +695,13 @@ struct TerminalWrapperView: View {
                           trailing: safe.trailing)
     }
 
-    /// Keep the compass on screen when the press starts near an edge — but only
-    /// the COMPASS: the ring is the part that has to stay under the finger, and
-    /// it needs `ringReach` around the anchor, nothing more.
-    ///
-    /// This used to reserve the transcript bubble's footprint too (270pt above,
-    /// 180pt each side), which made a huge band along every edge unable to host a
-    /// compass at the touch point — press there and the whole thing jumped inward,
-    /// away from the finger. The bubble now moves instead: it flips below the
-    /// compass near the top and slides sideways near a side
-    /// (`VoiceCompassView.Placement`), so the anchor itself barely has to move.
+    /// Keep the compass on screen when the press starts near an edge — only
+    /// as far as the ring needs, inside the safe areas and above the quick-keys
+    /// band (`VoiceCompassView.Placement.clampedAnchor`).
     private func compassAnchor(in geo: GeometryProxy) -> CGPoint {
-        typealias M = VoiceCompassView.Metrics
-        let bounds = geo.frame(in: .local)
-        let insets = compassInsets(in: geo)
-        let margin: CGFloat = 8
-
-        let minX = bounds.minX + insets.leading + M.ringReach + margin
-        let maxX = bounds.maxX - insets.trailing - M.ringReach - margin
-        let minY = bounds.minY + insets.top + M.ringReach + margin
-        let maxY = bounds.maxY - insets.bottom - M.ringReach - margin
-
-        let p = voiceController.fingerScreenPosition
-        // A screen too small for the ideal margins: center on that axis instead of
-        // letting an inverted range flip the clamp.
-        return CGPoint(x: minX <= maxX ? min(max(p.x, minX), maxX) : bounds.midX,
-                       y: minY <= maxY ? min(max(p.y, minY), maxY) : bounds.midY)
+        VoiceCompassView.Placement.clampedAnchor(voiceController.fingerScreenPosition,
+                                                 in: geo.frame(in: .local),
+                                                 insets: compassInsets(in: geo))
     }
 
     @ViewBuilder
