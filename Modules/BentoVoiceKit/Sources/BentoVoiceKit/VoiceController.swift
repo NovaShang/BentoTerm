@@ -29,7 +29,7 @@ public struct NoopVoiceFeedback: VoiceFeedbackProviding {
 
 /// The hold-to-talk voice state machine, shared by iOS + macOS: press lifecycle
 /// (begin/update/end), compass-direction routing, the right-swipe preview flow,
-/// error handling, telemetry and the send-count pacing. Renders nothing — the
+/// error handling and the send-count pacing. Renders nothing — the
 /// platform shells host the shared `VoiceCompassView` against its published
 /// state and map the platform gesture onto `begin(originScreen:)` /
 /// `update(toScreen:)` / `end()`.
@@ -41,7 +41,7 @@ public struct NoopVoiceFeedback: VoiceFeedbackProviding {
 ///
 /// The audio/engine work all lives in the shared `VoiceSession` (via
 /// `VoiceSessionProtocol`, a test seam) — this class is gesture + direction +
-/// preview + telemetry only.
+/// preview only.
 @MainActor
 open class VoiceController: ObservableObject {
     @Published public private(set) var isRecording = false
@@ -201,7 +201,6 @@ open class VoiceController: ObservableObject {
             // Re-transcribe the full clip with a better model, then preview/edit
             // before sending. (Left swipe still does NL→shell-command.) The preview
             // batches the captured PCM itself, so just stop capture here.
-            TelemetryService.shared.record(.voiceSwipeRightPreview)
             let streamed = session.currentTranscript
             session.cancel()
             beginPreview(streamed: streamed)
@@ -214,9 +213,6 @@ open class VoiceController: ObservableObject {
             let text = await self.session.finish(language: lang)
             guard !text.isEmpty else { return }
             self.feedback.sent()
-            TelemetryService.shared.record(.voiceSend)
-            TelemetryService.shared.record(.voiceFirstSend)
-            if dir == .left { TelemetryService.shared.record(.voiceSwipeLeftLLM) }
             self.onResult?(VoiceInputResult(text: text, direction: dir))
             self.voiceSendTotal = self.tipCenter.recordVoiceSend()
         }
@@ -329,8 +325,6 @@ open class VoiceController: ObservableObject {
             return
         }
         feedback.sent()
-        TelemetryService.shared.record(.voiceSend)
-        TelemetryService.shared.record(.voiceFirstSend)
         onResult?(VoiceInputResult(text: text, direction: .up))
         voiceSendTotal = tipCenter.recordVoiceSend()
     }

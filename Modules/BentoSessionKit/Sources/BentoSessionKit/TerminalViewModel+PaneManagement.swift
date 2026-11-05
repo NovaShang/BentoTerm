@@ -97,9 +97,9 @@ extension TerminalViewModel {
         // updatePaneViewModels → syncPanes tears its surface down = "闪一下就关掉".
         let dropped = Set(sessionPanes.map(\.id)).subtracting(allPanes.map(\.id))
         DIAG("[DUP] refreshPanes APPLY all=[\(allPanes.map { "\($0.id)" }.joined(separator: ","))] active=[\(panes.map { "\($0.id)" }.joined(separator: ","))]\(dropped.isEmpty ? "" : " DROPPED=[\(dropped.map { "\($0)" }.joined(separator: ","))]")")
-        // Panes that no longer exist anywhere: drop their detection state too,
+        // Panes that no longer exist anywhere: drop their recent text too,
         // so the per-pane dictionaries don't grow unbounded across splits/closes.
-        for pane in dropped { stateDetection.clearPane(pane) }
+        for pane in dropped { recentOutput.clearPane(pane) }
         if sessionPanes != allPanes { sessionPanes = allPanes }
         updatePaneViewModels(panes)
         recomputeSessionMode()
@@ -267,7 +267,7 @@ extension TerminalViewModel {
             // `escapes: true` keeps SGR color/style codes so a freshly
             // shown pane (e.g. after a window switch) seeds in full color
             // instead of plain text that then flashes when the live
-            // %output repaints. Detection (recordOutput below) strips
+            // %output repaints. The recent-text buffer (recordOutput below) strips
             // ANSI anyway, so the escapes are harmless there.
             //
             // capture-pane can race the select-window %output burst
@@ -291,7 +291,7 @@ extension TerminalViewModel {
                     DIAG("seed \(paneVM.paneID) FED bytes=\(data.count)")
                 }
                 if let rawData = text.data(using: .utf8) {
-                    stateDetection.recordOutput(pane: paneVM.paneID, data: rawData)
+                    recentOutput.recordOutput(pane: paneVM.paneID, data: rawData)
                 }
                 // Restore the caret to the pane's REAL cursor. capture-pane returns
                 // the screen rows WITH trailing blank lines below a short prompt;

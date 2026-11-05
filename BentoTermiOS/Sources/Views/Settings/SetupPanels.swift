@@ -38,13 +38,7 @@ struct IOSSetupPanel: View {
         case .tmux:
             TmuxPanel(context: context)
         case .agents:
-            AgentsPanel(context: context) {
-                Section {
-                    NavigationLink("Quick Keys & Fallback Patterns") { ProfileListView() }
-                } footer: {
-                    PanelNote("The reply buttons offered when a pane is waiting, and the simpler patterns used for tools that aren't coding agents — shells, vim, git.")
-                }
-            }
+            AgentsPanel(context: context)
         case .finish:
             FinishPanel(context: context) {
                 Section {

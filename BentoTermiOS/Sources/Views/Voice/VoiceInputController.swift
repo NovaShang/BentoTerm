@@ -8,8 +8,8 @@ import BentoFoundationKit
 /// Added to a pane's terminal view as a long-press gesture recognizer.
 ///
 /// Thin iOS shell over the shared `BentoTerminalCore.VoiceController` state
-/// machine (recording, compass-direction routing, preview, error handling and
-/// telemetry). This shell only maps the UIKit gesture onto the shared
+/// machine (recording, compass-direction routing, preview and error
+/// handling). This shell only maps the UIKit gesture onto the shared
 /// begin/update/end lifecycle, injects iOS haptics, and adds the iOS-only
 /// manual-compose state — the SAME bar as the right-swipe preview, entered by
 /// double-tap keyboard. `isManualCompose` just tweaks the copy (输入 placeholder).

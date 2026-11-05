@@ -15,7 +15,6 @@ extension TerminalViewModel {
             paneVM.sendInput(data)
         } else {
             dlog("[sendData] \(data.count)B → transport (usingTmux=\(usingTmux), activePaneID=\(String(describing: activePaneID)))")
-            predictor.willSend(data)   // draw the prediction; doesn't alter what's sent
             transport.write(data)
         }
     }
@@ -376,7 +375,7 @@ extension TerminalViewModel {
             data.append(Data(termText.utf8))
             paneVM.feedData(data)
             if let raw = clean.data(using: .utf8) {
-                stateDetection.recordOutput(pane: paneVM.paneID, data: raw)
+                recentOutput.recordOutput(pane: paneVM.paneID, data: raw)
             }
             // The program may have flipped bracketed paste while we were away
             // (an agent started or exited); the surface still holds the old

@@ -219,10 +219,10 @@ public extension TerminalViewModel {
     /// working), plus whether any pane is marked "done, unseen" — an agent
     /// finished its turn in a window nobody was looking at, which isn't a
     /// `PaneState`. Reads the `paneStates` / `paneDoneUnseen` caches the one
-    /// detection pipeline fills for every session pane — the SAME judgment
+    /// state pipeline fills for every session pane — the SAME judgment
     /// that colors the Tiled pane chrome, never a separate re-run. Background
-    /// windows keep reporting because control mode streams every pane's
-    /// output and titles.
+    /// windows keep reporting because the session-wide list-panes carries
+    /// every pane's hook options.
     private func aggregateWindowStatus(_ windowID: TmuxWindowID)
         -> (state: PaneState?, doneUnseen: Bool) {
         var sawWorking = false

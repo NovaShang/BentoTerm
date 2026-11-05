@@ -13,7 +13,7 @@ extension TerminalViewModel {
             if let paneVM = paneViewModels.first(where: { $0.paneID == pane }) {
                 paneVM.feedData(data)
             }
-            stateDetection.recordOutput(pane: pane, data: data)
+            recentOutput.recordOutput(pane: pane, data: data)
 
         case .layoutChange(_, let layout):
             // Apply the new pane geometry SYNCHRONOUSLY from the layout string.
@@ -68,12 +68,6 @@ extension TerminalViewModel {
             activeTmuxSessionName = name
 
         case .paneModeChanged(let pane, _):
-            if let paneVM = paneViewModels.first(where: { $0.paneID == pane }) {
-                let state = stateDetection.detectState(pane: pane, currentCommand: paneVM.pane.currentCommand, title: paneVM.pane.title)
-                paneVM.paneState = state
-                paneStates[pane] = state   // keep the window-dot aggregate in step
-                stateVersion += 1
-            }
             // tmux's notification carries only the pane id — not which mode — so
             // re-list to pick up `pane_in_mode`. Without this the copy-mode badge
             // would wait for the 2s poll, which is long enough for the pane to

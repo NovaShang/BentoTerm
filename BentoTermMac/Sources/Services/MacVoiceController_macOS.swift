@@ -8,7 +8,7 @@ import BentoFoundationKit
 
 /// macOS hold-to-talk voice controller — a thin shell over the shared
 /// `BentoTerminalCore.VoiceController` state machine (recording, compass-
-/// direction routing, preview, error handling, telemetry). Its only job here is
+/// direction routing, preview, error handling). Its only job here is
 /// the platform seam: macOS screen coords are y-up, the shared controller works
 /// in y-down point space, so both entry points flip y. One per terminal window,
 /// owned by `GhosttyTiledPaneHost`; the shared published state drives

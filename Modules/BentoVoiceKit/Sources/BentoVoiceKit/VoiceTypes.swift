@@ -29,9 +29,30 @@ public struct VoiceInputResult: Sendable {
 /// 中文 / 中英混说 accuracy), both streaming and driven through `RealtimeASR`.
 public enum SpeechEngineKind: String, Sendable {
     case apple, openai, qwen
-    public static func current() -> SpeechEngineKind {
-        let raw = UserDefaults.standard.string(forKey: "speech_engine") ?? "apple"
-        return SpeechEngineKind(rawValue: raw) ?? .apple
+
+    /// The engine voice will actually use. A cloud engine needs the user's own
+    /// key — there is no shared server to fall back on — so one selected
+    /// without its key runs as Apple's on-device engine instead.
+    public static func current(defaults: UserDefaults = .standard) -> SpeechEngineKind {
+        let raw = defaults.string(forKey: "speech_engine") ?? "apple"
+        let selected = SpeechEngineKind(rawValue: raw) ?? .apple
+        if selected != .apple, selected.apiKey(defaults: defaults).isEmpty { return .apple }
+        return selected
+    }
+
+    /// UserDefaults key holding this engine's API key; nil for Apple.
+    public var keyDefaultsKey: String? {
+        switch self {
+        case .apple: return nil
+        case .openai: return "openai_api_key"
+        case .qwen: return "dashscope_api_key"
+        }
+    }
+
+    /// The trimmed key for this engine, "" when unset (always "" for Apple).
+    public func apiKey(defaults: UserDefaults = .standard) -> String {
+        guard let name = keyDefaultsKey else { return "" }
+        return (defaults.string(forKey: name) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

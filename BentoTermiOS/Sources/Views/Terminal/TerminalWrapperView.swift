@@ -54,7 +54,6 @@ struct TerminalWrapperView: View {
     @State private var showStateLegend = false
     @State private var showParallelTip = false
     @State private var showVoiceAdvancedTip = false
-    @State private var showQwenSuggestion = false
     @State private var parallelTipTask: Task<Void, Never>?
     @ObservedObject private var tips = TipCenter.shared
     @State private var showSplitSheet = false
@@ -265,14 +264,6 @@ struct TerminalWrapperView: View {
             .onChange(of: voiceController.voiceSendTotal) { _, n in
                 handleVoiceSendMilestone(n)
             }
-            .alert("Better Chinese recognition?", isPresented: $showQwenSuggestion) {
-                Button("Switch") {
-                    UserDefaults.standard.set("qwen", forKey: "speech_engine")
-                }
-                Button("Keep current", role: .cancel) {}
-            } message: {
-                Text("You seem to speak Chinese — the Qwen engine is much more accurate for 中文 and mixed 中英. Free, no setup, switch back anytime in Settings.")
-            }
     }
 
     /// The terminal plus its floating chrome, kept separate from the modal /
@@ -415,18 +406,10 @@ struct TerminalWrapperView: View {
         showTipToast("One tmux window per row — tap to switch. The number is the window index you'd use with select-window; the icon shows who's working and who needs you.")
     }
 
-    /// §6.4 + Qwen suggestion — voice-send milestones. The advanced gestures
-    /// wait for the 3rd send (muscle memory first); the Chinese-engine
-    /// suggestion lands right after the 1st send, while the experience of
-    /// (possibly mediocre) recognition is fresh.
+    /// §6.4 — voice-send milestones. The advanced gestures wait for the 3rd
+    /// send (muscle memory first).
     private func handleVoiceSendMilestone(_ n: Int) {
         guard n > 0 else { return }
-        if n >= 1,
-           Locale.preferredLanguages.first?.hasPrefix("zh") == true,
-           (UserDefaults.standard.string(forKey: "speech_engine") ?? "apple") == "apple",
-           tips.consume(.qwenSuggestion) {
-            showQwenSuggestion = true
-        }
         if n >= 3, tips.shouldShow(.voiceAdvanced) {
             tips.markShown(.voiceAdvanced)
             withAnimation { showVoiceAdvancedTip = true }
@@ -1684,8 +1667,6 @@ final class PaneContainerVC: UIViewController {
         // Split entries only exist in Tiled mode — in List a split would build
         // a third shape, so the pane menu hides them (checked at menu-open).
         vc.showsSplitActions = { [weak self] in self?.viewModel?.sessionMode == .tiled }
-        vc.onSetProfile = { [weak self] id in self?.viewModel?.setPaneProfile(id, for: paneID) }
-        vc.currentProfileID = { [weak self] in self?.viewModel?.paneProfile(for: paneID) }
         vc.moveTargets = { [weak self] in
             guard let vm = self?.viewModel else { return [] }
             Task { await vm.refreshTmuxSessions() }   // warm for the next open
@@ -2468,7 +2449,7 @@ extension PaneContainerVC {
     /// Point the floating toolbar's menu at the active pane.
     ///
     /// Shown for a plain session too: the menu drops its tmux entries there and
-    /// keeps Find / Paste / Change Profile, which are about the terminal and
+    /// keeps Find / Paste, which are about the terminal and
     /// have nothing to do with tmux. Hiding the whole button (what this used to
     /// do for anything without a `paneVM`) took search and paste with it, and on
     /// a phone the bar is the only way to reach either.

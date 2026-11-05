@@ -153,9 +153,9 @@ public enum GhosttySel {
         return ok
     }
 
-    /// Set the engine's preedit overlay (IME composition / predicted echo) to
-    /// `text`; nil or empty clears it. Shared by the iOS and macOS surfaces'
-    /// setMarkedText / setPredictedText / commit-clear paths.
+    /// Set the engine's preedit overlay (IME composition) to `text`; nil or
+    /// empty clears it. Shared by the iOS and macOS surfaces' setMarkedText
+    /// and commit-clear paths.
     public static func setPreedit(_ surface: ghostty_surface_t, _ text: String?) {
         guard let text, !text.isEmpty else {
             ghostty_surface_preedit(surface, nil, 0)

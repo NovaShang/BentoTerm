@@ -6,7 +6,7 @@ import BentoSessionKit
 import BentoFoundationKit
 
 /// Surfaces "a pane is awaiting input" on macOS while a terminal window is open
-/// (reusing the shared `StateDetectionService` via the VM's
+/// (the agent's hooks report it; this hears about it through the VM's
 /// `TerminalEnvironment` callbacks). Two signals:
 ///   - a `UNUserNotificationCenter` banner on the rising edge (0 → >0 awaiting)
 ///     for a session — so you get pinged when you're in another app;
@@ -17,7 +17,7 @@ import BentoFoundationKit
 ///     `clearBadge()` on activation keeps it from going stale.
 ///
 /// This mirrors the iOS path (which drives a Live Activity off the same
-/// callbacks) — same detection, platform-appropriate surfacing.
+/// callbacks) — same state, platform-appropriate surfacing.
 @MainActor
 public final class MacAwaitingNotifier {
     public static let shared = MacAwaitingNotifier()

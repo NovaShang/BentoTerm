@@ -194,9 +194,9 @@ public final class TerminalViewModel: ObservableObject {
     @Published public var stateVersion: Int = 0
 
     /// Per-pane state for EVERY pane in the session (all windows), computed by
-    /// the one detection pipeline in `updatePaneStates`. Current-window panes
+    /// the one state pipeline in `updatePaneStates`. Current-window panes
     /// mirror their PaneViewModel's `paneState`; background-window panes are
-    /// classified the same way (control mode streams their output and titles).
+    /// classified the same way (their hook options come on the same list-panes).
     /// This is what `windowState` aggregates, so the List sidebar/tabs judge a
     /// window exactly like the Tiled pane chrome judges a pane. Repaints ride
     /// `stateVersion`.
@@ -235,7 +235,8 @@ public final class TerminalViewModel: ObservableObject {
     /// a local pty cannot). Core stays agnostic.
     public var activeTransport: TerminalTransport { transport }
     let tmuxService = TmuxControlMode()
-    public let stateDetection = StateDetectionService()
+    /// Last lines each pane printed — voice context and the awaiting snippet.
+    let recentOutput = PaneRecentText()
     /// Panes whose agent has already been written to the recents store, keyed
     /// pane+agent so a pane that changes hands (claude quits, codex starts in
     /// the same pane) is remembered again. The poll runs every 2s and the
@@ -265,24 +266,6 @@ public final class TerminalViewModel: ObservableObject {
     /// memmove storm, and this one runs ON THE MAIN ACTOR (`routeIncomingData`),
     /// so it lands directly on keystroke latency in plain-shell sessions.
     static let rawHistorySlackBytes = 256 * 1024
-
-    /// Push predicted keystrokes (Mosh-style local echo) to the surface as a
-    /// preedit overlay. Set by the host wiring (raw/no-tmux path only) to the
-    /// active surface's `setPredictedText`. See `predictor`.
-    public var onPredictionText: ((String) -> Void)?
-
-    /// Predictive local echo for the raw path. Inert unless the feature flag is
-    /// on; only ever touches an overlay, never the authoritative grid.
-    lazy var predictor: PredictiveEcho = {
-        let p = PredictiveEcho(enabled: Self.predictiveEchoEnabled)
-        p.render = { [weak self] text in self?.onPredictionText?(text) }
-        return p
-    }()
-
-    /// Feature flag (Settings / UserDefaults). Off unless explicitly enabled.
-    public nonisolated static var predictiveEchoEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "predictive_echo_enabled")
-    }
 
     /// Whether we're using tmux control mode
     nonisolated(unsafe) var usingTmux = false
@@ -549,9 +532,6 @@ public final class TerminalViewModel: ObservableObject {
         // has explicitly picked the no-tmux option. Until then we drop, so
         // shell prompts and our `tmux ls` output don't pollute the screen.
         if phase == .shellReady {
-            // Reconcile predictions against the echo BEFORE it renders, so a
-            // confirmed char's overlay is retired as the real byte paints over it.
-            predictor.didReceive(data)
             appendRawHistory(data)
             onRawDataReceived?(data)
         }

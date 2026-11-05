@@ -38,28 +38,25 @@ public enum AgentPreset: String, CaseIterable, Identifiable, Sendable {
 }
 
 public extension AgentPreset {
-    /// The preset behind a detection rule set's id, or nil when we have no
-    /// launch command we can stand behind.
+    /// The preset behind the agent id a hook wrote into `@bento_agent`, or
+    /// nil when we have no launch command we can stand behind.
     ///
-    /// Two different vocabularies meet here. Detection ids name what we can
-    /// RECOGNIZE on screen (droid, qwen, grok, kimi, cline have rules but were
-    /// never added to this menu — their install commands couldn't be verified),
-    /// while `AgentPreset` names what we can RUN. Only the overlap maps, and
-    /// the gap returns nil rather than a guess: this feeds a recents row whose
-    /// whole promise is that clicking it starts the agent again, and a
-    /// command that isn't real opens a pane that exits on sight.
-    static func forDetectionID(_ id: String) -> AgentPreset? {
-        switch id {
-        case "claude-code":  return .claudeCode
-        case "codex":        return .codex
-        case "opencode":     return .opencode
-        case "gemini":       return .gemini
-        case "cursor-agent": return .cursorAgent
-        case "copilot":      return .copilot
-        case "amp":          return .amp
-        case "hermes":       return .hermes
-        case "antigravity":  return .antigravity
-        default:             return nil
+    /// The id is whatever the user's hook config says, so the common spellings
+    /// all map. An id we can't run returns nil rather than a guess: this feeds
+    /// a recents row whose whole promise is that clicking it starts the agent
+    /// again, and a command that isn't real opens a pane that exits on sight.
+    static func forAgentID(_ id: String) -> AgentPreset? {
+        switch id.lowercased() {
+        case "claude", "claude-code":   return .claudeCode
+        case "codex":                   return .codex
+        case "opencode":                return .opencode
+        case "gemini":                  return .gemini
+        case "cursor-agent", "cursor":  return .cursorAgent
+        case "copilot":                 return .copilot
+        case "amp":                     return .amp
+        case "hermes":                  return .hermes
+        case "antigravity", "agy":      return .antigravity
+        default:                        return nil
         }
     }
 

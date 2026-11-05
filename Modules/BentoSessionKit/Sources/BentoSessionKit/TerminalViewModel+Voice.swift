@@ -45,7 +45,7 @@ public extension TerminalViewModel {
     /// Recent terminal text used as LLM context for the active pane.
     func recentPaneContext() -> String {
         if let activePaneID {
-            return stateDetection.recentText(for: activePaneID, lines: 30)
+            return recentOutput.recentText(for: activePaneID, lines: 30)
         }
         return ""
     }

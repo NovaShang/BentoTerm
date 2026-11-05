@@ -98,12 +98,6 @@ final class TerminalContainerVC: UIViewController {
     /// wires it once per active-pane change.
     var isZoomed: (() -> Bool)?
 
-    /// User picked a detection profile for this pane (nil = auto-detect).
-    var onSetProfile: ((_ profileID: String?) -> Void)?
-
-    /// Current forced profile id for this pane (nil = auto), for the menu check.
-    var currentProfileID: (() -> String?)?
-
     /// Move-to-session targets: OTHER sessions on the server, read from the
     /// parent's cached list. Must be synchronous — an async fetch resolving
     /// after the submenu opened rebuilds the menu and collapses it back to
@@ -801,7 +795,6 @@ final class TerminalContainerVC: UIViewController {
                 self?.surface.feed(data)
             }
         }
-        vm.onPredictionText = { [weak self] text in self?.surface.setPredictedText(text) }
     }
 
     /// The terminal cursor (insertion point) rect in `target`'s coordinate space,
@@ -1468,7 +1461,7 @@ extension TerminalContainerVC {
             ])
         }
         // What remains for a plain session is everything about the TERMINAL —
-        // find, paste, profile. It used to get no menu at all (the button was
+        // find and paste. It used to get no menu at all (the button was
         // hidden outright), which took search and paste with it.
         return UIMenu(children: [
             UIAction(title: "Find…",
@@ -1484,7 +1477,6 @@ extension TerminalContainerVC {
             },
             splitSection,
             copyModeSection,
-            makeProfileMenu(),
             structureSection,
         ])
     }
@@ -1525,30 +1517,6 @@ extension TerminalContainerVC {
             self?.onMoveToSession?(name)
         })
         present(alert, animated: true)
-    }
-
-    /// Pane menu → Change Profile (PRD §3.5). Built lazily each time the menu
-    /// opens so the checkmark reflects the current override; "Auto" clears it.
-    private func makeProfileMenu() -> UIMenu {
-        let deferred = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self else { completion([]); return }
-            let current = self.currentProfileID?()
-            var items: [UIMenuElement] = [
-                UIAction(title: "Auto (detect)", state: current == nil ? .on : .off) { [weak self] _ in
-                    self?.onSetProfile?(nil)
-                }
-            ]
-            for profile in ProfileStore.shared.profiles {
-                items.append(UIAction(title: profile.name,
-                                      state: current == profile.id ? .on : .off) { [weak self] _ in
-                    self?.onSetProfile?(profile.id)
-                })
-            }
-            completion(items)
-        }
-        return UIMenu(title: "Profile",
-                      image: UIImage(systemName: "slider.horizontal.3"),
-                      children: [deferred])
     }
 }
 

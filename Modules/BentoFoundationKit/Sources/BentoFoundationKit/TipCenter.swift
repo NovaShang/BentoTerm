@@ -22,8 +22,6 @@ public enum BentoTip: String, CaseIterable, Sendable {
     case persistence = "tip.persistence.v1"
     /// Phone auto-switched a tiled session to Focus on first open.
     case focusAutoSwitch = "tip.focus_auto_switch.v1"
-    /// Chinese system → suggest the Qwen engine once, after first voice send.
-    case qwenSuggestion = "tip.qwen_suggestion.v1"
     /// First tap handed to a program that turned on mouse tracking — links and
     /// paths still answer to one finger, so this only names the two-finger tap
     /// for everything else. A program holding the mouse is invisible otherwise.
@@ -51,28 +49,7 @@ public final class TipCenter: ObservableObject {
 
     public func markShown(_ tip: BentoTip) {
         defaults.set(true, forKey: tip.rawValue)
-        // Some tips fire at exactly the funnel moments the opt-in telemetry
-        // wants to count (first amber pane, first parallel pair, first
-        // reconnect, mode-toggle discovery). Recording here keeps those
-        // signals without touching the view code that shows the tip.
-        // No-op unless the user opted in.
-        if let event = Self.telemetryEvent(for: tip) {
-            TelemetryService.shared.record(event)
-        }
         objectWillChange.send()
-    }
-
-    /// Tip → telemetry-event mapping for the one-shot teaching moments that
-    /// double as funnel milestones. Tips fire once per install, so these
-    /// events inherit the same once-only semantics.
-    private static func telemetryEvent(for tip: BentoTip) -> TelemetryEvent? {
-        switch tip {
-        case .stateLegend: return .stateAwaitingFirstSeen
-        case .parallelBothWorking: return .secondAgentOpened
-        case .persistence: return .reconnectResumed
-        case .modeToggleIntro: return .modeToggled
-        default: return nil
-        }
     }
 
     /// Consume in one step: true (and marks shown) the first time only.

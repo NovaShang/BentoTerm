@@ -128,16 +128,6 @@ extension TerminalViewModel {
         }
     }
 
-    /// Force a pane's detection profile (pane menu → Change Profile); nil =
-    /// auto-detect. Takes effect on the next detection tick.
-    public func setPaneProfile(_ profileID: String?, for paneID: TmuxPaneID) {
-        stateDetection.setProfileOverride(profileID, for: paneID)
-    }
-
-    public func paneProfile(for paneID: TmuxPaneID) -> String? {
-        stateDetection.profileOverride(for: paneID)
-    }
-
     /// Rename a pane (sets `pane_title`, shown in the pane title bar / List rows).
     public func renamePane(_ paneID: TmuxPaneID, to title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)

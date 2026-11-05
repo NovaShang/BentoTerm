@@ -69,7 +69,6 @@ public struct AgentWizardForm: View {
                 }
             }
         }
-        .onAppear { model.recordAgentWizardLaunched() }
     }
 }
 

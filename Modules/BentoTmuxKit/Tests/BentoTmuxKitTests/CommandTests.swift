@@ -74,6 +74,7 @@ struct CommandTests {
         #expect(cmd.commandString.hasPrefix("list-panes -F "))
         #expect(cmd.commandString.contains("#{pane_id}"))
         #expect(cmd.commandString.contains("#{pane_active}"))
+        #expect(cmd.commandString.contains("#{@bento_agent}:#{@bento_state}:#{pane_title}'"))
     }
 
     @Test func copyModeCommandUsesXAndRepeat() {

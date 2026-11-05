@@ -19,10 +19,6 @@ public struct DetectedAgent: Identifiable, Equatable, Sendable {
 
 /// Which known agents are installed on this machine.
 ///
-/// Named for what it answers, not for what it does — `AgentDetector` in
-/// `AgentStatusRules` already owns the other kind of detection (which STATE a
-/// running pane is in).
-///
 /// **The old detector asked the wrong shell.** It ran `zsh -lc`, which is a
 /// LOGIN but NON-INTERACTIVE shell, and zsh only sources `~/.zshrc` for
 /// interactive ones. A pane, meanwhile, runs `$SHELL -l` on a pty — interactive

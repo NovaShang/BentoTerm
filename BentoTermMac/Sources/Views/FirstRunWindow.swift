@@ -57,7 +57,6 @@ struct FirstRunWindow: View {
             footer
         }
         .frame(width: 640, height: 720)
-        .task { TelemetryService.shared.record(.firstRunStarted) }
     }
 
     /// Just the title, on the window background. The first version put a small
@@ -110,7 +109,6 @@ struct FirstRunWindow: View {
     }
 
     private func finish(completed: Bool) {
-        TelemetryService.shared.record(completed ? .firstRunCompleted : .firstRunSkipped)
         UserDefaults.standard.set(true, forKey: Self.completedKey)
         dismiss()
     }
