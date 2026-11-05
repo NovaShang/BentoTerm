@@ -63,17 +63,4 @@ public final class AgentWizardModel: ObservableObject {
             layout: layout
         )
     }
-
-    // Telemetry — recorded at the same moments on both platforms.
-
-    /// The wizard appeared. Mac records this on appearance, not on launch.
-    public func recordAgentWizardLaunched() {
-        TelemetryService.shared.record(.agentWizardLaunched)
-    }
-
-    /// A session was actually created. Shells call this AFTER their creation
-    /// succeeds, never before — a cancelled wizard records nothing.
-    public func recordWorkspaceCreated() {
-        TelemetryService.shared.record(.workspaceCreated)
-    }
 }

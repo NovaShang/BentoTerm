@@ -84,10 +84,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         BentoTerminalWindow.onLocalServerChanged = { [weak self] in
             Task { @MainActor in await self?.refresh() }
         }
-        // Opt-in telemetry (no-op unless the user enabled the Settings toggle):
-        // count today as an active day.
-        TelemetryService.shared.appBecameActive()
-
         Task { [weak self] in
             guard let self else { return }
             await self.refresh()
@@ -196,12 +192,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
-    /// Quitting takes down the GUI only. Nothing else of ours is running: the
-    /// tmux server owns the sessions and outlives us, so quitting is a detach.
-    func applicationWillTerminate(_ notification: Notification) {
-        TelemetryService.shared.flush()
-    }
-
     /// No confirmation here (see the note further down) — this exists only to
     /// mark the quit BEFORE any window closes, so the reopen list records the
     /// set that was open instead of watching it drain one tab at a time.
@@ -303,7 +293,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationDidBecomeActive(_ notification: Notification) {
         // User is looking at the app now — clear the awaiting Dock badge.
         MacAwaitingNotifier.shared.clearBadge()
-        TelemetryService.shared.appBecameActive()
     }
 
     /// Closing the last window does NOT quit — Terminal.app behavior, chosen

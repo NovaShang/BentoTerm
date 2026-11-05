@@ -1,7 +1,7 @@
 import SwiftUI
 import BentoFoundationKit
 
-/// ⑤ Finish — the way in, the phone, and the one privacy switch.
+/// ⑤ Finish — the way in, and the phone.
 ///
 /// ⌘P leads because it is where everything else in the app is, and where
 /// everything we add later will appear. The phone paragraph gives instructions
@@ -11,8 +11,6 @@ import BentoFoundationKit
 public struct FinishPanel<Extra: View>: View {
     private let context: PanelContext
     private let extra: Extra
-
-    @ObservedObject private var telemetry = TelemetryService.shared
 
     public init(context: PanelContext, @ViewBuilder extra: () -> Extra = { EmptyView() }) {
         self.context = context
@@ -51,32 +49,6 @@ public struct FinishPanel<Extra: View>: View {
                     """)
                 #endif
         } controls: {
-            Section {
-                Toggle("Share anonymous usage statistics", isOn: Binding(
-                    get: { telemetry.enabled },
-                    set: { telemetry.enabled = $0 }
-                ))
-            } header: { Text("Privacy") } footer: {
-                PanelNote("""
-                    No terminal content, commands, transcripts, paths, or hostnames — ever. \
-                    Just event names, tied to a random ID that is deleted when you turn this \
-                    off. Events go straight to Bento's own endpoint; no third-party SDKs.
-                    """)
-            }
-
-            AdvancedBlock(context) {
-                DisclosureGroup("What gets counted") {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(TelemetryEvent.allCases, id: \.rawValue) { event in
-                            Text(event.rawValue)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-
             extra
         }
     }

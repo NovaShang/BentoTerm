@@ -5,8 +5,8 @@ import BentoUISharedKit
 
 /// iOS counterpart to BentoTermMac's AgentWizardWindow — hosts the shared
 /// `AgentWizardForm` (see BentoUISharedKit) in a NavigationStack sheet with
-/// toolbar buttons. The form itself — fields, validity rules, layout grid,
-/// telemetry — is shared with Mac; this file is only the presentation chrome.
+/// toolbar buttons. The form itself — fields, validity rules, layout grid —
+/// is shared with Mac; this file is only the presentation chrome.
 /// iOS has no directory picker, so `onChooseDirectory` is nil.
 struct AgentSessionWizardView: View {
     let onLaunch: (AgentSpec) -> Void
@@ -33,7 +33,6 @@ struct AgentSessionWizardView: View {
 
     private func launch() {
         let spec = model.spec
-        model.recordWorkspaceCreated()
         dismiss()
         onLaunch(spec)
     }
