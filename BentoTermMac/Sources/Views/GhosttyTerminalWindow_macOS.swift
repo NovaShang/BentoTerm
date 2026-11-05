@@ -776,16 +776,14 @@ final class SessionTab {
             // shell's OSC 7 report (ghostty shell integration). A quick-connect
             // `ssh <host>` tab is remote for its whole life (it dies when ssh
             // exits) — refuse local browsing/preview honestly.
-            let remote = PathPreviewContext.isRemoteShellCommand(command?.first)
-            let sshBlock: @Sendable @MainActor () async -> String? = {
-                "This is a remote (SSH) session — its files aren’t browsable here yet."
-            }
+            let block = PathPreviewContext.localSourceBlock(sessionHost: nil,
+                                                            foregroundCommand: command?.first)
             surface.pathPreviewContext = PathPreviewContext(
                 source: LocalFileSource(),
                 cwd: { [weak surface] in surface?.reportedPwd },
                 hostLabel: "This Mac",
                 isLocal: true,
-                remoteBlock: remote ? sshBlock : nil)
+                remoteBlock: block.map { reason in { @Sendable @MainActor in reason } })
             surface.onOpenPreview = { path, line, context in
                 BentoTerminalWindow.openPreview(path: path, line: line, context: context)
             }

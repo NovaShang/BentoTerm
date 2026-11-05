@@ -349,8 +349,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             }
         }
 
-        // Path preview (⌘hover / ⌘click): macOS panes run against the local
-        // machine, so files come straight off disk. cwd = the pane's live tmux
+        // Path preview (⌘hover / ⌘click): files come straight off this Mac's
+        // disk, which is only right for a local session (see remoteBlock). cwd = the pane's live tmux
         // path (never stale), falling back to the surface's OSC 7 report.
         surface.pathWrapCols = { [weak paneVM] in paneVM?.pane.width }
         surface.pathPreviewContext = PathPreviewContext(
@@ -364,13 +364,16 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             },
             hostLabel: "This Mac",
             isLocal: true,
-            // Files come off the LOCAL disk; when this pane is an ssh/mosh
-            // session the real files are on another host — refuse honestly
-            // rather than list this Mac's files.
-            remoteBlock: { [weak paneVM] in
-                PathPreviewContext.isRemoteShellCommand(paneVM?.pane.currentCommand)
-                    ? "This pane is a remote (SSH) session — its files aren’t browsable here yet."
-                    : nil
+            // Files come off the LOCAL disk; when this tab's tmux runs on an
+            // ssh host, or this pane is an ssh/mosh session, the real files are
+            // on another machine — refuse honestly rather than resolve a remote
+            // cwd against this Mac's disk (a path that happens to exist here
+            // too would preview the wrong file).
+            remoteBlock: { [weak self, weak paneVM] in
+                let host = self?.linkHost
+                return PathPreviewContext.localSourceBlock(
+                    sessionHost: host?.isLocal == false ? host?.label : nil,
+                    foregroundCommand: paneVM?.pane.currentCommand)
             })
     }
 

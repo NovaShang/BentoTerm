@@ -155,6 +155,25 @@ public struct PathPreviewContext: Sendable {
         self.remoteBlock = remoteBlock
     }
 
+    /// Why a LOCAL file source can't serve a pane, or nil when it can.
+    ///
+    /// Two ways the files live elsewhere: the whole session runs on another
+    /// machine (`sessionHost` — a Mac tab attached to tmux over ssh, where
+    /// every pane's cwd is a path on that host even though the foreground
+    /// command is a plain shell), or the pane itself is running ssh/mosh
+    /// (`foregroundCommand`, checked live — you ssh in and out during one
+    /// pane's life).
+    public static func localSourceBlock(sessionHost: String?,
+                                        foregroundCommand: String?) -> String? {
+        if let sessionHost {
+            return "This session runs on \(sessionHost) — its files aren’t browsable here yet."
+        }
+        if isRemoteShellCommand(foregroundCommand) {
+            return "This pane is a remote (SSH) session — its files aren’t browsable here yet."
+        }
+        return nil
+    }
+
     /// Foreground commands that mean "the files you're looking at live on
     /// another host" — a local file source would silently read the wrong disk.
     public static func isRemoteShellCommand(_ command: String?) -> Bool {
