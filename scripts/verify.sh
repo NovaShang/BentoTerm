@@ -23,6 +23,15 @@ step() {
     fi
 }
 
+# Same tmux as CI and the app: the live tmux tests run against the bundled
+# binary when it has been fetched (scripts/fetch-bundled-tmux.sh), not whatever
+# version Homebrew last installed.
+if [ -x bundled-tmux/tmux-darwin-arm64 ]; then
+    tmux_bin="$(mktemp -d)"
+    ln -sf "$PWD/bundled-tmux/tmux-darwin-arm64" "$tmux_bin/tmux"
+    export PATH="$tmux_bin:$PATH"
+fi
+
 step "terminology" ./scripts/check-terminology.sh
 # All kits, in dependency order. (The old swift-tmux / bento-terminal-core
 # packages were folded into Modules/ on 2026-08-02.) BentoUISharedKit has no

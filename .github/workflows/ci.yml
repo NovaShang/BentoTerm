@@ -37,8 +37,28 @@ jobs:
       # Without a tmux binary that whole suite quietly self-disables
       # (`.enabled(if: LiveTmux.isAvailable)`) and CI would be green on a
       # fraction of the tests it thinks it ran.
-      - name: Ensure tmux is installed
-        run: brew list tmux >/dev/null 2>&1 || brew install tmux
+      #
+      # It runs against the tmux the app bundles, not whatever Homebrew has
+      # this week. Homebrew moved to tmux 3.8, whose plain command-line
+      # `#{window_layout}` is a new JSON format; control-mode clients (the
+      # app) still get the classic one unless they opt in, but this harness
+      # talks to tmux from the command line, so its results changed under it.
+      - name: Cache bundled tmux
+        uses: actions/cache@v4
+        with:
+          path: bundled-tmux
+          key: bundled-tmux-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/bundled-tmux.version') }}
+
+      - name: Put the bundled tmux on PATH
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          scripts/fetch-bundled-tmux.sh
+          mkdir -p "$RUNNER_TEMP/tmux-bin"
+          ln -sf "$PWD/bundled-tmux/tmux-darwin-arm64" "$RUNNER_TEMP/tmux-bin/tmux"
+          echo "$RUNNER_TEMP/tmux-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/tmux-bin/tmux" -V
 
       - name: Terminology check
         run: scripts/check-terminology.sh
