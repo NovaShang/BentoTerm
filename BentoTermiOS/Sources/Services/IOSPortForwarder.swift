@@ -28,12 +28,11 @@ final class IOSPortForwarder: PortForwarding {
     /// connect. Held weakly: the forwarder must never be the reason a
     /// disconnected client stays alive.
     private var clients: [String: WeakClient] = [:]
-    private var tunnels: [String: LocalTunnel] = [:]
-    private var claimed: Set<Int> = []
+    private let book = PortForwardBook<LocalTunnel>()
 
     private struct WeakClient { weak var client: SSHClient? }
 
-    var active: [PortForward] { tunnels.values.map(\.forward) }
+    var active: [PortForward] { book.active }
 
     // MARK: Session registry
 
@@ -46,48 +45,24 @@ final class IOSPortForwarder: PortForwarding {
     /// for a connection that is gone.
     func unregister(remoteID: String) {
         clients[remoteID] = nil
-        for tunnel in tunnels.values where tunnel.forward.host.remoteID == remoteID {
-            close(tunnel.forward)
-        }
+        for forward in book.forwards(remoteID: remoteID) { close(forward) }
     }
 
     // MARK: PortForwarding
 
     func forward(remotePort: Int, on host: LinkHost) async throws -> PortForward {
-        // A local pane's `localhost` is already this device — but on iOS there
-        // are no local panes, so this is only the degenerate case.
-        guard let remoteID = host.remoteID else {
-            return PortForward(host: host, remotePort: remotePort, localPort: remotePort)
-        }
-        let key = PortForward(host: host, remotePort: remotePort, localPort: remotePort).id
-        if let existing = tunnels[key] { return existing.forward }
-
-        guard LocalPortProbe.isPlausible(remotePort) else {
-            throw PortForwardError.unsupported("Port \(remotePort) isn’t forwardable")
-        }
-        guard let client = clients[remoteID]?.client else {
-            throw PortForwardError.unsupported("No live connection to \(host.label)")
-        }
-        guard let localPort = LocalPortProbe.choose(matching: remotePort, taken: claimed) else {
-            throw PortForwardError.noLocalPort
-        }
-        claimed.insert(localPort)
-        defer { claimed.remove(localPort) }
-
-        let made = PortForward(host: host, remotePort: remotePort, localPort: localPort)
-        do {
-            let tunnel = try await LocalTunnel.start(
-                forward: made, client: SendableSSHClient(client), remoteHost: "localhost")
-            tunnels[made.id] = tunnel
-            log.log("""
-                forward \(host.label, privacy: .public) \
-                \(remotePort, privacy: .public)→\(localPort, privacy: .public)
-                """)
-            return made
-        } catch {
-            log.error("forward failed: \(String(describing: error), privacy: .public)")
-            throw PortForwardError.hostUnreachable("Couldn’t reach \(host.label)")
-        }
+        try await book.forward(
+            remotePort: remotePort, on: host,
+            connection: { clients[$0]?.client },
+            open: { client, made in
+                do {
+                    return try await LocalTunnel.start(
+                        forward: made, client: SendableSSHClient(client), remoteHost: "localhost")
+                } catch {
+                    log.error("forward failed: \(String(describing: error), privacy: .public)")
+                    throw PortForwardError.couldNotReach(host)
+                }
+            })
     }
 
     /// The tunnel is alive exactly while its SSH connection is. This is what
@@ -95,19 +70,16 @@ final class IOSPortForwarder: PortForwarding {
     /// "something went wrong".
     func isAlive(_ forward: PortForward) async -> Bool {
         guard let remoteID = forward.host.remoteID else { return true }
-        guard tunnels[forward.id] != nil else { return false }
+        guard book.contains(forward) else { return false }
         return clients[remoteID]?.client != nil
     }
 
     func close(_ forward: PortForward) {
-        guard let tunnel = tunnels.removeValue(forKey: forward.id) else { return }
-        tunnel.stop()
+        book.remove(forward)?.stop()
     }
 
     func closeAll(on host: LinkHost) {
-        for tunnel in tunnels.values where tunnel.forward.host == host {
-            close(tunnel.forward)
-        }
+        for forward in book.forwards(on: host) { close(forward) }
     }
 }
 

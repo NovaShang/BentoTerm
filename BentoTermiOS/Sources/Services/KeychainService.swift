@@ -1,5 +1,4 @@
 import Foundation
-import Security
 import BentoFoundationKit
 
 enum KeychainError: LocalizedError {
@@ -20,17 +19,15 @@ enum KeychainError: LocalizedError {
 
 final class KeychainService: Sendable {
     static let shared = KeychainService()
-    private let service = "com.novashang.bento.ssh"
+    private let store = GenericPasswordStore(service: "com.novashang.bento.ssh",
+                                             accessibility: .whenUnlockedThisDeviceOnly)
 
     private init() {}
 
     // MARK: - Password
 
     func savePassword(_ password: String, for account: String) throws {
-        guard let data = password.data(using: .utf8) else {
-            throw KeychainError.dataConversionFailed
-        }
-        try saveData(data, for: account, type: "password")
+        try saveData(Data(password.utf8), for: account, type: "password")
     }
 
     func loadPassword(for account: String) throws -> String {
@@ -66,20 +63,8 @@ final class KeychainService: Sendable {
     /// Returns the number of items removed.
     @discardableResult
     func deletePrivateKeys(labelPrefix prefix: String) -> Int {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let items = result as? [[String: Any]] else { return 0 }
-
         var removed = 0
-        for item in items {
-            guard let account = item[kSecAttrAccount as String] as? String,
-                  account.hasPrefix("privatekey:\(prefix)") else { continue }
+        for account in store.accounts() where account.hasPrefix("privatekey:\(prefix)") {
             let label = String(account.dropFirst("privatekey:".count))
             if (try? deletePrivateKey(label: label)) != nil { removed += 1 }
         }
@@ -89,61 +74,24 @@ final class KeychainService: Sendable {
     // MARK: - Internal
 
     private func saveData(_ data: Data, for account: String, type: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "\(type):\(account)",
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-        ]
-
-        let status = SecItemAdd(query as CFDictionary, nil)
-        if status == errSecDuplicateItem {
-            let updateQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: "\(type):\(account)",
-            ]
-            let updateAttrs: [String: Any] = [
-                kSecValueData as String: data,
-            ]
-            let updateStatus = SecItemUpdate(updateQuery as CFDictionary, updateAttrs as CFDictionary)
-            guard updateStatus == errSecSuccess else {
-                throw KeychainError.unexpectedStatus(updateStatus)
-            }
-        } else if status != errSecSuccess {
-            throw KeychainError.unexpectedStatus(status)
-        }
+        try mapped { try store.write(data, "\(type):\(account)") }
     }
 
     private func loadData(for account: String, type: String) throws -> Data {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "\(type):\(account)",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else {
-            if status == errSecItemNotFound {
-                throw KeychainError.itemNotFound
-            }
-            throw KeychainError.unexpectedStatus(status)
-        }
-        return data
+        try mapped { try store.read("\(type):\(account)") }
     }
 
     private func deleteData(for account: String, type: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "\(type):\(account)",
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
+        try mapped { try store.delete("\(type):\(account)") }
+    }
+
+    /// The store's failures in this app's error vocabulary.
+    private func mapped<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch GenericPasswordStore.Failure.notFound {
+            throw KeychainError.itemNotFound
+        } catch GenericPasswordStore.Failure.status(let status) {
             throw KeychainError.unexpectedStatus(status)
         }
     }
