@@ -19,7 +19,7 @@ Website: [bentoai.dev/term](https://bentoai.dev/term/) · Install: `brew install
 - **Attaches to real tmux sessions** via control mode. tmux is bundled for machines that don't have it; if you already run tmux, Bento attaches to your existing server and any other tmux client stays in sync — layouts, panes and scrollback live in tmux, not in the app.
 - **Detects each pane's agent state** — working / awaiting input / done-and-unread / idle — from pane output, title and process info, entirely client-side. The state is shown as a color on the pane title bar and in the sidebar. Ten CLI profiles ship built-in (Claude Code, Codex, Gemini CLI, OpenCode, Cursor Agent, Copilot CLI, Amp, OpenClaw, Hermes, Antigravity); each profile's patterns are editable, and new profiles can be added for arbitrary tools. Detection requires no cooperation from the agent and injects nothing into the shell.
 - **Two layouts over the same session:** Parallel tiles every pane; Focus gives one pane the window with the rest in a sidebar. Switching rearranges the actual tmux panes rather than maintaining a separate view state.
-- **Push-to-talk voice input.** Hold right-click on a pane and speak; the transcript lands in that pane's input. Recognition vocabulary is biased by on-screen text, so identifiers and file names from the visible scrollback transcribe correctly, including mixed Chinese/English. Engines: Apple on-device (default), Qwen and OpenAI realtime — via Bento's relay, or directly with your own API key. Speech can also be translated into a shell command.
+- **Push-to-talk voice input.** Hold right-click on a pane and speak; the transcript lands in that pane's input. Recognition vocabulary is biased by on-screen text, so identifiers and file names from the visible scrollback transcribe correctly, including mixed Chinese/English. Engines: Apple on-device (default), plus Qwen and OpenAI realtime on your own API key. Speech can also be translated into a shell command.
 - **File tree and preview.** Every pane exposes the file tree of its working directory. Printed paths are clickable — resolved even when a TUI wrapped or truncated the line — and open with syntax highlighting and jump-to-line (`path:42`). PDFs, images and other documents open via Quick Look. The same tree works from iOS over the SSH connection.
 - **Pane management as tmux operations.** Splits, drag-to-dock between positions and across sessions, duplication — each is executed as a real tmux `split-window` / `move-pane`, so a plain `tmux attach` from elsewhere shows exactly the same layout.
 - **iOS/iPadOS client** attaches to the same sessions mid-run over SSH, with the same state detection.
@@ -58,8 +58,8 @@ The app is self-contained (tmux bundled). A remote machine needs only `sshd` and
 
 - No accounts.
 - Terminal output never leaves your machines; the connection is plain SSH.
-- Telemetry is off by default and opt-in — a closed set of event names, never terminal content, commands, paths or hostnames.
-- Voice audio goes to the speech provider through Bento's relay (keys live server-side), or directly with your own key. Details: [privacy page](https://bentoai.dev/privacy/).
+- No telemetry.
+- Voice audio stays on the device with Apple's engine. With Qwen or OpenAI it goes straight to that provider on your own key; Bento runs no server in between.
 
 ## Repository layout
 

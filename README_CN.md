@@ -18,7 +18,7 @@
 - **接管真实 tmux 会话**（控制模式）。tmux 内置打包，没装过也能用；本来就在用 tmux 的话，Bento 直接接上你现有的 server，其他 tmux 客户端全程同步——布局、pane、回滚都在 tmux 里，不在 app 里。
 - **检测每个 pane 的 agent 状态**——工作中 / 等待输入 / 已完成未读 / 空闲——依据是 pane 输出、标题和进程信息，完全在客户端完成。状态以颜色显示在 pane 标题栏和侧栏。内置十份 CLI 配置（Claude Code、Codex、Gemini CLI、OpenCode、Cursor Agent、Copilot CLI、Amp、OpenClaw、Hermes、Antigravity）；每份配置的匹配规则都可编辑，也可以为任意工具新建配置。检测不需要 agent 配合，不向 shell 注入任何东西。
 - **同一会话的两种布局：**Parallel 全部平铺；Focus 一格占满窗口、其余收进侧栏。切换重排的是真实 tmux pane，不维护独立的视图状态。
-- **按住说话。**在 pane 上按住右键说话，转写落进该 pane 的输入。识别词表按屏幕上下文加权，可见回滚里的标识符、文件名都能正确转写，中英混说可用。引擎：Apple 端上（默认）、Qwen、OpenAI 实时——走 Bento 中转或用自己的 key 直连。也可以把自然语言翻译成 shell 命令。
+- **按住说话。**在 pane 上按住右键说话，转写落进该 pane 的输入。识别词表按屏幕上下文加权，可见回滚里的标识符、文件名都能正确转写，中英混说可用。引擎：Apple 端上（默认），以及用你自己 key 的 Qwen、OpenAI 实时识别。也可以把自然语言翻译成 shell 命令。
 - **文件树与预览。**每个 pane 暴露其工作目录的文件树。打印出的路径可点——TUI 折行或截断的也能解析——以语法高亮打开并跳转到行（`path:42`）。PDF、图片等走 Quick Look。iOS 上经同一条 SSH 连接使用同一棵树。
 - **pane 管理即 tmux 操作。**分屏、跨位置/跨会话拖放、复制，每一步都执行真实的 tmux `split-window` / `move-pane`，从别处 `tmux attach` 看到的布局完全一致。
 - **iOS/iPadOS 客户端**经 SSH 随时接上跑到一半的会话，状态检测一致。
@@ -56,8 +56,8 @@ app 自带 tmux。远端机器只需要 `sshd` 和 `tmux`；连通性（NAT、VP
 
 - 没有账号。
 - 终端输出不离开你的机器；连接是纯 SSH。
-- 遥测默认关闭、opt-in——一组固定的事件名，不含终端内容、命令、路径或主机名。
-- 语音音频经 Bento 中转发给识别服务（key 在服务端），或用自己的 key 直连。详见[隐私页](https://bentoai.dev/privacy/)。
+- 没有遥测。
+- 用 Apple 引擎时音频不出设备。用 Qwen 或 OpenAI 时，音频用你自己的 key 直接发给对方，中间没有 Bento 的服务器。
 
 ## 仓库结构
 

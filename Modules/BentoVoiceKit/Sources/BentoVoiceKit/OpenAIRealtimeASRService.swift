@@ -4,22 +4,18 @@ import BentoFoundationKit
 /// Streaming ASR client for OpenAI's Realtime API in transcription-only mode
 /// (`gpt-realtime-whisper`). Pure Foundation — shared by iOS + macOS.
 ///
-/// Auth: a token-mint proxy (default `defaultProxyURL`, works zero-config) or
-/// direct BYOK `apiKey`. Wire protocol: WSS to `/v1/realtime`, configure
+/// Auth: the user's own OpenAI `apiKey`, sent straight to OpenAI. Wire protocol: WSS to `/v1/realtime`, configure
 /// `type=transcription` PCM@24kHz, manual commit on stop (no turn_detection).
 public final class OpenAIRealtimeASRService: NSObject, @unchecked Sendable, RealtimeASR {
     public enum ASRError: LocalizedError {
         case missingCredentials
-        case mintFailed(String)
         case unexpectedInitialMessage(String)
         case server(String)
 
         public var errorDescription: String? {
             switch self {
             case .missingCredentials:
-                return "OpenAI API key or proxy URL not set. Add one in Settings → Speech."
-            case .mintFailed(let s):
-                return "Failed to mint ephemeral token: \(s)"
+                return "No OpenAI API key. Add one in Settings → Speech."
             case .unexpectedInitialMessage(let s):
                 return "OpenAI Realtime handshake failed: \(s)"
             case .server(let s):
@@ -33,11 +29,7 @@ public final class OpenAIRealtimeASRService: NSObject, @unchecked Sendable, Real
     /// Instance accessor for `RealtimeASR` (mirrors `requiredSampleRate`).
     public var sampleRate: Double { Self.requiredSampleRate }
 
-    /// Bundled relay mint endpoint — works out-of-the-box without user config.
-    public static let defaultProxyURL = URL(string: "https://relay.bentoai.dev/v1/asr/mint")!
-
     private let apiKey: String
-    private let proxyURL: URL?
     private let language: String
     private let endpoint: URL
 
@@ -46,8 +38,8 @@ public final class OpenAIRealtimeASRService: NSObject, @unchecked Sendable, Real
     /// `model_not_found`, as happened to `gpt-realtime-whisper`), connect falls
     /// back to the next so voice keeps working without an app update.
     private let candidateModels: [String]
-    /// The model the current connect attempt is using (flows to both the proxy
-    /// mint and the session.update config).
+    /// The model the current connect attempt is using (flows to the
+    /// session.update config).
     private var activeModel: String
 
     private var session: URLSession?
@@ -66,14 +58,12 @@ public final class OpenAIRealtimeASRService: NSObject, @unchecked Sendable, Real
     public var onCompleted: (@Sendable () -> Void)?
 
     public init(
-        apiKey: String = "",
-        proxyURL: URL? = nil,
+        apiKey: String,
         language: String = "",
         model: String = "gpt-realtime-whisper",
         endpoint: URL = URL(string: "wss://api.openai.com/v1/realtime")!
     ) {
         self.apiKey = apiKey
-        self.proxyURL = proxyURL
         self.language = language
         self.endpoint = endpoint
         // Primary = the canonical realtime transcription model (preferred, and the
@@ -121,20 +111,13 @@ public final class OpenAIRealtimeASRService: NSObject, @unchecked Sendable, Real
         throw lastError ?? ASRError.missingCredentials
     }
 
-    /// One connect attempt: mint (if proxied) → open WSS → session.created →
-    /// configure transcription. Leaves `task`/`session` live + `isOpen` on success.
+    /// One connect attempt: open WSS → session.created → configure
+    /// transcription. Leaves `task`/`session` live + `isOpen` on success.
     private func connectOnce() async throws {
-        let bearer: String
-        if let proxyURL {
-            bearer = try await mintEphemeralToken(proxyURL: proxyURL)
-        } else if !apiKey.isEmpty {
-            bearer = apiKey
-        } else {
-            throw ASRError.missingCredentials
-        }
+        guard !apiKey.isEmpty else { throw ASRError.missingCredentials }
 
         var request = URLRequest(url: endpoint)
-        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
         // Fresh session per connect (no cross-attempt pool reuse). Bound the
         // handshake so a hung connect fails fast into the retry instead of
@@ -198,12 +181,12 @@ public final class OpenAIRealtimeASRService: NSObject, @unchecked Sendable, Real
                 return false
             }
         }
-        // Server-side handshake / mint flakiness worth a fresh-connection retry.
+        // Server-side handshake flakiness worth a fresh-connection retry.
         // (A `model_not_found` handshake error is handled separately by the model
         // fallback in `start()`, before this is consulted.) Not
         // `.missingCredentials` — that's a real config error.
         switch error {
-        case ASRError.unexpectedInitialMessage, ASRError.mintFailed:
+        case ASRError.unexpectedInitialMessage:
             return true
         default:
             return false
@@ -256,36 +239,6 @@ public final class OpenAIRealtimeASRService: NSObject, @unchecked Sendable, Real
         session = nil
         accumulatedDelta = ""
         currentItemId = nil
-    }
-
-    private func mintEphemeralToken(proxyURL: URL) async throws -> String {
-        var req = URLRequest(url: proxyURL)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = ["model": activeModel, "language": language]
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        // Fresh ephemeral session, NOT URLSession.shared: the shared session's
-        // app-wide keep-alive pool is what hands back a stale (server-reaped)
-        // connection → the intermittent -1005. A new session starts a fresh
-        // connection, so it can't reuse a dead one. Short timeout so a hung mint
-        // fails fast into the connect retry.
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 10
-        let mintSession = URLSession(configuration: cfg)
-        defer { mintSession.finishTasksAndInvalidate() }
-        let (data, resp) = try await mintSession.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            let msg = String(data: data, encoding: .utf8) ?? "non-2xx"
-            throw ASRError.mintFailed(msg)
-        }
-        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            throw ASRError.mintFailed("invalid JSON")
-        }
-        if let v = obj["value"] as? String, !v.isEmpty { return v }
-        if let cs = obj["client_secret"] as? [String: Any],
-           let v = cs["value"] as? String, !v.isEmpty { return v }
-        throw ASRError.mintFailed("missing client_secret in response")
     }
 
     private func sendJSON(_ obj: [String: Any], on task: URLSessionWebSocketTask) async throws {

@@ -15,10 +15,7 @@ import BentoFoundationKit
 ///     `...completed` `transcript` is authoritative. `VoiceSession` therefore
 ///     always commits and waits for the final rather than sending an interim.
 ///
-/// Auth: zero-config via the bundled relay, which opens the upstream socket to
-/// DashScope with the server-side key (`defaultProxyURL`) — the client ships no
-/// credentials. Or BYOK: pass a DashScope `apiKey` to connect straight to
-/// DashScope on your own quota.
+/// Auth: the user's own DashScope `apiKey`, connecting straight to DashScope.
 public final class QwenRealtimeASRService: NSObject, @unchecked Sendable, RealtimeASR {
     public enum ASRError: LocalizedError {
         case missingCredentials
@@ -28,7 +25,7 @@ public final class QwenRealtimeASRService: NSObject, @unchecked Sendable, Realti
         public var errorDescription: String? {
             switch self {
             case .missingCredentials:
-                return "Qwen ASR endpoint not reachable. Check your connection."
+                return "No DashScope API key. Add one in Settings → Speech."
             case .unexpectedInitialMessage(let s):
                 return "Qwen Realtime handshake failed: \(s)"
             case .server(let s):
@@ -41,14 +38,11 @@ public final class QwenRealtimeASRService: NSObject, @unchecked Sendable, Realti
     public static let requiredSampleRate: Double = 16000
     public var sampleRate: Double { Self.requiredSampleRate }
 
-    /// Bundled relay proxy — works out of the box, key injected server-side.
-    public static let defaultProxyURL = URL(string: "wss://relay.bentoai.dev/v1/asr/qwen/socket")!
-    /// Direct DashScope endpoint for BYOK (international region).
+    /// DashScope realtime endpoint (international region).
     public static let directEndpoint = URL(string: "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime")!
     public static let model = "qwen3-asr-flash-realtime"
 
     private let apiKey: String
-    private let proxyURL: URL?
     private let language: String
     private let corpus: String
 
@@ -63,15 +57,13 @@ public final class QwenRealtimeASRService: NSObject, @unchecked Sendable, Realti
     public var onError: (@Sendable (Error) -> Void)?
 
     /// - Parameters:
-    ///   - apiKey: DashScope key for BYOK (empty → use the relay proxy).
-    ///   - proxyURL: relay proxy to open the socket through (default when no key).
+    ///   - apiKey: the user's DashScope key.
     ///   - language: optional hint ("zh"/"en"/…); empty = auto-detect (best for
     ///     code-switching).
     ///   - corpus: context-biasing background text (entity names, on-screen terms).
     ///     The model reads it and biases toward the entities within — empty = none.
-    public init(apiKey: String = "", proxyURL: URL? = nil, language: String = "", corpus: String = "") {
+    public init(apiKey: String, language: String = "", corpus: String = "") {
         self.apiKey = apiKey
-        self.proxyURL = proxyURL
         self.language = language
         self.corpus = corpus
     }
@@ -100,25 +92,13 @@ public final class QwenRealtimeASRService: NSObject, @unchecked Sendable, Realti
 
     /// One connect attempt: open WSS → session.created → configure transcription.
     private func connectOnce() async throws {
-        let endpoint: URL
-        var request: URLRequest
-        if !apiKey.isEmpty {
-            // BYOK: straight to DashScope with the key + model in the query.
-            var comps = URLComponents(url: Self.directEndpoint, resolvingAgainstBaseURL: false)!
-            comps.queryItems = [URLQueryItem(name: "model", value: Self.model)]
-            endpoint = comps.url!
-            request = URLRequest(url: endpoint)
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            request.setValue("realtime=v1", forHTTPHeaderField: "OpenAI-Beta")
-        } else if let proxyURL {
-            // Zero-config: the relay adds the key + upstream headers, and meters
-            // the audio this install streams against its daily free quota.
-            endpoint = proxyURL
-            request = URLRequest(url: endpoint)
-            RelayInstall.stamp(&request)
-        } else {
-            throw ASRError.missingCredentials
-        }
+        guard !apiKey.isEmpty else { throw ASRError.missingCredentials }
+        // Key in the header, model in the query.
+        var comps = URLComponents(url: Self.directEndpoint, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "model", value: Self.model)]
+        var request = URLRequest(url: comps.url!)
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("realtime=v1", forHTTPHeaderField: "OpenAI-Beta")
 
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 15
@@ -261,13 +241,6 @@ public final class QwenRealtimeASRService: NSObject, @unchecked Sendable, Realti
                     onCompleted?()
                 case "error":
                     let payload = json["error"] as? [String: Any] ?? [:]
-                    // The relay refuses a quota-spent session inside the socket
-                    // (rather than failing the upgrade) precisely so this case
-                    // can say why instead of reading as a network drop.
-                    if let quota = RelayQuotaError.from(payload: payload) {
-                        onError?(quota)
-                        return
-                    }
                     let info = payload["message"] as? String ?? "Qwen Realtime error"
                     onError?(ASRError.server(info))
                     return

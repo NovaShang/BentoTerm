@@ -54,7 +54,6 @@ struct TerminalWrapperView: View {
     @State private var showStateLegend = false
     @State private var showParallelTip = false
     @State private var showVoiceAdvancedTip = false
-    @State private var showQwenSuggestion = false
     @State private var parallelTipTask: Task<Void, Never>?
     @ObservedObject private var tips = TipCenter.shared
     @State private var showSplitSheet = false
@@ -265,14 +264,6 @@ struct TerminalWrapperView: View {
             .onChange(of: voiceController.voiceSendTotal) { _, n in
                 handleVoiceSendMilestone(n)
             }
-            .alert("Better Chinese recognition?", isPresented: $showQwenSuggestion) {
-                Button("Switch") {
-                    UserDefaults.standard.set("qwen", forKey: "speech_engine")
-                }
-                Button("Keep current", role: .cancel) {}
-            } message: {
-                Text("You seem to speak Chinese — the Qwen engine is much more accurate for 中文 and mixed 中英. Free, no setup, switch back anytime in Settings.")
-            }
     }
 
     /// The terminal plus its floating chrome, kept separate from the modal /
@@ -415,18 +406,10 @@ struct TerminalWrapperView: View {
         showTipToast("One tmux window per row — tap to switch. The number is the window index you'd use with select-window; the icon shows who's working and who needs you.")
     }
 
-    /// §6.4 + Qwen suggestion — voice-send milestones. The advanced gestures
-    /// wait for the 3rd send (muscle memory first); the Chinese-engine
-    /// suggestion lands right after the 1st send, while the experience of
-    /// (possibly mediocre) recognition is fresh.
+    /// §6.4 — voice-send milestones. The advanced gestures wait for the 3rd
+    /// send (muscle memory first).
     private func handleVoiceSendMilestone(_ n: Int) {
         guard n > 0 else { return }
-        if n >= 1,
-           Locale.preferredLanguages.first?.hasPrefix("zh") == true,
-           (UserDefaults.standard.string(forKey: "speech_engine") ?? "apple") == "apple",
-           tips.consume(.qwenSuggestion) {
-            showQwenSuggestion = true
-        }
         if n >= 3, tips.shouldShow(.voiceAdvanced) {
             tips.markShown(.voiceAdvanced)
             withAnimation { showVoiceAdvancedTip = true }

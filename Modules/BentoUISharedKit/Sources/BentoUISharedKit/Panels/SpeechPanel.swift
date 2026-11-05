@@ -6,14 +6,11 @@ import AppKit
 import UIKit
 #endif
 
-/// A Chinese-language system gets Qwen preselected — Apple's engine is close
-/// to unusable on mixed Chinese/English, which is exactly what this audience
-/// dictates. Preselected, not decided for them: all three engines are on
-/// screen, so changing it is one click.
+/// Apple's engine is the default: it is the only one that works without a key.
+/// (A Chinese-language system used to get Qwen preselected, back when Bento's
+/// relay supplied the key.)
 public enum SpeechDefaults {
-    public static var engine: String {
-        (Locale.preferredLanguages.first?.hasPrefix("zh") == true) ? "qwen" : "apple"
-    }
+    public static var engine: String { "apple" }
 }
 
 /// The three engines, laid out where none can be missed. File scope because a
@@ -34,9 +31,9 @@ struct SpeechEngineOption: Identifiable {
         SpeechEngineOption(id: "apple", name: "Apple", badge: nil,
                            cost: "Never leaves this device. A little less accurate."),
         SpeechEngineOption(id: "qwen", name: "Qwen", badge: "Recommended",
-                           cost: "Best on mixed and non-English speech, and it can read what's on screen to get names and jargon right."),
+                           cost: "Best on mixed and non-English speech, and it can read what's on screen to get names and jargon right. Needs your DashScope API key."),
         SpeechEngineOption(id: "openai", name: "OpenAI", badge: nil,
-                           cost: "A solid middle ground."),
+                           cost: "A solid middle ground. Needs your OpenAI API key."),
     ]
 }
 
@@ -96,17 +93,10 @@ public struct SpeechPanel<Extra: View>: View {
                     engineRow(engine)
                 }
             } header: { Text("Engine") } footer: {
-                // The setup flow hides Advanced, which is where the API key
-                // fields are — so without this line a user would never learn
-                // that any of this leaves the machine, or that they can point
-                // it at their own account.
-                //
-                // It follows the selection because Apple's engine genuinely
-                // does not leave the device: saying "speech recognition goes
-                // through Bento's relay" while Apple is selected would be a
-                // false claim about someone's audio, which is the one kind of
-                // copy this app cannot get away with.
-                PanelNote(relayNote)
+                // The setup flow hides Advanced, which is where the key fields
+                // are — so this line is how a user learns a cloud engine needs
+                // one, and why picking it changed nothing until they added it.
+                PanelNote(engineNote)
             }
 
             Section {
@@ -133,10 +123,6 @@ public struct SpeechPanel<Extra: View>: View {
             }
 
             AdvancedBlock(context) {
-                PanelNote("""
-                    Leave the key blank to use Bento's servers — 30 minutes of speech a day, \
-                    free. Fill it in to talk to your own account directly, with no limit.
-                    """)
                 switch speechEngine {
                 case "openai":
                     SecureField("OpenAI API key", text: $openaiKey)
@@ -159,8 +145,8 @@ public struct SpeechPanel<Extra: View>: View {
                 Toggle("Voice → shell command", isOn: $llmEnabled)
                 PanelNote("""
                     Talking to a shell instead of an agent? With this on, Bento turns what you \
-                    said into the command. Works with any OpenAI-compatible provider — set an \
-                    endpoint and key, or leave them blank to use Bento's servers.
+                    said into the command. Works with any OpenAI-compatible provider: set an \
+                    endpoint and key. Without a key, what you said goes in as is.
                     """)
                 if llmEnabled {
                     SecureField("LLM API key", text: $llmKey)
@@ -177,12 +163,19 @@ public struct SpeechPanel<Extra: View>: View {
         }
     }
 
-    // The free allowance is a real number, so say the number. "Rate-limited"
-    // reads as a warning about nothing until the day it stops you mid-sentence.
-    private var relayNote: LocalizedStringKey {
-        speechEngine == "apple"
-            ? "Apple's engine runs on this device. Turning speech into a shell command still goes through Bento's relay (free, with a daily limit) — you can use your own API key in Settings."
-            : "Speech recognition and voice → shell go through Bento's relay: 30 minutes of speech a day, free. Add your own API key in Settings for unlimited use."
+    // Says where the audio goes for the engine actually picked, and owns up
+    // when a cloud engine is picked without its key: voice then quietly runs
+    // on Apple's engine, which would otherwise look like the choice was ignored.
+    private var engineNote: LocalizedStringKey {
+        switch speechEngine {
+        case "openai" where openaiKey.trimmingCharacters(in: .whitespaces).isEmpty,
+             "qwen" where dashscopeKey.trimmingCharacters(in: .whitespaces).isEmpty:
+            return "Add your API key under Advanced. Until then, voice uses Apple's engine."
+        case "openai", "qwen":
+            return "Audio goes straight to the provider, on your own key."
+        default:
+            return "Apple's engine runs on this device."
+        }
     }
 
     private func engineRow(_ engine: SpeechEngineOption) -> some View {
