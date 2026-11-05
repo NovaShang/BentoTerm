@@ -78,13 +78,16 @@ public enum PaneTiling {
         CGSize(width: gridCols * ppc.width, height: (gridRows + 1) * ppc.height)
     }
 
-    /// The tmux client size for a viewport showing tiles: cells that fit, minus
-    /// the one row of height the top pane's title bar takes.
-    public static func clientGrid(viewport: CGSize, cellPixels: CGSize,
-                                  scale: CGFloat) -> (cols: Int, rows: Int) {
+    /// The tmux client size for a viewport: the cells that fit, minus the one
+    /// row of height the top pane's title bar takes when showing tiles.
+    /// `reserveTitleRow: false` is for a single pane filling the viewport with
+    /// no title strip (iOS Focus).
+    public static func clientGrid(viewport: CGSize, cellPixels: CGSize, scale: CGFloat,
+                                  reserveTitleRow: Bool = true) -> (cols: Int, rows: Int) {
         guard cellPixels.width > 0, cellPixels.height > 0 else { return (2, 1) }
+        let reserved = reserveTitleRow ? cellPixels.height : 0
         let cols = max(Int((viewport.width * scale) / cellPixels.width), 2)
-        let rows = max(Int((viewport.height * scale - cellPixels.height) / cellPixels.height), 1)
+        let rows = max(Int((viewport.height * scale - reserved) / cellPixels.height), 1)
         return (cols, rows)
     }
 

@@ -1788,10 +1788,8 @@ final class PaneContainerVC: UIViewController {
         guard let cellPx, cellPx.width > 0, cellPx.height > 0 else { return nil }
         let rect = pageRect
         guard rect.width > 0, rect.height > 0 else { return nil }
-        let scale = displayScale
-        let cols = max(Int((rect.width * scale) / cellPx.width), 2)
-        let rows = max(Int((rect.height * scale) / cellPx.height) - (reserveTitleRow ? 1 : 0), 1)
-        return (cols, rows)
+        return PaneTiling.clientGrid(viewport: rect.size, cellPixels: cellPx,
+                                     scale: displayScale, reserveTitleRow: reserveTitleRow)
     }
 
     private func pushClientSize(cols: Int, rows: Int) {
@@ -2192,8 +2190,7 @@ extension PaneContainerVC {
     private func pageSizeForTiles(totalCols: CGFloat, totalRows: CGFloat) -> CGSize {
         let rect = pageRect
         guard windowSizeIsForeign, let ppc = pointsPerCell else { return rect.size }
-        return CGSize(width: totalCols * ppc.width,
-                      height: (totalRows + 1) * ppc.height)
+        return PaneTiling.pageSize(gridCols: totalCols, gridRows: totalRows, pointsPerCell: ppc)
     }
 
     /// Place the content view at the clamped pan offset. Page ≤ viewport → pinned
