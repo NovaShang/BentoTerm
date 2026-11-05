@@ -131,41 +131,16 @@ final class PathHighlightUIView: UIView {
 
 // MARK: - Preview sheet
 
-@MainActor
-final class FilePreviewSheetModel: ObservableObject {
-    enum Phase {
-        case loading(path: String)
-        case loaded(FilePreviewData)
-        case failed(path: String, message: String)
-    }
-    @Published var phase: Phase
-
-    init(path: String) {
-        phase = .loading(path: path)
-    }
-
-    func load(path: String, line: Int?, context: PathPreviewContext) {
-        Task { [weak self] in
-            do {
-                let data = try await FilePreviewLoader.load(path: path, line: line, context: context)
-                self?.phase = .loaded(data)
-            } catch {
-                self?.phase = .failed(path: path, message: error.localizedDescription)
-            }
-        }
-    }
-}
-
 struct FilePreviewSheet: View {
-    @ObservedObject var model: FilePreviewSheetModel
+    @ObservedObject var model: FilePreviewLoadModel
 
     var body: some View {
         Group {
             switch model.phase {
-            case .loading(let path):
+            case .loading:
                 VStack(spacing: 12) {
                     ProgressView()
-                    Text(path)
+                    Text(model.path)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -173,12 +148,12 @@ struct FilePreviewSheet: View {
                         .padding(.horizontal, 24)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .failed(let path, let message):
+            case .failed(let message):
                 VStack(spacing: 10) {
                     Image(systemName: "questionmark.folder")
                         .font(.system(size: 34))
                         .foregroundStyle(.secondary)
-                    Text(path)
+                    Text(model.path)
                         .font(.system(size: 12, design: .monospaced))
                         .lineLimit(2)
                         .truncationMode(.middle)
@@ -205,49 +180,14 @@ struct FilePreviewSheet: View {
         }
     }
 
-    @ViewBuilder private func content(_ data: FilePreviewData) -> some View {
-        switch data.content {
-        case .text(let text, let truncated):
-            VStack(spacing: 0) {
-                if text.isEmpty {
-                    Text("(empty file)")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    WebPreviewText(fileName: data.fileName, text: text, line: data.line,
-                                   imageBase: data.context.map {
-                                       .init(directory: (data.resolvedPath as NSString).deletingLastPathComponent,
-                                             source: $0.source)
-                                   })
-                }
-                if truncated {
-                    Text("Showing the first \(FilePreviewLoader.sizeLabel(Int64(FilePreviewLimits.textBytes))) of \(FilePreviewLoader.sizeLabel(data.stat.size))")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 5)
-                        .background(Color(BentoBrand.border).opacity(0.35))
-                }
-            }
-        case .quickLook(let url):
-            // PDF, Office, iWork, video, audio… — the system renders these; on
-            // a phone every one of them is remote, so the panel downloads
-            // (gated + cancellable) before Quick Look sees a URL.
-            QuickLookPanel(data: data, url: url)
-        case .binary:
-            unsupported("Binary file — no inline preview.", icon: "doc")
-        case .directory:
-            unsupported("This is a directory.", icon: "folder")
-        }
-    }
+    /// The sheet's sizes for the shared body: phone-sized notes, and the
+    /// truncation bar tinted with the brand border instead of a system fill.
+    private static let bodyStyle = FilePreviewContentBody.Style(
+        noteFontSize: 13, truncationPadding: 5,
+        truncationFill: AnyShapeStyle(Color(BentoBrand.border).opacity(0.35)))
 
-    private func unsupported(_ note: String, icon: String) -> some View {
-        VStack(spacing: 8) {
-            Image(systemName: icon).font(.system(size: 40)).foregroundStyle(.quaternary)
-            Text(note).font(.system(size: 13)).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private func content(_ data: FilePreviewData) -> some View {
+        FilePreviewContentBody(data: data, style: Self.bodyStyle)
     }
 
     private func footer(_ data: FilePreviewData) -> some View {
@@ -272,45 +212,5 @@ struct FilePreviewSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-    }
-}
-
-/// Web-based text/code/markdown renderer (highlight.js + markdown-it inside
-/// core's `FilePreviewWebView`) — one implementation shared with the macOS
-/// panel: syntax colors, rendered markdown, line gutter, `path:42` jump.
-private struct WebPreviewText: UIViewRepresentable {
-    let fileName: String
-    let text: String
-    let line: Int?
-    var imageBase: FilePreviewWebView.ImageBase? = nil
-    @Environment(\.colorScheme) private var colorScheme
-
-    func makeUIView(context: Context) -> FilePreviewWebView {
-        FilePreviewWebView.makePreview()
-    }
-
-    func updateUIView(_ view: FilePreviewWebView, context: Context) {
-        let dark = colorScheme == .dark
-        let key = RenderKey(fileName: fileName, textHash: text.hashValue, line: line)
-        if context.coordinator.rendered != key {
-            context.coordinator.rendered = key
-            view.render(fileName: fileName, text: text, line: line, dark: dark,
-                        imageBase: imageBase)
-        } else {
-            view.setDark(dark)
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    struct RenderKey: Equatable {
-        let fileName: String
-        /// Content hash, not length — a reloaded file can change in place.
-        let textHash: Int
-        let line: Int?
-    }
-
-    final class Coordinator {
-        var rendered: RenderKey?
     }
 }

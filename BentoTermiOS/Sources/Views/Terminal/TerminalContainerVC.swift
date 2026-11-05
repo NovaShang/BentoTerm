@@ -596,8 +596,7 @@ final class TerminalContainerVC: UIViewController {
     /// it isn't private.
     func presentPathPreviewSheet(path: String, line: Int?) {
         guard let context = pathPreviewContext?() else { return }
-        let model = FilePreviewSheetModel(path: path)
-        model.load(path: path, line: line, context: context)
+        let model = FilePreviewLoadModel(path: path, line: line, context: context)
         let host = UIHostingController(rootView: FilePreviewSheet(model: model))
         if let sheet = host.sheetPresentationController {
             sheet.detents = [.medium(), .large()]

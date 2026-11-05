@@ -92,6 +92,12 @@ public enum GhosttySel {
         return (text, t.tl_px_y, t.offset_start, t.offset_len)
     }
 
+    /// The whole scrollback + screen as text, one line per row, top-aligned with
+    /// the SCROLLBAR row space — what path and link detection both scan.
+    public static func screenText(_ surface: ghostty_surface_t) -> String? {
+        readRegion(surface, tag: GHOSTTY_POINT_SCREEN)?.text
+    }
+
     /// The currently selected text, or nil.
     public static func selectedText(_ surface: ghostty_surface_t) -> String? {
         var t = ghostty_text_s()

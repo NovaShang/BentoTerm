@@ -25,57 +25,14 @@ struct FilePreviewContentView: View {
         }
     }
 
-    private var iconName: String {
-        switch data.content {
-        case .directory: return "folder"
-        case .quickLook: return "doc.richtext"
-        case .binary: return "doc"
-        case .text: return "doc.text"
-        }
-    }
+    /// The Mac dock's sizes for the shared body: the dock is a narrow column
+    /// of 11–12pt text.
+    private static let bodyStyle = FilePreviewContentBody.Style(
+        noteFontSize: 12, truncationPadding: 4,
+        truncationFill: AnyShapeStyle(.quaternary.opacity(0.5)))
 
-    @ViewBuilder private var content: some View {
-        switch data.content {
-        case .text(let text, let truncated):
-            VStack(spacing: 0) {
-                if text.isEmpty {
-                    Text("(empty file)")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    WebPreviewText(fileName: data.fileName, text: text, line: data.line,
-                                   imageBase: data.context.map {
-                                       .init(directory: (data.resolvedPath as NSString).deletingLastPathComponent,
-                                             source: $0.source)
-                                   })
-                }
-                if truncated {
-                    Text("Showing the first \(FilePreviewLoader.sizeLabel(Int64(FilePreviewLimits.textBytes))) of \(FilePreviewLoader.sizeLabel(data.stat.size))")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
-                        .background(.quaternary.opacity(0.5))
-                }
-            }
-        case .quickLook(let url):
-            // Everything the system draws better than we do. A local file has
-            // its URL already; a remote one downloads inside the panel.
-            QuickLookPanel(data: data, url: url)
-        case .binary:
-            unsupported("Binary file — no inline preview.")
-        case .directory:
-            unsupported("This is a directory.")
-        }
-    }
-
-    private func unsupported(_ note: String) -> some View {
-        VStack(spacing: 8) {
-            Image(systemName: iconName).font(.system(size: 40)).foregroundStyle(.quaternary)
-            Text(note).font(.system(size: 12)).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private var content: some View {
+        FilePreviewContentBody(data: data, style: Self.bodyStyle)
     }
 
     /// One bar carrying both jobs a preview header has: where this file IS
@@ -460,43 +417,4 @@ private struct DirectoryRow: View {
     }
 }
 
-/// Web-based text/code/markdown renderer (highlight.js + markdown-it inside
-/// `FilePreviewWebView`) — one implementation shared with the iOS sheet.
-private struct WebPreviewText: NSViewRepresentable {
-    let fileName: String
-    let text: String
-    let line: Int?
-    var imageBase: FilePreviewWebView.ImageBase? = nil
-    @Environment(\.colorScheme) private var colorScheme
-
-    func makeNSView(context: Context) -> FilePreviewWebView {
-        FilePreviewWebView.makePreview()
-    }
-
-    func updateNSView(_ view: FilePreviewWebView, context: Context) {
-        let dark = colorScheme == .dark
-        let key = RenderKey(fileName: fileName, textHash: text.hashValue, line: line)
-        if context.coordinator.rendered != key {
-            context.coordinator.rendered = key
-            view.render(fileName: fileName, text: text, line: line, dark: dark,
-                        imageBase: imageBase)
-        } else {
-            view.setDark(dark)
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    struct RenderKey: Equatable {
-        let fileName: String
-        /// Content hash, not length — a watched file can change without
-        /// changing size (an agent replacing characters in place).
-        let textHash: Int
-        let line: Int?
-    }
-
-    final class Coordinator {
-        var rendered: RenderKey?
-    }
-}
 #endif

@@ -770,7 +770,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
 
     /// Sub-row remainder for the trackpad → wheel-report path, so a slow drag
     /// still accumulates to whole rows instead of being truncated away.
-    private var wheelReportAccum: CGFloat = 0
+    private var wheelReportRows = ScrollRowAccumulator()
 
     public override func scrollWheel(with event: NSEvent) {
         clearPathHover()   // rows shift under the cursor; stale highlight lies
@@ -863,22 +863,19 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// host turns this into `send-keys -X -N n scroll-up`.
     public var onCopyModeScroll: ((Int) -> Void)?
 
-    private var copyModeScrollAccum: CGFloat = 0
+    private var copyModeRows = ScrollRowAccumulator()
 
     private func copyModeScrollRows(_ event: NSEvent) -> Int {
         let dy = event.scrollingDeltaY
         guard event.hasPreciseScrollingDeltas else {
             return dy == 0 ? 0 : (dy > 0 ? 3 : -3)   // one notch ≈ a few rows
         }
-        if event.phase == .began { copyModeScrollAccum = 0 }
-        guard let cs = currentSize, cs.cellHeightPx > 0 else { return 0 }
+        if event.phase == .began { copyModeRows.reset() }
+        guard let cell = cellSizePoints() else { return 0 }
         // Same points-per-row as the local scrollback path, so a pane in
         // copy-mode scrolls at the speed the others do.
-        let rowH = CGFloat(cs.cellHeightPx) / currentScale / Self.trackpadScrollRatio
-        copyModeScrollAccum += dy
-        let rows = Int(copyModeScrollAccum / rowH)
+        let rows = copyModeRows.rows(adding: dy, rowHeight: cell.height / Self.trackpadScrollRatio)
         guard rows != 0 else { return 0 }
-        copyModeScrollAccum -= CGFloat(rows) * rowH
         // Cap the burst; a flick's momentum tail would otherwise send tmux a very
         // large repeat count in one command.
         return max(-12, min(12, rows))
@@ -896,15 +893,13 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
             forwardMouse(event, button: dy > 0 ? 64 : 65, press: true)
             return
         }
-        if event.phase == .began { wheelReportAccum = 0 }   // fresh gesture
-        guard let cs = currentSize, cs.cellHeightPx > 0 else { return }
+        if event.phase == .began { wheelReportRows.reset() }   // fresh gesture
+        guard let cell = cellSizePoints() else { return }
         // Points of finger travel per report — the same ratio the local
         // scrollback path uses, so both kinds of pane scroll at one speed.
-        let rowH = CGFloat(cs.cellHeightPx) / currentScale / Self.trackpadScrollRatio
-        wheelReportAccum += dy
-        let rows = Int(wheelReportAccum / rowH)
+        let rows = wheelReportRows.rows(adding: dy,
+                                        rowHeight: cell.height / Self.trackpadScrollRatio)
         guard rows != 0 else { return }
-        wheelReportAccum -= CGFloat(rows) * rowH
         let button = rows > 0 ? 64 : 65
         // Cap the burst: a flick's momentum tail can cross many rows in one
         // event, and TUIs handle a wall of wheel reports poorly.
@@ -952,11 +947,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
 
     /// 1-based cell under a view point (the `cellCoord(_ event:)` twin).
     private func cellCoord(atPoint p: NSPoint) -> (col: Int, row: Int) {
-        guard let cs = currentSize, cs.cellWidthPx > 0, cs.cellHeightPx > 0 else { return (1, 1) }
-        let scale = Double(currentScale)
-        let col = max(1, Int(Double(p.x) / (Double(cs.cellWidthPx) / scale)) + 1)
-        let row = max(1, Int(Double(p.y) / (Double(cs.cellHeightPx) / scale)) + 1)
-        return (col, row)
+        GhosttyCellGeometry.cell(at: p, size: currentSize, scale: currentScale)
     }
 
     // MARK: - Mouse selection
@@ -1034,11 +1025,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// Cell (col,row), 1-based, for a mouse event — from the cell pixel size.
     private func cellCoord(_ event: NSEvent) -> (col: Int, row: Int) {
         let p = pxPoint(event)
-        guard let cs = currentSize, cs.cellWidthPx > 0, cs.cellHeightPx > 0 else { return (1, 1) }
-        let scale = Double(currentScale)
-        let col = max(1, Int(p.x / (Double(cs.cellWidthPx) / scale)) + 1)
-        let row = max(1, Int(p.y / (Double(cs.cellHeightPx) / scale)) + 1)
-        return (col, row)
+        return cellCoord(atPoint: NSPoint(x: p.x, y: p.y))
     }
 
     private func mouseModBits(_ flags: NSEvent.ModifierFlags) -> Int {
@@ -1400,7 +1387,8 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
         var keyEvent = ghostty_input_key_s(
             action: action,
             mods: modsFromFlags(event.modifierFlags),
-            consumed_mods: consumedMods(from: event, surface: surface),
+            consumed_mods: GhosttyKeyMods.consumed(modsFromFlags(event.modifierFlags),
+                                                   surface: surface),
             keycode: UInt32(event.keyCode),
             text: nil,
             unshifted_codepoint: unshiftedCodepoint(from: event),
@@ -1427,16 +1415,6 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
         if flags.contains(.option) { raw |= GHOSTTY_MODS_ALT.rawValue }
         if flags.contains(.command) { raw |= GHOSTTY_MODS_SUPER.rawValue }
         if flags.contains(.capsLock) { raw |= GHOSTTY_MODS_CAPS.rawValue }
-        return ghostty_input_mods_e(rawValue: raw)
-    }
-
-    /// Ghostty-translated mods (option-as-alt etc.), minus ctrl/super so the
-    /// engine knows which mods contributed to generated text.
-    private func consumedMods(from event: NSEvent, surface: ghostty_surface_t) -> ghostty_input_mods_e {
-        let translated = ghostty_surface_key_translation_mods(surface, modsFromFlags(event.modifierFlags))
-        var raw = translated.rawValue
-        raw &= ~GHOSTTY_MODS_CTRL.rawValue
-        raw &= ~GHOSTTY_MODS_SUPER.rawValue
         return ghostty_input_mods_e(rawValue: raw)
     }
 
@@ -1695,21 +1673,14 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// fuzzy-match the URL's last segment to a local directory and open a file
     /// viewer for a link. One snapshot, one answer.
     private func linkURL(at point: NSPoint) -> String? {
-        // Ask the ENGINE first. An OSC 8 hyperlink's target lives in the cell
-        // attributes, not on screen — Claude Code emits
-        // `ESC]8;;URL ESC\ anchor ESC]8;; ESC\` and its anchor is often prose in
-        // another language. No amount of scraping can recover a URL that was
-        // never rendered; only ghostty, which parsed the sequence, has it.
-        // Anchored to the cell so a stale hover can't answer for a later click.
+        // The engine's answer is the last hover, anchored to its cell so a
+        // stale hover can't answer for a later click.
         let c = cellCoord(atPoint: point)
-        if let e = engineLink, e.col == c.col, e.row == c.row {
-            linkLog.log("link via engine (OSC 8) ⟨\(e.url, privacy: .public)⟩")
-            return e.url
+        let engine = engineLink.flatMap { $0.col == c.col && $0.row == c.row ? $0.url : nil }
+        if engine == nil {
+            linkLog.log("link via scrape cell=\(c.col, privacy: .public),\(c.row, privacy: .public) engine=\(self.engineLink.map(\.url) ?? "nil", privacy: .public)")
         }
-        guard let (line, cell) = logicalLine(at: point) else { return nil }
-        let hit = TerminalLinkDetector.urlHit(inLine: line, atCell: cell)
-        linkLog.log("link via scrape cell=\(c.col, privacy: .public),\(c.row, privacy: .public) engine=\(self.engineLink.map(\.url) ?? "nil", privacy: .public) hit=⟨\(hit ?? "nil", privacy: .public)⟩")
-        return hit
+        return SurfaceLinkResolver.url(engine: engine) { logicalLine(at: point) }
     }
 
     /// OSC 7 working-directory report (shell integration). Lets path-preview
@@ -1722,9 +1693,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     // MARK: - Path preview (⌘hover / ⌘click / context menu)
 
     private func cellSizePoints() -> CGSize? {
-        guard let cs = currentSize, cs.cellWidthPx > 0, cs.cellHeightPx > 0 else { return nil }
-        let s = currentScale
-        return CGSize(width: CGFloat(cs.cellWidthPx) / s, height: CGFloat(cs.cellHeightPx) / s)
+        GhosttyCellGeometry.cellSize(currentSize, scale: currentScale)
     }
 
     /// Path candidate + highlight rects under `point` (surface coords), or nil.
@@ -2095,7 +2064,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// SCROLLBAR row space).
     public func readScrollback() -> String? {
         guard let surface else { return nil }
-        return GhosttySel.readRegion(surface, tag: GHOSTTY_POINT_SCREEN)?.text
+        return GhosttySel.screenText(surface)
     }
 
     private var composeBarHeight: CGFloat { ceil(composeFont().ascender - composeFont().descender) + 16 }
