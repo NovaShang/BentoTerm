@@ -188,7 +188,7 @@ struct TerminalWrapperView: View {
                 Text(viewModel.errorMessage ?? "Unknown error")
             }
             .sheet(isPresented: $showSplitSheet) {
-                NewWindowSheet(title: "Split — Path & Command",
+                PathAndCommandSheet(title: "Split — Path & Command",
                                pathContextProvider: { paneBridge.container?.focusedPathPreviewContext() }) { path, command in
                     Task { await viewModel.splitPane(horizontal: true, seed: .custom(path: path, command: command)) }
                 }
@@ -434,7 +434,8 @@ struct TerminalWrapperView: View {
     private var chrome: some View {
         if isRegularWidth {
             NavigationSplitView(columnVisibility: $sidebarVisibility) {
-                WindowSidebar(viewModel: viewModel)
+                WindowSidebar(viewModel: viewModel,
+                              pathContextProvider: { paneBridge.container?.focusedPathPreviewContext() })
                     .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
                     // The sidebar is mode-driven, never user-toggled (the same
                     // rule the macOS window follows), so there's nothing for a
@@ -2573,7 +2574,7 @@ extension PaneContainerVC {
 /// browser-tab style, horizontally scrollable, with a trailing "+" that offers
 /// the two creation seeds. Each tab shows the window's LIVE display name
 /// (derived from what's running — never renamed), its aggregate agent-state
-/// dot (`windowState`), and a pane-count badge when the window holds several
+/// dot (`windowStatus`), and a pane-count badge when the window holds several
 /// panes (external structures). Tapping a tab is select-window ONLY — zero
 /// zoom, zero resize — the terminal above simply starts mirroring that window.
 /// Long-press a tab → Close Window (confirmed: processes die).
@@ -2593,11 +2594,7 @@ struct WindowTabBar: View {
     /// Handed to the "New Window" sheet so its working directory can be
     /// browsed; nil = typed-path only.
     var pathContextProvider: (() -> PathPreviewContext?)? = nil
-    @State private var pendingClose: TmuxWindowID?
-    @State private var showCustomSheet = false
-    @State private var pendingMove: TmuxWindowID?
-    @State private var moveSessionName = ""
-    @StateObject private var landingPrompt = MoveLandingPrompt()
+    @StateObject private var actions = WindowActionsState()
     /// The tab a dragged tab is currently hovering over — it lifts to show the
     /// slot the drop would take.
     @State private var dropTarget: TmuxWindowID?
@@ -2633,32 +2630,8 @@ struct WindowTabBar: View {
                                 else if dropTarget == window.id { dropTarget = nil }
                             }
                             .contextMenu {
-                                // The drag's one-step equivalent, for when the
-                                // drag isn't practical (VoiceOver, one hand on
-                                // a long strip).
-                                Button {
-                                    shift(window.id, earlier: true)
-                                } label: {
-                                    Label("Move Left", systemImage: "arrow.left")
-                                }
-                                .disabled(position(of: window.id) == 0)
-                                Button {
-                                    shift(window.id, earlier: false)
-                                } label: {
-                                    Label("Move Right", systemImage: "arrow.right")
-                                }
-                                .disabled(position(of: window.id) == viewModel.windows.count - 1)
-                                WindowMoveToSessionMenu(viewModel: viewModel) { session in
-                                    moveWindow(window.id, to: session)
-                                } onNewSession: {
-                                    moveSessionName = ""
-                                    pendingMove = window.id
-                                }
-                                Button(role: .destructive) {
-                                    pendingClose = window.id
-                                } label: {
-                                    Label("Close Window", systemImage: "xmark")
-                                }
+                                WindowContextMenu(viewModel: viewModel, state: actions,
+                                                  window: window.id, axis: .horizontal)
                             }
                     }
                     newWindowButton
@@ -2683,41 +2656,8 @@ struct WindowTabBar: View {
             // (BarItemGlass); the bar itself stays bare.
             Color.clear
         )
-        .alert(closePrompt.title, isPresented: Binding(
-            get: { pendingClose != nil },
-            set: { if !$0 { pendingClose = nil } }
-        )) {
-            Button(closePrompt.confirm, role: .destructive) {
-                if let id = pendingClose { viewModel.closeWindow(id) }
-                pendingClose = nil
-            }
-            Button("Cancel", role: .cancel) { pendingClose = nil }
-        } message: {
-            Text(closePrompt.message ?? "")
-        }
-        .sheet(isPresented: $showCustomSheet) {
-            NewWindowSheet(title: "New Window",
-                           pathContextProvider: pathContextProvider) { path, command in
-                Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
-            }
-        }
-        .alert(SessionPromptCopy.moveWindowToNewSession.title, isPresented: Binding(
-            get: { pendingMove != nil },
-            set: { if !$0 { pendingMove = nil } }
-        )) {
-            TextField(SessionPromptCopy.moveWindowToNewSession.placeholder ?? "",
-                      text: $moveSessionName)
-            Button(SessionPromptCopy.moveWindowToNewSession.confirm) {
-                // Same landing pipeline as a menu pick: a typed name may
-                // match an EXISTING session, so the prompt can still follow.
-                if let id = pendingMove { moveWindow(id, to: moveSessionName) }
-                pendingMove = nil
-            }
-            Button("Cancel", role: .cancel) { pendingMove = nil }
-        } message: {
-            Text(SessionPromptCopy.moveWindowToNewSession.message ?? "")
-        }
-        .moveLandingDialog(landingPrompt)
+        .windowActionDialogs(viewModel: viewModel, state: actions, close: .alert,
+                             pathContextProvider: pathContextProvider)
     }
 
     /// Landing a dragged tab on `target` gives it that tab's position — drop
@@ -2742,36 +2682,10 @@ struct WindowTabBar: View {
         viewModel.windows.firstIndex { $0.id == id }
     }
 
-    private func shift(_ id: TmuxWindowID, earlier: Bool) {
-        Task { await viewModel.shiftWindow(id, earlier: earlier) }
-    }
-
-    /// Run the move; an unsettled target asks through the landing dialog.
-    private func moveWindow(_ id: TmuxWindowID, to session: String) {
-        Task {
-            await viewModel.moveWindow(id, toSession: session,
-                                       chooseLanding: landingPrompt.ask)
-        }
-    }
-
-    private var closePrompt: SessionPromptCopy.Prompt {
-        SessionPromptCopy.closeWindow(pendingClose.map { viewModel.windowDisplayName($0) } ?? "")
-    }
-
     /// The two creation seeds — same pair as the iPad/macOS sidebar.
     private var newWindowButton: some View {
-        Menu {
-            Button {
-                Task { await viewModel.newListWindow(.duplicateCurrent) }
-            } label: {
-                Label("Duplicate Current", systemImage: "plus.square.on.square")
-            }
-            Button {
-                showCustomSheet = true
-            } label: {
-                Label("Path & Command…", systemImage: "terminal")
-            }
-        } label: {
+        NewWindowSeedMenu(viewModel: viewModel,
+                          onPathAndCommand: { actions.showsNewWindowForm = true }) {
             Image(systemName: "plus")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.bentoInkDim)
@@ -2780,148 +2694,6 @@ struct WindowTabBar: View {
                 .modifier(BarItemGlass(isActive: false))
                 .contentShape(Capsule())
         }
-    }
-}
-
-// MARK: - New window / split "path + command" form
-
-/// The "specify path + command" mini-sheet, shared by List's "+" menu and
-/// Tiled's "Split — Path & Command…". Empty command = plain shell; empty path
-/// = inherit the current pane's directory.
-///
-/// The directory is BROWSED (a pushed `FileTreeBrowserView` over the pane's
-/// own remote file source) whenever there is one to browse — typing a path on
-/// a phone is not a real affordance. The text field survives as the escape
-/// hatch, and is the whole section when no source is reachable.
-struct NewWindowSheet: View {
-    var title: String
-    /// Reaches the focused pane's REMOTE file source, so the directory can be
-    /// browsed instead of typed. nil — or a provider that returns nil (no
-    /// tmux, SSH down) — degrades the section to the plain text field.
-    var pathContextProvider: (() -> PathPreviewContext?)? = nil
-    var onCreate: (String?, String?) -> Void
-
-    @State private var path = ""
-    @State private var agentPreset: AgentPreset = .none
-    @State private var customCommand = ""
-    @State private var showPicker = false
-    /// The tree needs room: browsing pushes the sheet to .large and coming
-    /// back drops it to .medium, so the form stays the compact thing it was.
-    @State private var detent: PresentationDetent = .medium
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Working Directory") {
-                    // Browsable when the pane has a reachable file source —
-                    // on a phone a path is chosen, never typed. The field
-                    // stays as the escape hatch (jump anywhere) and is the
-                    // ONLY control when there's nothing to browse.
-                    if browsableContext != nil {
-                        Button {
-                            showPicker = true
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "folder")
-                                    .foregroundStyle(Color.accentColor)
-                                Text(path.isEmpty ? "Current directory" : path)
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(path.isEmpty ? .secondary : .primary)
-                                    .lineLimit(1)
-                                    .truncationMode(.head)
-                                Spacer(minLength: 4)
-                                Image(systemName: "chevron.right")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        if !path.isEmpty {
-                            Button("Use Current Directory") { path = "" }
-                        }
-                    }
-                    TextField(browsableContext == nil ? "Empty = current directory"
-                                                      : "Or type a path",
-                              text: $path)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-                Section("Command") {
-                    Picker("Agent", selection: $agentPreset) {
-                        ForEach(AgentPreset.allCases) { preset in
-                            Text(preset.rawValue).tag(preset)
-                        }
-                    }
-                    if agentPreset == .custom {
-                        TextField("e.g. cursor-agent", text: $customCommand)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .font(.system(.body, design: .monospaced))
-                    }
-                }
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(isPresented: $showPicker) { directoryPicker }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        onCreate(path.isEmpty ? nil : path, resolvedCommand)
-                        dismiss()
-                    }
-                    .disabled(!canCreate)
-                }
-            }
-        }
-        .presentationDetents([.medium, .large], selection: $detent)
-        .onChange(of: showPicker) { _, browsing in
-            detent = browsing ? .large : .medium
-        }
-    }
-
-    /// The pane's file context right now — re-asked on every body pass because
-    /// the transport reconnects (and the answer flips to nil when it's down).
-    private var browsableContext: PathPreviewContext? {
-        pathContextProvider?()
-    }
-
-    /// Pushed, not a second sheet: a sheet-over-sheet at .medium would have
-    /// left the tree a few rows tall.
-    @ViewBuilder private var directoryPicker: some View {
-        DirectoryPickerView(
-            contextProvider: { pathContextProvider?() },
-            confirmTitle: "Use This Folder",
-            onPick: { picked in
-                path = picked
-                showPicker = false
-            })
-            .navigationTitle("Choose Folder")
-            .navigationBarTitleDisplayMode(.inline)
-    }
-
-    /// nil = plain shell (no agent); otherwise the chosen agent's launch command
-    /// or the user's custom command.
-    private var resolvedCommand: String? {
-        switch agentPreset {
-        case .none:
-            return nil
-        case .custom:
-            let trimmed = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        default:
-            return agentPreset.command
-        }
-    }
-
-    /// Custom needs a non-empty command; every other preset is always valid.
-    private var canCreate: Bool {
-        agentPreset != .custom
-            || !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 

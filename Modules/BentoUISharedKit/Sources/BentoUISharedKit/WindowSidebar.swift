@@ -3,6 +3,7 @@ import BentoTmuxKit
 import BentoAgentKit
 import BentoSessionKit
 import BentoFoundationKit
+import BentoFilePreviewKit
 
 /// List mode's window switcher for the big screens — ONE implementation
 /// shared by macOS (hosted in an `NSHostingView`) and iPad. Native sidebar
@@ -15,17 +16,15 @@ import BentoFoundationKit
 @MainActor
 public struct WindowSidebar: View {
     @ObservedObject var viewModel: TerminalViewModel
-    @State private var pendingClose: TmuxWindowID?
-    @State private var showCustomSheet = false
+    /// iPad: lets "Path & Command…" browse the pane's remote tree.
+    let pathContextProvider: (() -> PathPreviewContext?)?
     @State private var hoveredWindow: TmuxWindowID?
-    @State private var pendingMove: TmuxWindowID?
-    @State private var moveSessionName = ""
-    @State private var pendingRename: TmuxWindowID?
-    @State private var renameText = ""
-    @StateObject private var landingPrompt = MoveLandingPrompt()
+    @StateObject private var actions = WindowActionsState()
 
-    public init(viewModel: TerminalViewModel) {
+    public init(viewModel: TerminalViewModel,
+                pathContextProvider: (() -> PathPreviewContext?)? = nil) {
         self.viewModel = viewModel
+        self.pathContextProvider = pathContextProvider
     }
 
     public var body: some View {
@@ -46,57 +45,8 @@ public struct WindowSidebar: View {
 
             newWindowButton
         }
-        .confirmationDialog(
-            closePrompt.title,
-            isPresented: Binding(
-                get: { pendingClose != nil },
-                set: { if !$0 { pendingClose = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button(closePrompt.confirm, role: .destructive) {
-                if let id = pendingClose { viewModel.closeWindow(id) }
-                pendingClose = nil
-            }
-            Button("Cancel", role: .cancel) { pendingClose = nil }
-        } message: {
-            Text(closePrompt.message ?? "")
-        }
-        .sheet(isPresented: $showCustomSheet) {
-            NewWindowForm { path, command in
-                Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
-            }
-        }
-        .alert(SessionPromptCopy.renameWindow.title, isPresented: Binding(
-            get: { pendingRename != nil },
-            set: { if !$0 { pendingRename = nil } }
-        )) {
-            TextField(SessionPromptCopy.renameWindow.placeholder ?? "", text: $renameText)
-            Button(SessionPromptCopy.renameWindow.confirm) {
-                if let id = pendingRename { viewModel.renameWindow(id, to: renameText) }
-                pendingRename = nil
-            }
-            Button("Cancel", role: .cancel) { pendingRename = nil }
-        } message: {
-            Text(SessionPromptCopy.renameWindow.message ?? "")
-        }
-        .alert(SessionPromptCopy.moveWindowToNewSession.title, isPresented: Binding(
-            get: { pendingMove != nil },
-            set: { if !$0 { pendingMove = nil } }
-        )) {
-            TextField(SessionPromptCopy.moveWindowToNewSession.placeholder ?? "",
-                      text: $moveSessionName)
-            Button(SessionPromptCopy.moveWindowToNewSession.confirm) {
-                // Same landing pipeline as a menu pick: a typed name may
-                // match an EXISTING session, so the prompt can still follow.
-                if let id = pendingMove { moveWindow(id, to: moveSessionName) }
-                pendingMove = nil
-            }
-            Button("Cancel", role: .cancel) { pendingMove = nil }
-        } message: {
-            Text(SessionPromptCopy.moveWindowToNewSession.message ?? "")
-        }
-        .moveLandingDialog(landingPrompt)
+        .windowActionDialogs(viewModel: viewModel, state: actions,
+                             pathContextProvider: pathContextProvider)
     }
 
     /// Drag a row to rearrange the session's windows — the order here IS tmux's
@@ -113,26 +63,6 @@ public struct WindowSidebar: View {
         let id = viewModel.windows[from].id
         let destination = offset > from ? offset - 1 : offset
         Task { await viewModel.reorderWindow(id, toIndex: destination) }
-    }
-
-    private func position(of id: TmuxWindowID) -> Int? {
-        viewModel.windows.firstIndex { $0.id == id }
-    }
-
-    private func shift(_ id: TmuxWindowID, earlier: Bool) {
-        Task { await viewModel.shiftWindow(id, earlier: earlier) }
-    }
-
-    /// Run the move; an unsettled target asks through the landing dialog.
-    private func moveWindow(_ id: TmuxWindowID, to session: String) {
-        Task {
-            await viewModel.moveWindow(id, toSession: session,
-                                       chooseLanding: landingPrompt.ask)
-        }
-    }
-
-    private var closePrompt: SessionPromptCopy.Prompt {
-        SessionPromptCopy.closeWindow(pendingClose.map { viewModel.windowDisplayName($0) } ?? "")
     }
 
     /// Selection mirrors the session's current window; picking a row is
@@ -168,26 +98,8 @@ public struct WindowSidebar: View {
             else if hoveredWindow == window.id { hoveredWindow = nil }
         }
         .contextMenu {
-            // Renaming lives here rather than on the toolbar's centre label,
-            // which in Focus is a read-only title.
-            Button("Rename Window…") {
-                renameText = viewModel.windowBodyName(window.id)
-                pendingRename = window.id
-            }
-            // The drag's one-step equivalent — the reachable-without-a-drag
-            // path (VoiceOver, Switch Control, a trackpad the user would
-            // rather not fight), and on macOS the same pair ⌥⌘↑/↓ fires.
-            Button("Move Up") { shift(window.id, earlier: true) }
-                .disabled(position(of: window.id) == 0)
-            Button("Move Down") { shift(window.id, earlier: false) }
-                .disabled(position(of: window.id) == viewModel.windows.count - 1)
-            WindowMoveToSessionMenu(viewModel: viewModel) { session in
-                moveWindow(window.id, to: session)
-            } onNewSession: {
-                moveSessionName = ""
-                pendingMove = window.id
-            }
-            Button("Close Window", role: .destructive) { pendingClose = window.id }
+            WindowContextMenu(viewModel: viewModel, state: actions,
+                              window: window.id, axis: .vertical)
         }
     }
 
@@ -260,7 +172,7 @@ public struct WindowSidebar: View {
     /// Routes through the same confirm dialog as the context menu.
     private func closeButton(_ id: TmuxWindowID) -> some View {
         Button {
-            pendingClose = id
+            actions.pendingClose = id
         } label: {
             Image(systemName: "xmark")
                 .font(.system(size: 10, weight: .bold))
@@ -276,34 +188,28 @@ public struct WindowSidebar: View {
 
     /// Bottom-edge creation affordance, styled like Mail/Notes' "New …"
     /// footer: borderless, secondary, leading-aligned. Two seeds inside.
+    private func pathAndCommand() {
+        #if canImport(AppKit)
+        // macOS: the pane runs a local shell, so the dialog itself IS a
+        // native directory chooser (with a command popup baked in) — no
+        // intermediate form.
+        Task {
+            let cwd = await viewModel.activePaneWorkingDirectory()
+            presentNewPaneDirectoryPanel(
+                title: "New Window", prompt: "Create", initialDirectory: cwd
+            ) { path, command in
+                Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
+            }
+        }
+        #else
+        // iPad: the path lives on the remote host — browse it (or type it)
+        // in the shared form.
+        actions.showsNewWindowForm = true
+        #endif
+    }
+
     private var newWindowButton: some View {
-        Menu {
-            Button {
-                Task { await viewModel.newListWindow(.duplicateCurrent) }
-            } label: {
-                Label("Duplicate Current", systemImage: "plus.square.on.square")
-            }
-            Button {
-                #if canImport(AppKit)
-                // macOS: the pane runs a local shell, so the dialog itself IS a
-                // native directory chooser (with a command popup baked in) —
-                // no intermediate form.
-                Task {
-                    let cwd = await viewModel.activePaneWorkingDirectory()
-                    presentNewPaneDirectoryPanel(
-                        title: "New Window", prompt: "Create", initialDirectory: cwd
-                    ) { path, command in
-                        Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
-                    }
-                }
-                #else
-                // iPad: the path lives on the remote host — keep the typed form.
-                showCustomSheet = true
-                #endif
-            } label: {
-                Label("Path & Command…", systemImage: "terminal")
-            }
-        } label: {
+        NewWindowSeedMenu(viewModel: viewModel, onPathAndCommand: pathAndCommand) {
             Label("New Window", systemImage: "plus.circle")
                 .foregroundStyle(.secondary)
                 .font(.callout)
@@ -361,82 +267,3 @@ public struct WindowMoveToSessionMenu: View {
         }
     }
 }
-
-/// The "specify path + command" mini-form used on iPad, where the working
-/// directory lives on the *remote* host (so a local file picker can't apply)
-/// and the path is typed. The command is chosen from the known agents — or a
-/// custom command — rather than typed blind. Empty path = inherit the current
-/// pane's directory; "No agent" = a plain shell. macOS uses a native directory
-/// panel instead (see `presentNewPaneDirectoryPanel`).
-@MainActor
-struct NewWindowForm: View {
-    var onCreate: (String?, String?) -> Void
-    @State private var path = ""
-    @State private var agentPreset: AgentPreset = .none
-    @State private var customCommand = ""
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("New Window").font(.headline)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Working directory").font(.caption).foregroundStyle(.secondary)
-                TextField("Current pane's directory", text: $path)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Command").font(.caption).foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    Picker("Command", selection: $agentPreset) {
-                        ForEach(AgentPreset.allCases) { preset in
-                            Text(preset.rawValue).tag(preset)
-                        }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
-                    if agentPreset == .custom {
-                        TextField("e.g. cursor-agent", text: $customCommand)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(.body, design: .monospaced))
-                    }
-                }
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Create") {
-                    onCreate(path.isEmpty ? nil : path, resolvedCommand)
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canCreate)
-            }
-        }
-        .padding(20)
-        .frame(minWidth: 400)
-    }
-
-    /// nil = plain shell (no agent); otherwise the chosen agent's launch command
-    /// or the user's custom command.
-    private var resolvedCommand: String? {
-        switch agentPreset {
-        case .none:
-            return nil
-        case .custom:
-            let trimmed = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        default:
-            return agentPreset.command
-        }
-    }
-
-    /// Custom needs a non-empty command; every other preset is always valid.
-    private var canCreate: Bool {
-        agentPreset != .custom
-            || !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-}
-
