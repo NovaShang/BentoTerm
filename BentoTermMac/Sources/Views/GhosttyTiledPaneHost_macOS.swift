@@ -39,14 +39,12 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// does NOT remove block observers, so the tokens must be stored and removed
     /// explicitly (mirrors the surface's `renderObservers`).
     nonisolated(unsafe) private var themeObservers: [NSObjectProtocol] = []
-    /// Cell size in pixels (constant for the font); learned from the first surface.
-    private var cellPx: CGSize?
-    private var resizeDebounce: DispatchWorkItem?
-    private var lastClient: (cols: Int, rows: Int)?
-    /// The tmux client size computed during a live window-resize drag, applied
-    /// once the drag ends (so the TUI gets one SIGWINCH on mouse-up, not a burst
-    /// throughout the drag). nil when not mid-drag.
-    private var pendingClient: (cols: Int, rows: Int)?
+    /// Cell size, last pushed client grid, debounce, and the grid held during
+    /// a live window drag (sent once on mouse-up, so the TUI gets one SIGWINCH
+    /// rather than a burst).
+    private lazy var sizer = TiledClientSizer { [weak self] grid in
+        self?.viewModel.resizeTmuxClient(cols: grid.cols, rows: grid.rows)
+    }
     private let dividerOverlay = DividerOverlay()
 
     /// Hold-to-talk voice (right-click-and-hold a pane). One controller per
@@ -163,12 +161,11 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         layer?.backgroundColor = NSColor(hex: theme.background).cgColor
         // A font change (size OR family) changes the pixel size of one cell, so
         // the cached cell metrics and last-pushed tmux client size are now stale.
-        // Drop them: the next surface size report re-learns cellPx (the `cellPx
-        // == nil` branch in onSizeChanged) and re-pushes the client size, then we
-        // re-tile against the new grid. Without this the surfaces stay sized to
-        // the old font's cells and the layout tears.
-        cellPx = nil
-        lastClient = nil
+        // Drop them: the next surface size report re-learns the cell size and
+        // re-pushes the client size, then we re-tile against the new grid.
+        // Without this the surfaces stay sized to the old font's cells and the
+        // layout tears.
+        sizer.reset()
         for (_, cell) in cells {
             cell.surface.applyTheme(theme)
             // CGColor chrome (border + title-bar band/ink) is a static snapshot —
@@ -322,21 +319,11 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         }
         surface.onSizeChanged = { [weak self] size in
             guard let self else { return }
-            // Track the cell pixel size whenever it CHANGES, not just when nil.
-            // cellPx is in device pixels, so it changes when the window moves to a
-            // display with a different backing scale (e.g. unplug an external
-            // monitor: 2× ↔ 1×) or when the font changes. Learning it only-once
-            // (`== nil`) raced the backing-change handler that nils it: if the
-            // surface re-reported before the nil landed, the new cell size was
-            // dropped and the grid stayed stuck on the old scale (huge/tiny text)
-            // until relaunch.
-            if size.cellWidthPx > 0, size.cellHeightPx > 0 {
-                let newCell = CGSize(width: size.cellWidthPx, height: size.cellHeightPx)
-                if self.cellPx != newCell {
-                    self.cellPx = newCell
-                    self.recomputeClientSize()
-                    self.layoutCells()
-                }
+            // Learned on every change (see `TiledClientSizer.learn`): a
+            // backing-scale move or a font change re-tiles at once.
+            if self.sizer.learn(cellWidthPx: size.cellWidthPx, cellHeightPx: size.cellHeightPx) {
+                self.recomputeClientSize()
+                self.layoutCells()
             }
             // Single / zoomed pane: this surface fills the window, so ghostty's
             // reported grid IS exactly what's rendered — drive the tmux client
@@ -749,8 +736,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     // tmux client grid stays correct.
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        cellPx = nil
-        lastClient = nil
+        sizer.reset()
         layoutCells()
     }
 
@@ -773,16 +759,11 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// Push ghostty's authoritative reported grid as the tmux client size
     /// (deduped + debounced). Exact match → no wrap/redraw artifacts.
     private func pushAuthoritativeClientSize(cols: Int, rows: Int) {
-        guard cols > 0, rows > 0 else { return }
-        // Defer the tmux resize until the live drag ends (applied in
-        // viewDidEndLiveResize). ghostty still renders at the live size.
-        if window?.inLiveResize == true { pendingClient = (cols, rows); return }
-        guard lastClient?.cols != cols || lastClient?.rows != rows else { return }
-        lastClient = (cols, rows)
-        resizeDebounce?.cancel()
-        let work = DispatchWorkItem { [weak self] in
+        // Held until the live drag ends (flushed in viewDidEndLiveResize);
+        // ghostty still renders at the live size.
+        sizer.request(.init(cols: cols, rows: rows),
+                      holding: window?.inLiveResize == true) { [weak self] in
             guard let self else { return }
-            self.viewModel.resizeTmuxClient(cols: cols, rows: rows)
             // One-shot after the first (attach) resize: the pty/tmux started at
             // a default size, drew the prompt, then we resized to the window's
             // real grid — leaving a stale pre-resize prompt + blank gap. A single
@@ -795,8 +776,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                 }
             }
         }
-        resizeDebounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
     }
 
     /// Convert the window size → tmux client cols×rows and push it (debounced).
@@ -815,33 +794,23 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 
     private func recomputeClientSize() {
         guard !isSingleOrZoom else { return }
-        guard let cellPx, bounds.width > 0, bounds.height > 0 else { return }
+        guard let cellPx = sizer.cellPx, bounds.width > 0, bounds.height > 0 else { return }
         let (cols, rows) = windowGrid(cellPx: cellPx)
-        if window?.inLiveResize == true { pendingClient = (cols, rows); return }
-        guard lastClient?.cols != cols || lastClient?.rows != rows else { return }
-        lastClient = (cols, rows)
-        resizeDebounce?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.viewModel.resizeTmuxClient(cols: cols, rows: rows)
-        }
-        resizeDebounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+        sizer.request(.init(cols: cols, rows: rows), holding: window?.inLiveResize == true)
     }
 
     /// User-triggered "fit the session to THIS window": push the window's grid
     /// as the tmux client size even when it hasn't changed. The automatic
-    /// pushes dedup against `lastClient`, so after ANOTHER client (an iPad)
+    /// pushes dedup against the last pushed grid, so after ANOTHER client (an iPad)
     /// shrank the shared session, this window's unchanged size is never
     /// re-asserted on its own — this is the manual override for that case.
     public func refitSessionToWindow() {
-        if !isSingleOrZoom, let cellPx, bounds.width > 0, bounds.height > 0 {
+        if !isSingleOrZoom, let cellPx = sizer.cellPx, bounds.width > 0, bounds.height > 0 {
             let (cols, rows) = windowGrid(cellPx: cellPx)
-            lastClient = (cols, rows)
-            viewModel.resizeTmuxClient(cols: cols, rows: rows)
-        } else if let last = lastClient {
+            sizer.pushNow(.init(cols: cols, rows: rows))
+        } else if let last = sizer.lastPushed {
             // Single/zoomed pane: the surface grid last pushed is authoritative.
-            viewModel.resizeTmuxClient(cols: last.cols, rows: last.rows)
+            sizer.pushNow(last)
         }
     }
 
@@ -850,11 +819,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     public override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         layoutCells()
-        guard let p = pendingClient else { return }
-        pendingClient = nil
-        guard lastClient?.cols != p.cols || lastClient?.rows != p.rows else { return }
-        lastClient = (p.cols, p.rows)
-        viewModel.resizeTmuxClient(cols: p.cols, rows: p.rows)
+        sizer.flush()
     }
 
     /// The bounding box of all panes in tmux cell units (used as the tiling grid).
@@ -864,11 +829,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 
     /// Points per tmux cell (font cell size ÷ backing scale), or nil until the
     /// cell size has been learned from a surface.
-    private var pointsPerCell: CGSize? {
-        guard let cellPx else { return nil }
-        let scale = currentScale
-        return CGSize(width: cellPx.width / scale, height: cellPx.height / scale)
-    }
+    private var pointsPerCell: CGSize? { sizer.pointsPerCell(scale: currentScale) }
 
     /// Tile panes proportionally to fill the host, using the bounding box of all
     /// panes as the cell grid. When a pane is zoomed, it alone fills the host and
@@ -990,9 +951,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 
     /// Resize the boundary owned by `paneID` along an axis by a signed cell delta.
     func resizeBoundary(paneID: TmuxPaneID, vertical: Bool, deltaCells: Int) {
-        guard let dir = PaneTiling.resizeDirection(vertical: vertical, deltaCells: deltaCells)
-        else { return }
-        viewModel.resizePaneBy(paneID, direction: dir, amount: abs(deltaCells))
+        viewModel.resizeBoundary(paneID, vertical: vertical, deltaCells: deltaCells)
     }
 
     // MARK: - Menu / keyboard actions (reached via the responder chain)

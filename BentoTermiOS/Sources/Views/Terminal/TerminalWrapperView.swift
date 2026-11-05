@@ -1410,12 +1410,11 @@ final class PaneContainerVC: UIViewController {
     /// page; kept on top of the pane views after each tile layout.
     private let dividerOverlay = TileDividerOverlay()
 
-    /// Font cell size in device pixels, learned from the first surface that
-    /// reports it; constant for the font.
-    private var cellPx: CGSize?
-    /// Last cols×rows pushed to tmux (dedupe).
-    private var lastClient: (cols: Int, rows: Int)?
-    private var clientResizeWork: DispatchWorkItem?
+    /// Font cell size (re-learned whenever a surface reports a new one), the
+    /// last cols×rows pushed to tmux, and the push debounce.
+    private lazy var sizer = TiledClientSizer { [weak self] grid in
+        self?.viewModel?.resizeTmuxClient(cols: grid.cols, rows: grid.rows)
+    }
 
     // MARK: - Lifecycle
 
@@ -1432,7 +1431,7 @@ final class PaneContainerVC: UIViewController {
         view.addSubview(contentView)
         contentView.addSubview(dividerOverlay)
         dividerOverlay.onResize = { [weak self] paneID, vertical, deltaCells in
-            self?.resizeBoundary(paneID: paneID, vertical: vertical, deltaCells: deltaCells)
+            self?.viewModel?.resizeBoundary(paneID, vertical: vertical, deltaCells: deltaCells)
         }
         setupFloatingToolbar()
         setupFindBar()
@@ -1729,8 +1728,7 @@ final class PaneContainerVC: UIViewController {
     /// from the focused/single pane (which fills the page). Tiled panes are
     /// fixed-size and never push.
     private func handlePaneSize(_ size: TerminalSurfaceSize, paneID: TmuxPaneID) {
-        if cellPx == nil, size.cellWidthPx > 0, size.cellHeightPx > 0 {
-            cellPx = CGSize(width: size.cellWidthPx, height: size.cellHeightPx)
+        if sizer.learn(cellWidthPx: size.cellWidthPx, cellHeightPx: size.cellHeightPx) {
             view.setNeedsLayout()
         }
         // In focus mode, the visible pane fills the page → its reported size is
@@ -1754,7 +1752,7 @@ final class PaneContainerVC: UIViewController {
     /// surfaces are currently sized to. `reserveTitleRow` accounts for the one
     /// cell of height the top pane's title bar takes in Tiles (Focus hides it).
     private func deviceFitGrid(reserveTitleRow: Bool) -> (cols: Int, rows: Int)? {
-        guard let cellPx, cellPx.width > 0, cellPx.height > 0 else { return nil }
+        guard let cellPx = sizer.cellPx else { return nil }
         let rect = pageRect
         guard rect.width > 0, rect.height > 0 else { return nil }
         return PaneTiling.clientGrid(viewport: rect.size, cellPixels: cellPx,
@@ -1763,20 +1761,12 @@ final class PaneContainerVC: UIViewController {
 
     private func pushClientSize(cols: Int, rows: Int) {
         dlog("[pushClientSize] \(cols)x\(rows)")
-        guard cols > 0, rows > 0 else { return }
         // No policy gate here: the view model gates the WIRE (a foreign `manual`
         // owner silences the `refresh-client`) and records the measurement
         // either way. Dropping it here instead left the engine believing this
         // device still fit whatever it measured before the other device took
         // the size — a stale grid to resize the session to on take-over.
-        guard lastClient?.cols != cols || lastClient?.rows != rows else { return }
-        lastClient = (cols, rows)
-        clientResizeWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.viewModel?.resizeTmuxClient(cols: cols, rows: rows)
-        }
-        clientResizeWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+        sizer.request(.init(cols: cols, rows: rows))
     }
 
     // MARK: - Layout
@@ -1871,9 +1861,7 @@ final class PaneContainerVC: UIViewController {
 
     /// Points per tmux cell, or nil until learned. ghostty reports the cell size
     /// in device pixels, so divide by the screen scale to get points.
-    private var pointsPerCell: CGSize? {
-        cellPx.map { CGSize(width: $0.width / displayScale, height: $0.height / displayScale) }
-    }
+    private var pointsPerCell: CGSize? { sizer.pointsPerCell(scale: displayScale) }
 
     // MARK: - Drag a pane's title bar onto another pane (swap / dock)
 
@@ -2087,7 +2075,7 @@ extension PaneContainerVC {
 
         guard let ppc = pointsPerCell else {
             // Cell size not learned yet: proportional bootstrap so the surfaces
-            // lay out and report their metrics (which teaches cellPx). The next
+            // lay out and report their metrics (which teaches the sizer the cell size). The next
             // layout pass re-runs cell-exact once a surface has reported.
             let page = pageRect.size
             setContentFrame(page)
@@ -2200,17 +2188,9 @@ extension PaneContainerVC {
     }
 }
 
-// MARK: - Divider resize
+// MARK: - Divider hit-testing
 
 extension PaneContainerVC {
-    /// Resize the boundary owned by `paneID` by a signed cell delta (tmux
-    /// `resize-pane`).
-    private func resizeBoundary(paneID: TmuxPaneID, vertical: Bool, deltaCells: Int) {
-        guard let dir = PaneTiling.resizeDirection(vertical: vertical, deltaCells: deltaCells)
-        else { return }
-        viewModel?.resizePaneBy(paneID, direction: dir, amount: abs(deltaCells))
-    }
-
     /// The pane containers currently on screen — the input to divider and drop
     /// hit-testing (both shared with the macOS host).
     var paneFrames: [PaneFrame] {

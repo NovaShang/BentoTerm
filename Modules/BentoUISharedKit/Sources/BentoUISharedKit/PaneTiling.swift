@@ -1,5 +1,6 @@
 import CoreGraphics
 import BentoTmuxKit
+import BentoSessionKit
 
 /// The geometry of a tiled pane grid: where each pane's container goes, where
 /// the draggable boundaries between them are, and what client size the whole
@@ -266,5 +267,15 @@ public struct DividerDrag {
         guard incremental != 0 else { return 0 }
         sentCells = totalCells
         return incremental
+    }
+}
+
+public extension TerminalViewModel {
+    /// Move the boundary owned by `paneID` by a signed cell delta — a divider
+    /// drag on either platform (tmux `resize-pane`).
+    func resizeBoundary(_ paneID: TmuxPaneID, vertical: Bool, deltaCells: Int) {
+        guard let dir = PaneTiling.resizeDirection(vertical: vertical, deltaCells: deltaCells)
+        else { return }
+        resizePaneBy(paneID, direction: dir, amount: abs(deltaCells))
     }
 }
