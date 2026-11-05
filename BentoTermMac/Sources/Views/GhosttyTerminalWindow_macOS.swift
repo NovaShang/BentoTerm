@@ -796,7 +796,6 @@ final class SessionTab {
             vm.onRawDataReceived = { [weak surface] data in
                 Task { @MainActor [weak surface] in surface?.feed(data) }
             }
-            vm.onPredictionText = { [weak surface] text in surface?.setPredictedText(text) }
             self.plainSurface = surface
             self.paneHost = nil
             surface.linkOriginProvider = { LinkOrigin(paneID: nil, host: tabLinkHost) }

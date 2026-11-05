@@ -801,7 +801,6 @@ final class TerminalContainerVC: UIViewController {
                 self?.surface.feed(data)
             }
         }
-        vm.onPredictionText = { [weak self] text in self?.surface.setPredictedText(text) }
     }
 
     /// The terminal cursor (insertion point) rect in `target`'s coordinate space,

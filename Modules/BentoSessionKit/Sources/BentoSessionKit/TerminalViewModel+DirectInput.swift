@@ -15,7 +15,6 @@ extension TerminalViewModel {
             paneVM.sendInput(data)
         } else {
             dlog("[sendData] \(data.count)B → transport (usingTmux=\(usingTmux), activePaneID=\(String(describing: activePaneID)))")
-            predictor.willSend(data)   // draw the prediction; doesn't alter what's sent
             transport.write(data)
         }
     }

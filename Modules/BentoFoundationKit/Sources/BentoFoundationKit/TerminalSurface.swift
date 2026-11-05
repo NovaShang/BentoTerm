@@ -86,16 +86,6 @@ public protocol TerminalSurface: AnyObject {
 
     /// Engine focus (affects cursor blink / reporting).
     func setFocus(_ focused: Bool)
-
-    /// Show client-side predicted keystrokes (Mosh-style local echo) as the
-    /// engine's preedit overlay; "" clears. Suppressed while a real IME
-    /// composition owns that slot. Optional — a renderer that can't overlay
-    /// simply doesn't predict.
-    func setPredictedText(_ text: String)
-}
-
-public extension TerminalSurface {
-    func setPredictedText(_ text: String) {}
 }
 
 extension ThemeStore {

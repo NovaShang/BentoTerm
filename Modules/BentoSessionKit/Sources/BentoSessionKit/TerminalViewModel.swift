@@ -266,24 +266,6 @@ public final class TerminalViewModel: ObservableObject {
     /// so it lands directly on keystroke latency in plain-shell sessions.
     static let rawHistorySlackBytes = 256 * 1024
 
-    /// Push predicted keystrokes (Mosh-style local echo) to the surface as a
-    /// preedit overlay. Set by the host wiring (raw/no-tmux path only) to the
-    /// active surface's `setPredictedText`. See `predictor`.
-    public var onPredictionText: ((String) -> Void)?
-
-    /// Predictive local echo for the raw path. Inert unless the feature flag is
-    /// on; only ever touches an overlay, never the authoritative grid.
-    lazy var predictor: PredictiveEcho = {
-        let p = PredictiveEcho(enabled: Self.predictiveEchoEnabled)
-        p.render = { [weak self] text in self?.onPredictionText?(text) }
-        return p
-    }()
-
-    /// Feature flag (Settings / UserDefaults). Off unless explicitly enabled.
-    public nonisolated static var predictiveEchoEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "predictive_echo_enabled")
-    }
-
     /// Whether we're using tmux control mode
     nonisolated(unsafe) var usingTmux = false
 
@@ -549,9 +531,6 @@ public final class TerminalViewModel: ObservableObject {
         // has explicitly picked the no-tmux option. Until then we drop, so
         // shell prompts and our `tmux ls` output don't pollute the screen.
         if phase == .shellReady {
-            // Reconcile predictions against the echo BEFORE it renders, so a
-            // confirmed char's overlay is retired as the real byte paints over it.
-            predictor.didReceive(data)
             appendRawHistory(data)
             onRawDataReceived?(data)
         }
