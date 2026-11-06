@@ -12,7 +12,7 @@ import AppKit
 /// (borderless ≤14, bordered "glass" on 26+).
 ///
 /// Layout (left → right):
-///   [▢ <session> ⌄] [Parallel│Focus]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋│▤]
+///   [▢ <session> ⌄] [Parallel│Focus]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋ ▤]
 ///
 /// The named left button carries the session (its switcher today, its actions
 /// once sessions become native window tabs); the centre strip is the current
@@ -152,10 +152,12 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// Tiled|List — the session's structural mode, next to the session button.
     /// Reflects the active tab's `sessionMode`; hidden for plain (no-tmux) tabs.
     private let modeSwitch = NSSegmentedControl()
-    /// New ⌄ and the preview toggle share one capsule — the two everyday
-    /// right-hand actions read as one group rather than two loose buttons.
-    private let actionsControl = NSSegmentedControl()
+    /// New ⌄ and the preview toggle: two plain toolbar buttons in adjacent
+    /// items with no space between, which macOS 26+ draws as one glass capsule.
+    /// Not a segmented control — that always draws a divider between segments.
+    private let newButton = NSButton()
     /// Show/hide the preview dock (always present, like an inspector toggle).
+    private let previewButton = NSButton()
     /// The take-over banner: present only while this window's grid differs from
     /// the session's (see `sizeMismatch`).
     private let sizeButton = NSButton()
@@ -195,6 +197,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     fileprivate static let sessionsID = NSToolbarItem.Identifier("bento.sessions")
     fileprivate static let modeID = NSToolbarItem.Identifier("bento.mode")
     fileprivate static let newID = NSToolbarItem.Identifier("bento.new")
+    fileprivate static let previewID = NSToolbarItem.Identifier("bento.preview")
     fileprivate static let centerID = NSToolbarItem.Identifier("bento.center")
     fileprivate static let sizeID = NSToolbarItem.Identifier("bento.size")
     fileprivate static let locationID = NSToolbarItem.Identifier("bento.location")
@@ -232,12 +235,14 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         modeSwitch.setToolTip("One window, tiled panes", forSegment: 0)
         modeSwitch.setToolTip("One pane per window, listed in the sidebar", forSegment: 1)
         modeSwitch.sizeToFit()
-        // [＋ | ▤]: New (a menu) and the inspector-style preview dock toggle.
-        actionsControl.trackingMode = .momentary
-        actionsControl.controlSize = .large
-        actionsControl.target = self
-        actionsControl.action = #selector(actionSegmentTapped)
-        applyActionSegments()
+        // [＋ ▤]: New (a menu) and the inspector-style preview dock toggle.
+        configure(newButton, symbol: "plus", title: "", action: #selector(newTapped))
+        newButton.setAccessibilityLabel("New")
+        newButton.toolTip = "New pane, window or session"
+        configure(previewButton, symbol: "sidebar.trailing", title: "",
+                  action: #selector(previewTapped))
+        previewButton.setAccessibilityLabel("Preview")
+        previewButton.toolTip = "Show/hide the file panel (⌥⌘P)"
         configure(sizeButton, symbol: TerminalSizingMode.thisDevice.symbol, title: "",
                   action: #selector(sizeBannerTapped))
         configureLocationLabel()
@@ -734,9 +739,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // ◧ | Sessions ⌄ | Tiled|List | ⸺flex⸺ | [session tabs] | ⸺flex⸺ | ＋│▤
+        // ◧ | Sessions ⌄ | Tiled|List | ⸺flex⸺ | [session tabs] | ⸺flex⸺ | ＋ ▤
+        // ＋ and ▤ are adjacent items with nothing between them, so the system
+        // groups them into one capsule.
         [Self.sessionsID, Self.modeID, .flexibleSpace, Self.centerID,
-         .flexibleSpace, Self.newID]
+         .flexibleSpace, Self.newID, Self.previewID]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // The centre swaps between the window strip and the location, so both
@@ -747,29 +754,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         toolbarDefaultItemIdentifiers(toolbar) + [Self.locationID, Self.sizeID]
     }
 
-    /// Segment 0 is New; segment 1 toggles the preview dock.
-    private func applyActionSegments() {
-        let count = 2
-        if actionsControl.segmentCount != count { actionsControl.segmentCount = count }
-        actionsControl.setImage(NSImage(systemSymbolName: "plus", accessibilityDescription: "New"),
-                                forSegment: 0)
-        actionsControl.setToolTip("New pane, window or session", forSegment: 0)
-        if count > 1 {
-            actionsControl.setImage(NSImage(systemSymbolName: "sidebar.trailing",
-                                            accessibilityDescription: "Preview"),
-                                    forSegment: 1)
-            actionsControl.setToolTip("Show/hide the file panel (⌥⌘P)", forSegment: 1)
-        }
-        actionsControl.sizeToFit()
-    }
-
-    @objc private func actionSegmentTapped() {
-        switch actionsControl.selectedSegment {
-        case 0: newTapped()
-        case 1: onTogglePreview?()
-        default: break
-        }
-    }
+    @objc private func previewTapped() { onTogglePreview?() }
 
     func toolbar(_ toolbar: NSToolbar,
                  itemForItemIdentifier id: NSToolbarItem.Identifier,
@@ -781,7 +766,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         switch id {
         case Self.sessionsID: item.view = sessionsButton; item.label = "Session"
         case Self.modeID:     item.view = modeSwitch;     item.label = "Layout"
-        case Self.newID:      item.view = actionsControl; item.label = "New"
+        case Self.newID:      item.view = newButton;      item.label = "New"
+        case Self.previewID:  item.view = previewButton;  item.label = "Preview"
         case Self.sizeID:     item.view = sizeButton;     item.label = "Session Size"
         case Self.locationID: item.view = locationLabel;  item.label = "Location"
         default: return nil
@@ -975,7 +961,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
                                       remoteTmux: #selector(remoteSessionAction(_:)),
                                       shell: #selector(sshShellAction(_:))))
 
-        pop(menu, from: actionsControl)
+        pop(menu, from: newButton)
     }
 
     /// A one-line row: symbol, title, and the explanation on hover.
