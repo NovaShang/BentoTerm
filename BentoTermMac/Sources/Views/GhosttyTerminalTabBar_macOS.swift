@@ -255,8 +255,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// palette is still one click (or ⌘P) away. The launcher keeps the field —
     /// it has no location to name and its whole job is the search.
     ///
-    /// Native styling only — a borderless `NSButton`, nothing drawn by us (see
-    /// `configureLocationButton` for why there is no hover affordance).
+    /// A stock toolbar button: the glass capsule and the leading magnifier are
+    /// what say "this is clickable" (a borderless title read as a label).
     private let locationButton = NSButton()
     /// ~40% of the window: the location is the one variable-length item, and a
     /// deep path must truncate rather than shove the side items around.
@@ -276,7 +276,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         modeSwitch.setLabel("Parallel", forSegment: 0)
         modeSwitch.setLabel("Focus", forSegment: 1)
         modeSwitch.trackingMode = .selectOne
-        modeSwitch.controlSize = .regular   // the compact toolbar's size
+        modeSwitch.controlSize = .large   // match the neighboring buttons
         modeSwitch.target = self
         modeSwitch.action = #selector(modeSwitched)
         modeSwitch.setToolTip("One window, tiled panes", forSegment: 0)
@@ -284,7 +284,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         modeSwitch.sizeToFit()
         // [＋ | ▤]: New (a menu) and the inspector-style preview dock toggle.
         actionsControl.trackingMode = .momentary
-        actionsControl.controlSize = .regular
+        actionsControl.controlSize = .large
         actionsControl.target = self
         actionsControl.action = #selector(actionSegmentTapped)
         applyActionSegments()
@@ -348,7 +348,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// be a state to keep in sync for no gain.
     private func configureSearchField() {
         searchField.bezelStyle = .roundRect
-        searchField.controlSize = .regular
+        searchField.controlSize = .large
         searchField.imagePosition = .imageLeading
         searchField.image = NSImage(systemSymbolName: "magnifyingglass",
                                     accessibilityDescription: "Search")
@@ -371,7 +371,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
                 // attribute does not reliably inherit the control's, so leaving
                 // it out would resize the text while recoloring it.
                 .font: searchField.font
-                    ?? NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .regular)),
+                    ?? NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .large)),
             ])
         searchField.target = self
         searchField.action = #selector(searchTapped)
@@ -387,17 +387,17 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     private func configureLocationButton() {
         let b = locationButton
-        // Borderless, and so no hover change at all — tooltip + click. The
-        // hover-only border was tried first and does not survive the toolbar:
-        // on macOS 26 a BORDERED button in a toolbar item is drawn in the
-        // item's glass capsule at rest, whatever `showsBorderOnlyWhileMouseInside`
-        // says (`.recessed` and `.accessoryBarAction` alike; the capsule only
-        // brightens under the pointer), and `NSToolbarItem.isBordered = false`
-        // does not take it off. That capsule is the very prominence this item
-        // replaced. Only a borderless button reads as plain title text.
-        b.isBordered = false
-        b.controlSize = .regular
-        b.imagePosition = .noImage
+        // A stock bordered toolbar button, like its neighbours: the capsule
+        // plus the magnifier is what makes it read as something to click. A
+        // borderless title was tried and read as a plain label nobody would
+        // think to press. Quieter than the old search field anyway: it is only
+        // as wide as its text and the text is the secondary colour.
+        b.bezelStyle = .texturedRounded
+        b.controlSize = .large
+        b.image = NSImage(systemSymbolName: "magnifyingglass",
+                          accessibilityDescription: "Search")
+        b.imagePosition = .imageLeading
+        b.contentTintColor = .secondaryLabelColor
         b.target = self
         b.action = #selector(searchTapped)
         b.toolTip = "Search commands, files, sessions (⌘P)"
@@ -417,7 +417,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// What the centre title says — `<program> · <path>`, already composed by
     /// the window (it knows the pane, the host and the shell rule).
     func setLocation(_ text: String) {
-        let size = NSFont.systemFontSize(for: .small) + 1   // a step under the toolbar's 13
+        let size = NSFont.systemFontSize
         let para = NSMutableParagraphStyle()
         para.lineBreakMode = .byTruncatingMiddle
         para.alignment = .center
@@ -788,7 +788,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// A plain action/icon button (no dropdown chevron).
     private func configure(_ b: NSButton, symbol: String, title: String, action: Selector) {
         b.bezelStyle = .texturedRounded
-        b.controlSize = .regular   // the compact toolbar's size
+        b.controlSize = .large   // match the .large segmented tab strip's height
         b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title.isEmpty ? "More" : title)
         b.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
         b.title = title
@@ -802,7 +802,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// title, so it sits at the trailing edge instead of a misplaced "⌄" glyph).
     private func configureMenu(_ b: NSButton, symbol: String, text: String, action: Selector) {
         b.bezelStyle = .texturedRounded
-        b.controlSize = .regular   // the compact toolbar's size
+        b.controlSize = .large   // match the .large segmented tab strip's height
         b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: text)
         b.imagePosition = .imageLeading
         b.target = self
