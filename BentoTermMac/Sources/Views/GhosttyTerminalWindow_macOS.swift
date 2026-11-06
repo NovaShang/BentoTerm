@@ -153,11 +153,6 @@ public enum BentoTerminalWindow {
     /// The strip's stable left-to-right tab order, persisted so it survives
     /// relaunches instead of re-alphabetizing on every cold start.
     nonisolated static let sessionOrderKey = "mac_session_strip_order"
-    public nonisolated static let autoHideToolbarFullscreenKey = "auto_hide_toolbar_fullscreen"
-
-    static var autoHideToolbarInFullscreen: Bool {
-        UserDefaults.standard.object(forKey: autoHideToolbarFullscreenKey) as? Bool ?? true
-    }
 
     /// Open (or focus) the terminal window — the behavior when the app icon is
     /// clicked, and at launch.
@@ -393,10 +388,10 @@ public enum BentoTerminalWindow {
     /// a window and then asks what to put in it; ⌘⇧T says don't ask, give me a
     /// session now (docs/launcher-design.md §9).
     ///
-    /// **It is no longer forced standalone.** `4f93e6b` made ⌘N ignore
-    /// `newSessionPlacement` on the grounds that the preference answers "where
-    /// does a new SESSION land" and pressing ⌘N had already answered it — which
-    /// was true while ⌘N created a session outright. It doesn't now. What ⌘N
+    /// **It is no longer forced standalone.** `4f93e6b` made ⌘N ignore the
+    /// tab-vs-window preference on the grounds that it answers "where does a
+    /// new SESSION land" and pressing ⌘N had already answered it — which was
+    /// true while ⌘N created a session outright. It doesn't now. What ⌘N
     /// produces is an empty window that is about to BECOME a session, so the
     /// preference applies to it exactly as it applies to every other route into
     /// a session; forcing a standalone window meant a tabs user got a stray
@@ -445,33 +440,6 @@ public enum BentoTerminalWindow {
         openPlain(title: host, command: ["ssh", host])
     }
 
-    /// Where a new session lands: a tab in the existing group, or its own
-    /// window. macOS already asks this question globally (System Settings →
-    /// Desktop & Dock → "Prefer tabs when opening documents"), so the default
-    /// is to follow it rather than invent a second answer; the override is for
-    /// people who want Bento specifically different from the rest of their Mac.
-    public enum NewSessionPlacement: String, CaseIterable, Sendable {
-        case system, tab, window
-
-        public var title: String {
-            switch self {
-            case .system: return "Follow System Setting"
-            case .tab:    return "As a Tab"
-            case .window: return "In a New Window"
-            }
-        }
-    }
-
-    public nonisolated static let newSessionPlacementKey = "mac_new_session_placement"
-
-    public nonisolated static var newSessionPlacement: NewSessionPlacement {
-        get {
-            UserDefaults.standard.string(forKey: newSessionPlacementKey)
-                .flatMap(NewSessionPlacement.init(rawValue:)) ?? .system
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: newSessionPlacementKey) }
-    }
-
     /// Whether the NEXT session should join the current tab group.
     ///
     /// A launcher window asks this too, and must: it is a session window whose
@@ -479,12 +447,12 @@ public enum BentoTerminalWindow {
     /// question "what should I open?" belongs in a tab as well — otherwise
     /// answering it moves the answer from a window into the tab bar, or leaves
     /// a stray window behind.
+    ///
+    /// macOS already asks this question globally (System Settings → Desktop &
+    /// Dock → "Prefer tabs when opening documents"), so Bento follows that
+    /// answer instead of keeping a second one.
     static var shouldOpenAsTab: Bool {
-        switch newSessionPlacement {
-        case .tab:    return true
-        case .window: return false
-        case .system: return NSWindow.userTabbingPreference == .always
-        }
+        NSWindow.userTabbingPreference == .always
     }
 
     /// Create a window for `tab` and join it to the existing tab group.
@@ -2055,9 +2023,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     func window(_ window: NSWindow,
                 willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions)
         -> NSApplication.PresentationOptions {
-        BentoTerminalWindow.autoHideToolbarInFullscreen
-            ? proposedOptions.union(.autoHideToolbar)
-            : proposedOptions
+        proposedOptions.union(.autoHideToolbar)
     }
 
     func windowWillClose(_ notification: Notification) {

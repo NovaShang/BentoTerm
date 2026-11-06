@@ -185,16 +185,6 @@ public struct PathPreviewContext: Sendable {
     }
 }
 
-/// Feature flag: Settings toggle, default ON.
-public enum PathPreviewSettings {
-    public static let key = "path_preview_enabled"
-    public static var isEnabled: Bool {
-        UserDefaults.standard.object(forKey: key) == nil
-            ? true
-            : UserDefaults.standard.bool(forKey: key)
-    }
-}
-
 // MARK: - Preview payload
 
 public enum FilePreviewContent {

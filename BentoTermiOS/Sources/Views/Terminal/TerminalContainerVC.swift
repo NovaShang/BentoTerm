@@ -442,10 +442,10 @@ final class TerminalContainerVC: UIViewController {
     /// Serial number so a slow stat can't surface a chip for a superseded tap.
     private var pathTapSeq = 0
 
-    /// Whether a path candidate could be offered at all — the preference is on
-    /// AND this pane knows where to read files from.
+    /// Whether a path candidate could be offered at all — this pane knows
+    /// where to read files from.
     private var canPreviewPaths: Bool {
-        PathPreviewSettings.isEnabled && pathPreviewContext != nil
+        pathPreviewContext != nil
     }
 
     /// Verify the tap's path candidates and show a chip if one of them exists:

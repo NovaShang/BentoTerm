@@ -89,7 +89,6 @@
 		CDA0EC7D03E162C105217A4E /* BentoTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E45F481C0D9BA30F23DFFEFE /* BentoTheme.swift */; };
 		CF9017468025B5A5759689A6 /* BentoFoundationKit in Frameworks */ = {isa = PBXBuildFile; productRef = 61877E38589BE298DB19F0B9 /* BentoFoundationKit */; };
 		D76D3446CE6AD7CDB666ACF4 /* MapleMono-NF-CN-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 09E5962AF470459BAAD68188 /* MapleMono-NF-CN-Regular.ttf */; };
-		D81D7D181DD8DEBDFDDBC5B6 /* SetupPanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BE19F47270497DB48FCEFEA /* SetupPanels.swift */; };
 		D89E5EAE6757BEE306FEB206 /* UpdateFeedPlistTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322E184A2223B943F665C529 /* UpdateFeedPlistTests.swift */; };
 		D8F2CF6191D71A46645E905F /* AggregateLiveActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2FD9EC7C56ACAE8C00B21DC /* AggregateLiveActivityController.swift */; };
 		D91A2F0B90BCAE4198E80791 /* BentoTermMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BF84CFBF93345463C8E1B86 /* BentoTermMacApp.swift */; };
@@ -155,7 +154,6 @@
 		3A5DE5DE84EA3CF488E80469 /* SSHService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHService.swift; sourceTree = "<group>"; };
 		4803E3F5247DDE54AEFD2E4B /* HostStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStoreTests.swift; sourceTree = "<group>"; };
 		4B6C52CD52BC257E2AAFF715 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		4BE19F47270497DB48FCEFEA /* SetupPanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupPanels.swift; sourceTree = "<group>"; };
 		4F42A4B4AE7104B7199E93DA /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		51918C4AC8CF9ACABD49D465 /* RemoteTmuxSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTmuxSessions.swift; sourceTree = "<group>"; };
 		62053B9B6ACE43B9D19B1849 /* MacPortForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPortForwarder.swift; sourceTree = "<group>"; };
@@ -426,7 +424,6 @@
 			isa = PBXGroup;
 			children = (
 				4B6C52CD52BC257E2AAFF715 /* SettingsView.swift */,
-				4BE19F47270497DB48FCEFEA /* SetupPanels.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -829,7 +826,6 @@
 				B418756D40DFD4F138E85173 /* SSHService.swift in Sources */,
 				2C537BDDE0660546BDE1A396 /* SessionManager.swift in Sources */,
 				1D2EDA24577C317F162E10D1 /* SettingsView.swift in Sources */,
-				D81D7D181DD8DEBDFDDBC5B6 /* SetupPanels.swift in Sources */,
 				A4BAAD18E35074AD734AE434 /* TerminalColorTheme.swift in Sources */,
 				8EB8D27D2F52E88835BD7F5C /* TerminalContainerVC.swift in Sources */,
 				1C043251E3C6CE80E6930D9F /* TerminalWrapperView.swift in Sources */,

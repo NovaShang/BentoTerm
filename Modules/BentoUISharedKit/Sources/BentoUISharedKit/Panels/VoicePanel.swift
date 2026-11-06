@@ -37,18 +37,9 @@ struct SpeechEngineOption: Identifiable {
     ]
 }
 
-/// ② Speech — the engine choice, and the gesture nobody can see.
-///
-/// The gesture is the whole reason this panel explains itself: hold-to-talk is
-/// invisible in the UI, so a user who is never told simply never finds the
-/// feature we built the product around. And the explanation leads with the
-/// stance, not the mechanic — "hold right-click to talk" reads like a minor
-/// convenience unless you first say that talking is meant to be the main way
-/// you drive an agent here.
-public struct SpeechPanel<Extra: View>: View {
-    private let context: PanelContext
-    private let extra: Extra
-
+/// Voice — the microphone, the engine (and its key, right under it), the
+/// language, and voice → shell command.
+public struct VoicePanel: View {
     @AppStorage(SettingsKey.speechEngine) private var speechEngine = SpeechDefaults.engine
     @AppStorage(SettingsKey.speechLocale) private var speechLocale = "auto"
     @AppStorage(SettingsKey.openAIKey) private var openaiKey = ""
@@ -62,40 +53,25 @@ public struct SpeechPanel<Extra: View>: View {
 
     @State private var micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
 
-    public init(context: PanelContext, @ViewBuilder extra: () -> Extra = { EmptyView() }) {
-        self.context = context
-        self.extra = extra()
-    }
+    public init() {}
 
     public var body: some View {
-        PanelBody(context) {
-                PanelLead("Bento is built to be talked to.")
-                // ~150 wpm speech vs ~50 wpm prose typing — a checkable 3×,
-                // not an invented one. An earlier draft said "a paragraph in
-                // five seconds", which nobody can do.
-                PanelProse("You speak about three times faster than you type.")
-                PanelProse("With three panes running, talking to the one that needs you beats switching to it first.")
-                VoiceGestureFigure()
-                // The privacy sentence moved down to the microphone block: it
-                // is the answer to "why does it want the mic", and it should be
-                // where that question gets asked.
-                PanelProse("What you said goes into that pane exactly as if you had typed it.")
-        } controls: {
-            // Above the engine list, not below it. It used to sit under
-            // Language, which on an iPhone is below the fold: the one action
-            // on the page that the flagship feature cannot work without was
-            // reachable only by scrolling, and tapping Next — which is right
-            // there — skipped it silently.
+        Form {
+            // First: without the microphone nothing else on this page does
+            // anything.
             microphoneSection
 
             Section {
                 ForEach(SpeechEngineOption.all) { engine in
                     engineRow(engine)
+                    // The key sits under the engine that needs it. Behind an
+                    // "Advanced" fold, picking a cloud engine silently changed
+                    // nothing until someone went looking for where the key went.
+                    if speechEngine == engine.id {
+                        engineSettings(engine.id)
+                    }
                 }
             } header: { Text("Engine") } footer: {
-                // The setup flow hides Advanced, which is where the key fields
-                // are — so this line is how a user learns a cloud engine needs
-                // one, and why picking it changed nothing until they added it.
                 PanelNote(engineNote)
             }
 
@@ -120,34 +96,14 @@ public struct SpeechPanel<Extra: View>: View {
                     Text("ไทย").tag("th-TH")
                     Text("Tiếng Việt").tag("vi-VN")
                 }
+            } footer: {
+                // The gesture is invisible in the UI; this is the one place in
+                // Settings that names it.
+                PanelNote(Self.gestureHint)
             }
 
-            AdvancedBlock(context) {
-                switch speechEngine {
-                case "openai":
-                    SecureField("OpenAI API key", text: $openaiKey)
-                case "qwen":
-                    SecureField("DashScope API key", text: $dashscopeKey)
-                    Toggle("Bias from on-screen text", isOn: $asrAutoContext)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Custom vocabulary (names, jargon — one per line or comma-separated)")
-                            .font(.caption).foregroundStyle(.secondary)
-                        TextEditor(text: $asrVocab)
-                            .frame(height: 56).font(.caption.monospaced())
-                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
-                    }
-                default:
-                    PanelNote("Apple's engine runs on this device and needs no key.")
-                }
-
-                Divider()
-
+            Section {
                 Toggle("Voice → shell command", isOn: $llmEnabled)
-                PanelNote("""
-                    Talking to a shell instead of an agent? With this on, Bento turns what you \
-                    said into the command. Works with any OpenAI-compatible provider: set an \
-                    endpoint and key. Without a key, what you said goes in as is.
-                    """)
                 if llmEnabled {
                     SecureField("LLM API key", text: $llmKey)
                     TextField("Endpoint", text: $llmEndpoint)
@@ -157,9 +113,43 @@ public struct SpeechPanel<Extra: View>: View {
                         .autocorrectionDisabled()
                         .font(.caption.monospaced())
                 }
+            } footer: {
+                PanelNote("""
+                    Slide left while talking to a shell instead of an agent, and Bento turns \
+                    what you said into the command. Works with any OpenAI-compatible provider: \
+                    set an endpoint and key. Without a key, what you said goes in as is.
+                    """)
             }
+        }
+        .bentoPanelForm()
+    }
 
-            extra
+    private static var gestureHint: LocalizedStringKey {
+        #if os(macOS)
+        return "Hold right-click on a pane to talk. Slide up to send now, down to cancel."
+        #else
+        return "Hold anywhere on a pane to talk. Slide up to send now, down to cancel."
+        #endif
+    }
+
+    /// The rows that belong to one engine, shown only while it is picked.
+    @ViewBuilder
+    private func engineSettings(_ id: String) -> some View {
+        switch id {
+        case "openai":
+            SecureField("OpenAI API key", text: $openaiKey)
+        case "qwen":
+            SecureField("DashScope API key", text: $dashscopeKey)
+            Toggle("Bias from on-screen text", isOn: $asrAutoContext)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Custom vocabulary (names, jargon — one per line or comma-separated)")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextEditor(text: $asrVocab)
+                    .frame(height: 56).font(.caption.monospaced())
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
+            }
+        default:
+            EmptyView()
         }
     }
 
@@ -170,7 +160,7 @@ public struct SpeechPanel<Extra: View>: View {
         switch speechEngine {
         case "openai" where openaiKey.trimmingCharacters(in: .whitespaces).isEmpty,
              "qwen" where dashscopeKey.trimmingCharacters(in: .whitespaces).isEmpty:
-            return "Add your API key under Advanced. Until then, voice uses Apple's engine."
+            return "Add your API key above. Until then, voice uses Apple's engine."
         case "openai", "qwen":
             return "Audio goes straight to the provider, on your own key."
         default:
@@ -212,10 +202,9 @@ public struct SpeechPanel<Extra: View>: View {
         .buttonStyle(.plain)
     }
 
-    /// The panel's only action, and the one thing on it that has to be done
-    /// now: without the microphone the feature this whole page is about cannot
-    /// run at all, and the prompt would otherwise arrive as an interruption in
-    /// the middle of someone's first hold-to-talk.
+    /// Asking here rather than on first hold-to-talk: the system prompt would
+    /// otherwise arrive as an interruption in the middle of someone's first
+    /// sentence.
     @ViewBuilder
     private var microphoneSection: some View {
         switch micStatus {
