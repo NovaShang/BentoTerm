@@ -93,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 switch name {
                 case "wizard": Windows.show(.wizard)
                 case "plain": BentoTerminalWindow.newWindowNoTmux()
-                case "settings": self.openSettings()
+                case "settings": Self.openSettings()
                 default: break
                 }
                 return
@@ -255,7 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// (Under the old MenuBarExtra build this bridge was even more indirect —
     /// the only handler was an `onReceive` on the menu-bar label view, which is
     /// why deleting that label would have made the ⚙ a silent no-op.)
-    func openSettings() {
+    static func openSettings() {
         guard let appMenu = NSApp.mainMenu?.items.first?.submenu,
               let idx = appMenu.items.firstIndex(where: {
                   $0.keyEquivalent == "," && $0.keyEquivalentModifierMask == .command

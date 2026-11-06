@@ -22,7 +22,7 @@ import AppKit
 /// and ⌘, plus the app menu are where every Mac app keeps it — a permanent
 /// gear spent a toolbar slot on it.
 @MainActor
-final class TerminalToolbarController: NSObject, NSToolbarDelegate {
+final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemValidation {
     var onRenameSession: (() -> Void)?
     var onDetach: (() -> Void)?
     var onKillSession: (() -> Void)?
@@ -791,6 +791,13 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     // MARK: - Menus
 
+    /// Check for Updates… is greyed while the updater can't check (a debug
+    /// build has none; Sparkle is mid-check). Everything else is always on.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(checkForUpdatesAction) { return AppUpdater.shared.canCheck }
+        return true
+    }
+
     @objc private func sessionMenuTapped() {
         pop(sessionActionsMenu(), from: sessionsButton)
     }
@@ -806,6 +813,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // A plain (no-tmux) terminal has no session/windows — just close it.
         if activeTabIsPlain {
             add(menu, "Close Terminal", #selector(closeTabAction))
+            appSection(menu)
             return menu
         }
         add(menu, "Rename Session…", #selector(renameAction))
@@ -834,7 +842,30 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // No window SWITCH list here any more: windows own the centre strip, so
         // duplicating them in this menu would give the same thing two homes and
         // leave the user unsure which one is authoritative.
+        appSection(menu)
         return menu
+    }
+
+    /// The app's own rows, last: this button is the one menu every window has
+    /// in the same place, so it doubles as the app menu for people who never
+    /// look at the menu bar.
+    ///
+    /// ⌘, is shown as a hint only. This menu is a popup, not part of the main
+    /// menu, so its key equivalent never competes with the real Settings item
+    /// (which `AppDelegate.openSettings` finds by that very shortcut).
+    private func appSection(_ menu: NSMenu) {
+        menu.addItem(.separator())
+        let settings = NSMenuItem(title: "Settings…", action: #selector(settingsAction),
+                                  keyEquivalent: ",")
+        settings.keyEquivalentModifierMask = .command
+        settings.target = self
+        settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        menu.addItem(settings)
+        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesAction),
+                                 keyEquivalent: "")
+        updates.target = self
+        menu.addItem(updates)
+        add(menu, "About BentoTerm", #selector(aboutAction))
     }
 
 
@@ -997,6 +1028,12 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         BentoTerminalWindow.focusOrOpen(TmuxSessionID.ssh(host: pick.host, name: name))
     }
     @objc private func closeTabAction() { onCloseTab?() }
+    @objc private func settingsAction() { AppDelegate.openSettings() }
+    @objc private func checkForUpdatesAction() { AppUpdater.shared.checkForUpdates() }
+    @objc private func aboutAction() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
+    }
     /// Forwarded with the menu item as the sender, because the record it
     /// carries IS the argument.
     @objc private func splitRecentAction(_ sender: Any?) {
