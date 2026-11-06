@@ -8,8 +8,7 @@ import BentoUISharedKit
 ///
 /// It used to open with a phone-and-host architecture drawing. That picture
 /// went with the relay it described, and it was answering a question this user
-/// doesn't have — what a host is for is one sentence, and how tmux keeps the
-/// work alive belongs on the setup flow's tmux page, said once.
+/// doesn't have — what a host is for is one sentence.
 ///
 /// There is exactly one way in: SSH to a machine you already reach. Bento
 /// installs nothing on the host and runs no service of its own, so anything
@@ -33,7 +32,7 @@ struct WelcomeFlowView: View {
                     Text("BentoTerm")
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(Color.bentoInk)
-                    Text("Run a team of AI agents. Speak to them.\nCommand them from anywhere.")
+                    Text("Add a machine you can ssh into.")
                         .font(.system(size: 15))
                         .foregroundStyle(Color.bentoInkDim)
                         .multilineTextAlignment(.center)
@@ -42,11 +41,6 @@ struct WelcomeFlowView: View {
                 .padding(.top, 28)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Your agents need a computer that stays on. Point Bento at one you can already ssh into.")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.bentoInkDim)
-                        .padding(.horizontal, 4)
-
                     pathCard(
                         symbol: "terminal",
                         title: "Connect over SSH",
@@ -59,13 +53,16 @@ struct WelcomeFlowView: View {
                         .foregroundStyle(Color.bentoInkMute)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 4)
+
+                    Text(HomeView.voiceHint)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.bentoInkMute)
+                        .padding(.horizontal, 4)
                 }
                 .padding(.horizontal, 24)
 
-                // The concept page this used to open is gone. What it was
-                // really explaining is tmux, and that explanation now lives in
-                // one place — the setup flow's tmux page, with the long version
-                // a link away — instead of being retold here in its own words.
+                // What there is to explain is tmux, and tmux's own wiki says it
+                // better than a retelling here would.
                 Link(destination: TmuxLearnMore.url) {
                     Label("How does BentoTerm work?", systemImage: "questionmark.circle")
                         .font(.system(size: 14))

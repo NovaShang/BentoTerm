@@ -71,7 +71,7 @@ public struct TmuxPanel<Extra: View>: View {
     }
 
     public var body: some View {
-        PanelBody(context, hasSetupControls: false) {
+        PanelBody(context) {
                 PanelLead("Your agents run in tmux, so they keep working when Bento is not running.")
                 ParallelFocusFigure()
                 PanelProse("Switching between the two moves the panes themselves — nothing restarts.")

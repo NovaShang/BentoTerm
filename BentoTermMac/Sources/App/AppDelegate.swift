@@ -80,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             await self.refresh()
             self.startPolling()
             // Test hook: open a specific secondary window directly
-            // (BENTO_OPEN_WINDOW=wizard|plain|settings|firstRun), for
+            // (BENTO_OPEN_WINDOW=wizard|plain|settings), for
             // screenshot-driven verification without UI scripting. This one
             // DOES suppress the terminal window — the point of the hook is to
             // get a clean screenshot of exactly one window.
@@ -89,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 case "wizard": Windows.show(.wizard)
                 case "plain": BentoTerminalWindow.newWindowNoTmux()
                 case "settings": self.openSettings()
-                default: Windows.show(.firstRun)
+                default: break
                 }
                 return
             }
@@ -170,16 +170,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // login. An app with a Dock icon that starts with zero windows just
             // looks broken; there is no menu-bar item to explain where it went.
             BentoTerminalWindow.openMainWindow()
-            // First launch → the onboarding wizard owns the stage: environment
-            // checklist, first workspace, first voice command. It comes up IN
-            // FRONT OF the terminal window rather than instead of it, so
-            // dismissing it leaves the user somewhere. BENTO_FORCE_FIRST_RUN=1
-            // re-triggers it for testing without clearing defaults.
-            let firstRunPending = !UserDefaults.standard.bool(forKey: FirstRunWindow.completedKey)
-                || ProcessInfo.processInfo.environment["BENTO_FORCE_FIRST_RUN"] == "1"
-            if firstRunPending {
-                Windows.show(.firstRun)
-            }
         }
     }
 

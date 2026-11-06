@@ -76,7 +76,6 @@
 		94815DBFF71E8BF1E3FC403D /* HapticService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C7096EA4BFE9BD6C81ACB83 /* HapticService.swift */; };
 		94B0B2FA9A351F39BC54EDEA /* CommandPaletteController_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EEBC570CE1FECDCB8F4839A /* CommandPaletteController_macOS.swift */; };
 		96DE6781B70322DBE7D06697 /* IOSPortForwarder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766EF2138AFDF04717EE3132 /* IOSPortForwarder.swift */; };
-		A047BDCE70416367FBCB4019 /* FirstRunWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BCD83FA86BBA2800AA46C42 /* FirstRunWindow.swift */; };
 		A4BAAD18E35074AD734AE434 /* TerminalColorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AA380AC141FE59EA92F8BBF /* TerminalColorTheme.swift */; };
 		A7D5920747EFC82F92258936 /* VoicePressGesture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AB656CA8F56E6016903CD6B /* VoicePressGesture.swift */; };
 		ACFE02B1042E9C7C114878A8 /* DebugLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C7473F3DD9F500B4DD7320 /* DebugLogger.swift */; };
@@ -85,7 +84,6 @@
 		BC7892F040400A79E58F1311 /* VoiceInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E0C49ABB148AB3ECC7EA73E /* VoiceInputController.swift */; };
 		C1C668B1149BED34D8244DB0 /* LocalPtyTransport_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0643C3C972EA2C012C63767A /* LocalPtyTransport_macOS.swift */; };
 		C3036EB47E2D809250D2C350 /* OpenTargets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 037698AF7E6B1096A0C55B73 /* OpenTargets.swift */; };
-		C5B173C6A166328CC546ACA7 /* GestureOnboardingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFC9DC7181C02E39D9EC5D6B /* GestureOnboardingOverlay.swift */; };
 		C5F958128DFDA8852E63F4DD /* BentoAgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = 263AC0D25164549700F416AF /* BentoAgentKit */; };
 		CD0FE299158D67DDAC006448 /* AgentSessionWizardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDBFC733C786999BE3298FF5 /* AgentSessionWizardView.swift */; };
 		CDA0EC7D03E162C105217A4E /* BentoTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E45F481C0D9BA30F23DFFEFE /* BentoTheme.swift */; };
@@ -179,7 +177,6 @@
 		8E8B0FBE967273031F94F23B /* BentoTermiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BentoTermiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		922F13A99F720F4A2A7EC814 /* BentoVoiceKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BentoVoiceKit; path = Modules/BentoVoiceKit; sourceTree = SOURCE_ROOT; };
 		982A590D038A77CF72EBB363 /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
-		9BCD83FA86BBA2800AA46C42 /* FirstRunWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunWindow.swift; sourceTree = "<group>"; };
 		9D2E1051A5DBA07DF8687860 /* FilePreviewPanel_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePreviewPanel_macOS.swift; sourceTree = "<group>"; };
 		9EEBC570CE1FECDCB8F4839A /* CommandPaletteController_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteController_macOS.swift; sourceTree = "<group>"; };
 		A693863C6D52F06F0603A405 /* BentoActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BentoActivity.swift; sourceTree = "<group>"; };
@@ -190,7 +187,6 @@
 		AD437B6718BACF11393153D5 /* CommandPaletteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteTests.swift; sourceTree = "<group>"; };
 		AE75853EE67ACF330BAA0F2F /* LauncherWindow_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherWindow_macOS.swift; sourceTree = "<group>"; };
 		AF9DBB6D03D227C62D3B9816 /* WelcomeFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeFlowView.swift; sourceTree = "<group>"; };
-		AFC9DC7181C02E39D9EC5D6B /* GestureOnboardingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GestureOnboardingOverlay.swift; sourceTree = "<group>"; };
 		B06F422BAC36C23B8F22B665 /* MacKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacKeychain.swift; sourceTree = "<group>"; };
 		B2FD9EC7C56ACAE8C00B21DC /* AggregateLiveActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AggregateLiveActivityController.swift; sourceTree = "<group>"; };
 		B73561C6F88999D2ABEF2F0B /* GhosttyKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GhosttyKit; path = Modules/GhosttyKit; sourceTree = SOURCE_ROOT; };
@@ -393,7 +389,6 @@
 				9EEBC570CE1FECDCB8F4839A /* CommandPaletteController_macOS.swift */,
 				E4CA9766A043F5494CE71E70 /* DockMenu.swift */,
 				9D2E1051A5DBA07DF8687860 /* FilePreviewPanel_macOS.swift */,
-				9BCD83FA86BBA2800AA46C42 /* FirstRunWindow.swift */,
 				C1B2FFDC5ED192F9C857392B /* GhosttyTerminalTabBar_macOS.swift */,
 				7364E154E2E25F681044EB28 /* GhosttyTerminalWindow_macOS.swift */,
 				3584533185D6686FE3BA1548 /* GhosttyTiledPaneHost_macOS.swift */,
@@ -475,7 +470,6 @@
 			isa = PBXGroup;
 			children = (
 				EE05F3CC4C4E45CF44EB8BFA /* FloatingQuickKeysToolbar.swift */,
-				AFC9DC7181C02E39D9EC5D6B /* GestureOnboardingOverlay.swift */,
 				DF4BEA61D534A1D4C7D58CED /* KeyboardAccessoryView.swift */,
 				102885B6FD321B6E25DBCD33 /* PathPreviewUI.swift */,
 				0946E5B1A8FBCF38BBA45A6A /* TerminalContainerVC.swift */,
@@ -821,7 +815,6 @@
 				ACFE02B1042E9C7C114878A8 /* DebugLogger.swift in Sources */,
 				FC88A5DF839430710281A5FF /* FilePreviewSources.swift in Sources */,
 				1A31B38481D9093A5F3CC4D8 /* FloatingQuickKeysToolbar.swift in Sources */,
-				C5B173C6A166328CC546ACA7 /* GestureOnboardingOverlay.swift in Sources */,
 				94815DBFF71E8BF1E3FC403D /* HapticService.swift in Sources */,
 				5CBFE9063A79F51D6BBA8DFE /* HostEditView.swift in Sources */,
 				75C91E91FFD4D63CDDB272A5 /* HostListView.swift in Sources */,
@@ -858,7 +851,6 @@
 				94B0B2FA9A351F39BC54EDEA /* CommandPaletteController_macOS.swift in Sources */,
 				2E68A8D6745D1821025EF321 /* DockMenu.swift in Sources */,
 				E12CFE5D3ECE943195DDA85C /* FilePreviewPanel_macOS.swift in Sources */,
-				A047BDCE70416367FBCB4019 /* FirstRunWindow.swift in Sources */,
 				596A5E4F204F9B5C272D7A51 /* GhosttyTerminalTabBar_macOS.swift in Sources */,
 				870E930C9DDB0A987B78CCF7 /* GhosttyTerminalWindow_macOS.swift in Sources */,
 				290D08C30B891884D76A97D5 /* GhosttyTiledPaneHost_macOS.swift in Sources */,

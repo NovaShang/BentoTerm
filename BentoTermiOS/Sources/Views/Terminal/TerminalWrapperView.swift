@@ -45,17 +45,12 @@ struct TerminalWrapperView: View {
     /// macOS shares) and not a size-class change (which would remount the
     /// terminal, see `chrome`).
     @State private var isFullscreen = false
-    @State private var showOnboarding: Bool = GestureOnboardingOverlay.shouldShow
     @State private var sizingResolved = false
     @State private var showMixedFlattenAlert = false
-    /// One-shot notices driven by TipCenter (design doc §6): a transient toast
-    /// plus the anchored teaching cards. Nil / false when nothing to say.
+    /// The one-shot notice for something the app did on the user's behalf
+    /// (see `applyPhoneFocusDefault`). Nil when there is nothing to say.
     @State private var tipToast: String?
-    @State private var showStateLegend = false
-    @State private var showParallelTip = false
-    @State private var showVoiceAdvancedTip = false
-    @State private var parallelTipTask: Task<Void, Never>?
-    @ObservedObject private var tips = TipCenter.shared
+    private let tips = TipCenter.shared
     @State private var showSplitSheet = false
     @State private var pendingCloseWindow: TmuxWindowID?
     /// Kill Session is destructive AND irreversible (every window/pane dies), so
@@ -237,38 +232,10 @@ struct TerminalWrapperView: View {
                 }
             }
             .onAppear { if viewModel.isTmuxReady { resolveSizing() } }
-            // ---- One-shot teaching moments (design doc §6). Each fires at the
-            // user's FIRST encounter with the concept, once per install. ----
-            .onChange(of: viewModel.agentsWaiting) { _, waiting in
-                // The first amber pane is the first time the app "needs" the user:
-                // the moment the color legend lands (§6.2).
-                if waiting > 0, tips.shouldShow(.stateLegend) {
-                    withAnimation { showStateLegend = true }
-                }
-            }
-            .onChange(of: viewModel.agentsWorking) { _, working in
-                handleWorkingChange(working)
-            }
-            .onChange(of: viewModel.isReconnecting) { was, now in
-                // First successful reconnect → the persistence concept (§6.5).
-                if was, !now, viewModel.isTmuxReady, tips.consume(.persistence) {
-                    showTipToast("Your agents kept working while you were away — the tmux session runs on the host, not here. It stays alive until you close it.")
-                }
-            }
-            .onChange(of: showsWindowTabs) { _, shown in
-                if shown, tips.consume(.windowTabsIntro) {
-                    showTipToast("Each tab is a tmux window holding one pane — switch with the tabs below. Each tab's dot is that window's status.")
-                }
-            }
-            .onChange(of: viewModel.windows.count) { _, _ in maybeShowSidebarIntro() }
-            .onChange(of: viewModel.sessionMode) { _, _ in maybeShowSidebarIntro() }
-            .onChange(of: voiceController.voiceSendTotal) { _, n in
-                handleVoiceSendMilestone(n)
-            }
     }
 
-    /// The terminal plus its floating chrome, kept separate from the modal /
-    /// teaching chain so the compiler can type-check each half on its own.
+    /// The terminal plus its floating chrome, kept separate from the modal
+    /// chain so the compiler can type-check each half on its own.
     private var terminalChrome: some View {
         chrome
             .ignoresSafeArea(.keyboard)
@@ -322,11 +289,7 @@ struct TerminalWrapperView: View {
                     keyboardTopGlobal = nil
                 }
             }
-            .overlay { onboardingOverlay }
             .overlay(alignment: .top) { tipToastView }
-            .overlay { stateLegendOverlay }
-            .overlay(alignment: .top) { parallelTipCard }
-            .overlay(alignment: .bottom) { voiceAdvancedTipCard }
     }
 
     /// Everything sizing-related now comes from the server (the view model
@@ -363,57 +326,17 @@ struct TerminalWrapperView: View {
         Task {
             let ok = await viewModel.setMode(.list)
             if ok, tips.consume(.focusAutoSwitch) {
-                showTipToast("Opened in Focus: each pane was moved into its own tmux window (break-pane), so one fills the screen. Parallel ⇄ Focus up top moves them back — nothing is closed.")
+                showTipToast("Opened in Focus: each pane is now its own tmux window. Switch back to Parallel any time — nothing was closed.")
             }
         }
     }
 
-    /// Show a transient, non-blocking teaching toast (auto-hides).
+    /// Show a transient, non-blocking toast (auto-hides).
     private func showTipToast(_ text: String) {
         withAnimation { tipToast = text }
         Task {
             try? await Task.sleep(for: .seconds(5))
             withAnimation { if tipToast == text { tipToast = nil } }
-        }
-    }
-
-    /// §6.1 — the parallel curriculum, driven by the working-agent count.
-    private func handleWorkingChange(_ working: Int) {
-        // Both boxes busy at once → the payoff line.
-        if working >= 2, tips.consume(.parallelBothWorking) {
-            showTipToast("This is Parallel — every pane in one tmux window, all working at once. Whoever needs you changes color.")
-        }
-        // The first solo agent has been working 10s (the user is idle,
-        // watching) → suggest opening a second one.
-        guard tips.shouldShow(.parallelSecondAgent) else { return }
-        parallelTipTask?.cancel()
-        guard working >= 1, viewModel.paneViewModels.count == 1, viewModel.windows.count <= 1 else { return }
-        parallelTipTask = Task {
-            try? await Task.sleep(for: .seconds(10))
-            guard !Task.isCancelled,
-                  viewModel.agentsWorking >= 1,
-                  tips.consume(.parallelSecondAgent) else { return }
-            withAnimation { showParallelTip = true }
-        }
-    }
-
-    /// §6.1 — iPad/Mac sidebar introduction, first time it appears with real
-    /// content (≥ 2 windows in List mode on a regular-width screen).
-    private func maybeShowSidebarIntro() {
-        guard viewModel.windows.count >= 2,
-              viewModel.sessionMode == .list,
-              isRegularWidth,
-              tips.consume(.sidebarIntro) else { return }
-        showTipToast("One tmux window per row — tap to switch. The number is the window index you'd use with select-window; the icon shows who's working and who needs you.")
-    }
-
-    /// §6.4 — voice-send milestones. The advanced gestures wait for the 3rd
-    /// send (muscle memory first).
-    private func handleVoiceSendMilestone(_ n: Int) {
-        guard n > 0 else { return }
-        if n >= 3, tips.shouldShow(.voiceAdvanced) {
-            tips.markShown(.voiceAdvanced)
-            withAnimation { showVoiceAdvancedTip = true }
         }
     }
 
@@ -704,26 +627,14 @@ struct TerminalWrapperView: View {
                                                  insets: compassInsets(in: geo))
     }
 
-    @ViewBuilder
-    private var onboardingOverlay: some View {
-        if showOnboarding, case .connected = viewModel.connectionState {
-            GestureOnboardingOverlay {
-                GestureOnboardingOverlay.markDismissed()
-                withAnimation { showOnboarding = false }
-            }
-            .transition(.opacity)
-        }
-    }
+    // MARK: - Notice toast
 
-    // MARK: - Teaching overlays (TipCenter)
-
-    /// Transient top toast for fire-and-forget lessons (Focus default,
-    /// persistence, window tabs, sidebar, "this is parallel").
+    /// Transient top toast (the Focus default's one-time notice).
     @ViewBuilder
     private var tipToastView: some View {
         if let text = tipToast {
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "lightbulb.fill")
+                Image(systemName: "info.circle.fill")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.bentoEmerald)
                     .padding(.top, 1)
@@ -747,98 +658,6 @@ struct TerminalWrapperView: View {
             .padding(.top, 8)
             .transition(.move(edge: .top).combined(with: .opacity))
             .onTapGesture { withAnimation { tipToast = nil } }
-        }
-    }
-
-    /// The 4-color state legend — the product's mental-model key, presented
-    /// the first time any pane turns amber (§6.2). Non-modal: terminal stays
-    /// interactive around it.
-    @ViewBuilder
-    private var stateLegendOverlay: some View {
-        if showStateLegend {
-            StateLegendCard {
-                tips.markShown(.stateLegend)
-                withAnimation { showStateLegend = false }
-            }
-            .padding(.horizontal, 24)
-            .transition(.scale(scale: 0.92).combined(with: .opacity))
-        }
-    }
-
-    /// "Open a second agent" nudge, anchored under the top bar near the menus
-    /// that can actually do it (§6.1).
-    @ViewBuilder
-    private var parallelTipCard: some View {
-        if showParallelTip {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("It's working — you don't have to wait.")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.bentoInk)
-                Text(viewModel.sessionMode == .list
-                     ? "Open a second agent: tap + in the window list — that's a new tmux window."
-                     : "Open a second agent: ⋯ menu → Split Right (-h).")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.bentoInkDim)
-                Button("Got it") { withAnimation { showParallelTip = false } }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.bentoEmerald)
-            }
-            .padding(14)
-            .frame(maxWidth: 320)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.bentoSurface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.bentoBorder, lineWidth: 1)
-            )
-            .padding(.top, 52)
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .transition(.move(edge: .top).combined(with: .opacity))
-        }
-    }
-
-    /// Advanced voice gestures, taught after the 3rd successful send (§6.4).
-    @ViewBuilder
-    private var voiceAdvancedTipCard: some View {
-        if showVoiceAdvancedTip {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Voice, level 2")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.bentoInk)
-                Label {
-                    Text("Slide **right** while holding: review & edit the text before it sends.")
-                        .font(.system(size: 13)).foregroundStyle(Color.bentoInkDim)
-                } icon: {
-                    Image(systemName: "arrow.right").font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.bentoEmerald)
-                }
-                Label {
-                    Text("Slide **left**: turn plain words into a shell command.")
-                        .font(.system(size: 13)).foregroundStyle(Color.bentoInkDim)
-                } icon: {
-                    Image(systemName: "arrow.left").font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.bentoEmerald)
-                }
-                Button("Got it") { withAnimation { showVoiceAdvancedTip = false } }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.bentoEmerald)
-            }
-            .padding(14)
-            .frame(maxWidth: 360)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.bentoSurface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.bentoBorder, lineWidth: 1)
-            )
-            .padding(.bottom, 90)
-            .padding(.horizontal, 16)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -892,10 +711,6 @@ struct TerminalWrapperView: View {
     /// attached device, not a view preference). The one confirmation:
     /// flattening a mixed external structure into List.
     private func selectMode(_ newMode: TmuxSessionMode) {
-        // First interaction retires the intro dot — the user has found the switch.
-        if tips.shouldShow(.modeToggleIntro) {
-            tips.markShown(.modeToggleIntro)
-        }
         Task {
             let ok = await viewModel.requestMode(newMode)
             if !ok { showMixedFlattenAlert = true }
@@ -929,16 +744,6 @@ struct TerminalWrapperView: View {
         }
         .pickerStyle(.segmented)
         .fixedSize()
-        // Intro dot (§6): "two views, switch freely, nothing is lost" — a
-        // quiet affordance marker, not a popover. Cleared on first use.
-        .overlay(alignment: .topTrailing) {
-            if tips.shouldShow(.modeToggleIntro) {
-                Circle()
-                    .fill(Color.bentoEmerald)
-                    .frame(width: 7, height: 7)
-                    .offset(x: 3, y: -3)
-            }
-        }
         .alert(SessionPromptCopy.flatten.title, isPresented: $showMixedFlattenAlert) {
             Button(SessionPromptCopy.flatten.confirm, role: .destructive) {
                 Task { await viewModel.setMode(.list, force: true) }

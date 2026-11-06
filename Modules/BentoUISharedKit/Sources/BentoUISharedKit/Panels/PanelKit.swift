@@ -16,7 +16,6 @@ import SwiftUI
 /// changes nothing but disclosure state: explanation is open while being set
 /// up and folded away in Settings. No panel may branch on it for content.
 public enum PanelContext: Sendable {
-    case onboarding
     case settings
 }
 
@@ -73,54 +72,21 @@ public enum PanelPage: String, CaseIterable, Identifiable, Sendable {
 /// user what they can already see.
 public struct PanelBody<Explain: View, Controls: View>: View {
     private let context: PanelContext
-    private let hasSetupControls: Bool
     private let explain: Explain
     private let controls: Controls
 
-    /// - Parameter hasSetupControls: false when every control on this panel is
-    ///   Advanced, i.e. hidden during setup. Without it the page renders an
-    ///   empty form that still claims the rest of the window, and the
-    ///   explanation is left stranded against the top edge above a void.
     public init(
         _ context: PanelContext,
-        hasSetupControls: Bool = true,
         @ViewBuilder explain: () -> Explain = { EmptyView() },
         @ViewBuilder controls: () -> Controls
     ) {
         self.context = context
-        self.hasSetupControls = hasSetupControls
         self.explain = explain()
         self.controls = controls()
     }
 
     public var body: some View {
         switch context {
-        case .onboarding:
-            VStack(alignment: .leading, spacing: 0) {
-                // Full width here, and the PROSE constrains itself (see
-                // `PanelProse`): a preview or a figure wants the same width as
-                // the form cards below it, while a paragraph does not.
-                // Short lines with air between them, not paragraphs: this is
-                // the first minute of an app, and a block of running text is
-                // the thing people skip.
-                VStack(alignment: .leading, spacing: 10) { explain }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, PanelMetrics.pageInset)
-                    .padding(.bottom, hasSetupControls ? 18 : 0)
-                if hasSetupControls {
-                    Form { controls }
-                        .bentoPanelForm()
-                } else {
-                    Spacer(minLength: 0)
-                }
-                // Said once, at the foot of the page, instead of an "Advanced"
-                // row on every one of them.
-                Text("Everything else is in Settings (⌘,).")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, PanelMetrics.pageInset)
-                    .padding(.bottom, 10)
-            }
         case .settings:
             Form {
                 Section {
@@ -158,12 +124,6 @@ public struct AdvancedBlock<Content: View>: View {
 
     public var body: some View {
         switch context {
-        case .onboarding:
-            // Nothing. A first run should present the decisions worth making
-            // now; a row promising more of them is itself one more thing to
-            // read. `PanelBody` prints one line at the foot of the page saying
-            // where the rest live, once, instead of five disclosure rows.
-            EmptyView()
         case .settings:
             Section {
                 DisclosureGroup("Advanced", isExpanded: $expanded) {
@@ -171,31 +131,6 @@ public struct AdvancedBlock<Content: View>: View {
                 }
             }
         }
-    }
-}
-
-/// The page dots in the setup flow's footer.
-public struct PageDots: View {
-    private let count: Int
-    private let current: Int
-
-    public init(count: Int, current: Int) {
-        self.count = count
-        self.current = current
-    }
-
-    public var body: some View {
-        HStack(spacing: 7) {
-            ForEach(0..<count, id: \.self) { i in
-                Circle()
-                    .fill(i == current ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary))
-                    .frame(width: 7, height: 7)
-                    .overlay(
-                        Circle().strokeBorder(.separator.opacity(i == current ? 0 : 1), lineWidth: 0.5)
-                    )
-            }
-        }
-        .animation(.easeInOut(duration: 0.15), value: current)
     }
 }
 

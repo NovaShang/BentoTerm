@@ -43,14 +43,6 @@ struct TerminalCommands: Commands {
                 .keyboardShortcut("n", modifiers: .command)
         }
 
-        // Setup is five pages of settings with their explanation attached, so
-        // it has to stay reachable: someone who pressed "Later", or who wants
-        // the tmux page again, shouldn't have to clear a UserDefaults key to
-        // see it. Next to Settings… because it opens the same five panels.
-        CommandGroup(after: .appSettings) {
-            Button("Run Setup Again…") { Windows.show(.firstRun) }
-        }
-
         // Where every Mac app keeps it: straight under "About BentoTerm".
         CommandGroup(after: .appInfo) {
             CheckForUpdatesMenuItem()
@@ -136,8 +128,8 @@ struct TerminalCommands: Commands {
     }
 }
 
-/// Windows manages the small set of secondary, single-purpose windows (Wizard /
-/// First run). They are opened via AppKit rather than as
+/// Windows manages the secondary, single-purpose windows (today only the agent
+/// wizard). They are opened via AppKit rather than as
 /// SwiftUI `Window` scenes because they are transient and app-triggered, not
 /// restorable places the user navigates to — and because the terminal windows
 /// they sit alongside are AppKit-owned too, so one window story is simpler than
@@ -145,7 +137,7 @@ struct TerminalCommands: Commands {
 /// count as "the app's last window" in a way that changes lifecycle, and
 /// `applicationShouldTerminateAfterLastWindowClosed` is false anyway.
 enum Windows {
-    enum Kind { case wizard, firstRun }
+    enum Kind { case wizard }
 
     @MainActor
     static func show(_ kind: Kind) {
@@ -155,9 +147,6 @@ enum Windows {
         case .wizard:
             title = "New agent session"
             content = AnyView(AgentWizardWindow())
-        case .firstRun:
-            title = "Set up BentoTerm"
-            content = AnyView(FirstRunWindow())
         }
         let host = NSHostingController(rootView: content)
         let window = NSWindow(contentViewController: host)

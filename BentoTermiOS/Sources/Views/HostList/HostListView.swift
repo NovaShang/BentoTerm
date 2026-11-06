@@ -19,12 +19,6 @@ struct HomeView: View {
     @ObservedObject private var recentLaunches = RecentLaunchStore.shared
 
     @State private var showAddHost = false
-    /// The setup flow: welcome, add a host, then the five panels Settings also
-    /// shows. Runs automatically on a fresh install because it contains the one
-    /// step iOS cannot work without (`HostSetupPage`); afterwards it lives in
-    /// Settings.
-    @State private var showSetup = false
-    @AppStorage("firstRunCompleted_v1") private var firstRunCompleted = false
     @State private var showSettings = false
     @State private var editingHost: Host?
     @State private var hostSheetRequest: HostSheetRequest?
@@ -36,6 +30,11 @@ struct HomeView: View {
         var host: Host
     }
 
+
+    /// The only teaching left for the two gestures nothing on screen shows.
+    /// Said where a session is about to start, instead of as an overlay on
+    /// top of the first one.
+    static let voiceHint = "Hold anywhere on a pane to talk. Double-tap to type."
 
     /// Recent launches whose host still exists, newest first.
     private var recentRows: [RecentLaunchStore.Launch] {
@@ -70,9 +69,7 @@ struct HomeView: View {
                 BentoWordmark()
             }
             // Settings on the left, `+` on the right: the right-hand side is
-            // for the thing you came here to do. The `?` that used to sit here
-            // is gone — re-running setup is a settings row now, not a
-            // permanent piece of toolbar.
+            // for the thing you came here to do.
             ToolbarItem(placement: .topBarLeading) {
                 Button(action: { showSettings = true }) {
                     Image(systemName: "gearshape")
@@ -106,23 +103,7 @@ struct HomeView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            // The setup flow is reachable from inside Settings, and its host
-            // page writes to the store — so the store has to travel with it.
             SettingsView()
-                .environmentObject(hostStore)
-        }
-        .sheet(isPresented: $showSetup, onDismiss: { firstRunCompleted = true }) {
-            // Sheets get their own environment; the host page writes to the
-            // store, so it has to be handed over explicitly like the session
-            // sheet below.
-            SetupFlowView()
-                .environmentObject(hostStore)
-        }
-        .task {
-            let forced = ProcessInfo.processInfo.environment["BENTO_FORCE_FIRST_RUN"] == "1"
-            if forced || (!firstRunCompleted && hostStore.hosts.isEmpty) {
-                showSetup = true
-            }
         }
         .sheet(item: $hostSheetRequest) { request in
             NavigationStack {
@@ -214,9 +195,14 @@ struct HomeView: View {
                     .environmentObject(sessionManager)
             }
             if sessionManager.activeSessions.isEmpty {
-                Text("Nothing running right now. Sessions you open show up here.")
-                    .font(.callout)
-                    .foregroundStyle(Color.bentoInkDim)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Nothing running right now. Sessions you open show up here.")
+                        .font(.callout)
+                        .foregroundStyle(Color.bentoInkDim)
+                    Text(Self.voiceHint)
+                        .font(.footnote)
+                        .foregroundStyle(Color.bentoInkMute)
+                }
             }
         } header: {
             BentoFormHeader("Sessions")

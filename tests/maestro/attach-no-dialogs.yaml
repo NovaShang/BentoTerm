@@ -1,0 +1,15 @@
+appId: com.bento.term.app
+# Attaching to a fresh multi-pane session shows NO sizing / focus-mode dialogs
+# (zero-modal defaults).
+#
+# Recreate the throwaway session Mac-side WITH a split first:
+#   tmux kill-session -t bentotest; tmux new-session -d -s bentotest && tmux split-window -h -t bentotest
+---
+- runFlow: attach.yaml
+
+# The old "Window size" / "Open in Focus Mode?" dialogs must NOT appear on a
+# first-ever attach to a multi-pane session.
+- assertNotVisible: "Fit to my device"
+- assertNotVisible: "Use Focus Mode"
+- assertVisible: "Parallel"
+- takeScreenshot: /tmp/onb_11_terminal_no_dialogs

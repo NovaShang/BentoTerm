@@ -9,8 +9,6 @@ import BentoUISharedKit
 /// (`PanelContext`). See `IOSSetupPanel` for where the iOS-only rows hang.
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var hostStore: HostStore
-    @State private var showSetup = false
 
     var body: some View {
         NavigationStack {
@@ -26,20 +24,6 @@ struct SettingsView: View {
                     }
                 }
 
-                // Same five panels as the rows above, read in order with their
-                // explanations open — worth keeping reachable for someone who
-                // tapped "Later", or who wants the tmux page again.
-                Section {
-                    Button {
-                        showSetup = true
-                    } label: {
-                        Label("Run Setup Again", systemImage: "sparkles")
-                    }
-                }
-            }
-            .sheet(isPresented: $showSetup) {
-                SetupFlowView()
-                    .environmentObject(hostStore)
             }
             .tint(Color.bentoEmerald)
             .navigationTitle("Settings")

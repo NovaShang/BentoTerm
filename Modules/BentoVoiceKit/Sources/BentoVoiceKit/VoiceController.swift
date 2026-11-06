@@ -74,14 +74,6 @@ open class VoiceController: ObservableObject {
     @Published public var previewText = ""
     @Published public var previewLoading = false
 
-    /// Lifetime count of successful voice sends, published so the iOS wrapper can
-    /// pace the advanced-gesture tip (3rd send) and the one-time Qwen suggestion
-    /// (1st send). TipCenter owns the persistent value — shared by both platforms.
-    @Published public private(set) var voiceSendTotal = 0
-
-    /// The pacing-counter store (test seam; defaults to the app-wide singleton).
-    var tipCenter: TipCenter = .shared
-
     /// Fired with the final utterance + direction (unless cancelled/empty).
     public var onResult: ((VoiceInputResult) -> Void)?
 
@@ -108,14 +100,12 @@ open class VoiceController: ObservableObject {
 
     public init() {
         self.session = VoiceSession()
-        voiceSendTotal = tipCenter.recordedVoiceSendCount
         wireContextProvider()
     }
 
     /// Test seam: inject a fake session (see VoiceControllerTests).
     init(session: any VoiceSessionProtocol) {
         self.session = session
-        voiceSendTotal = tipCenter.recordedVoiceSendCount
         wireContextProvider()
     }
 
@@ -214,7 +204,6 @@ open class VoiceController: ObservableObject {
             guard !text.isEmpty else { return }
             self.feedback.sent()
             self.onResult?(VoiceInputResult(text: text, direction: dir))
-            self.voiceSendTotal = self.tipCenter.recordVoiceSend()
         }
     }
 
@@ -326,7 +315,6 @@ open class VoiceController: ObservableObject {
         }
         feedback.sent()
         onResult?(VoiceInputResult(text: text, direction: .up))
-        voiceSendTotal = tipCenter.recordVoiceSend()
     }
 
     /// Dismiss the preview without sending.

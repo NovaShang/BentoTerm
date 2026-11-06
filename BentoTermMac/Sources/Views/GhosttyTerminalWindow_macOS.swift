@@ -445,13 +445,6 @@ public enum BentoTerminalWindow {
         openPlain(title: host, command: ["ssh", host])
     }
 
-    /// Open a plain (no-tmux) tab running an arbitrary command (exec-style
-    /// argv). Used by the first-run wizard to run agent install one-liners in
-    /// a VISIBLE terminal — transparency over a hidden Process.
-    public static func newCommandWindow(command: [String], title: String) {
-        openPlain(title: title, command: command)
-    }
-
     /// Where a new session lands: a tab in the existing group, or its own
     /// window. macOS already asks this question globally (System Settings →
     /// Desktop & Dock → "Prefer tabs when opening documents"), so the default
