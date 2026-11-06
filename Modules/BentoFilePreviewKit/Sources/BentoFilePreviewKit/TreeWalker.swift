@@ -121,7 +121,7 @@ public enum TreeWalker {
             partial: outcome.partial)
     }
 
-    /// Raw walk for callers with their own ranking (the palette): every entry
+    /// Raw walk for callers with their own ranking: every entry
     /// the `include` predicate accepts is collected, relPaths relative to
     /// `root`, budgets/caps behaving exactly like `search`.
     public static func walk(source: FilePreviewSource, root: String,

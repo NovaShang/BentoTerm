@@ -98,11 +98,10 @@ public final class WebTab: ObservableObject, Identifiable {
 
     /// Go to whatever was typed in the address bar.
     ///
-    /// Parsed by the same `PaletteURL` the command palette uses, so
-    /// `localhost:3000`, `github.com/x` and a full URL all mean here what they
-    /// mean there — and `localhost` means the machine THIS TAB is on.
+    /// Parsed by `WebAddress`: `localhost:3000`, `github.com/x` and a full URL
+    /// all work, and `localhost` means the machine THIS TAB is on.
     public func navigate(to text: String) async {
-        guard let url = PaletteURL.candidate(for: text) else { return }
+        guard let url = WebAddress.candidate(for: text) else { return }
         displayURL = url
         title = WebTab.shortTitle(for: url)
         failure = nil

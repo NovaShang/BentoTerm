@@ -65,7 +65,7 @@ public enum BentoTerminalWindow {
     /// Go to session `id` — in THIS window.
     ///
     /// The app is single-window by default, so picking a session (Session ⌄,
-    /// ⌘P, the Dock menu, the launcher's session rows) moves the window you are
+    /// the Dock menu, the launcher's session rows) moves the window you are
     /// in onto it with `switch-client`, the way `prefix s` does in a terminal,
     /// instead of piling up a window per session. Exceptions, all of which
     /// open a window because there is nothing to switch:
@@ -224,34 +224,14 @@ public enum BentoTerminalWindow {
         frontmostManager()?.tab.viewModel.splitPane(horizontal: true)
     }
 
-    /// ⌘P: open the command palette over the focused window's active pane.
-    public static func presentCommandPalette() {
-        // Over a launcher window there is no pane to hang the File / Pane
-        // sections off, but the palette still means what it means everywhere
-        // else, so the launcher builds the sections that survive an empty
-        // window and opens the same panel. It emphatically does NOT get its own
-        // kind of search: the page used to answer ⌘P by focusing a filter over
-        // its own dozen rows, which found strictly less than this does.
-        if LauncherWindowController.presentPaletteIfKey() { return }
-        guard let manager = frontmostManager() else { return }
-        // A plain (no-tmux) tab has no pane host, and ⌘P used to silently do
-        // nothing there — including for the dock's "+" while that still called
-        // this. Fall back to the window itself so the panel always opens.
-        if let paneHost = manager.tab.paneHost {
-            paneHost.presentCommandPalette()
-        } else {
-            manager.presentCommandPaletteForPlainTab()
-        }
-    }
-
     /// Open a file preview in the focused window's side dock (the default
-    /// surface — ⌘click, palette, context menu all land here).
+    /// surface — ⌘click and the context menu land here).
     static func openPreview(path: String, line: Int?, context: PathPreviewContext) {
         frontmostManager()?.openPreview(path: path, line: line, context: context)
     }
 
     /// The machine the focused pane is on. A `localhost` address typed into
-    /// ⌘P means THAT box — the same thing it means in the terminal in front of
+    /// the browser's address bar means THAT box — the same thing it means in the terminal in front of
     /// you — rather than always this one.
     static func focusedLinkOrigin() -> LinkOrigin? {
         guard let m = frontmostManager() else { return nil }
@@ -269,7 +249,7 @@ public enum BentoTerminalWindow {
         return true
     }
 
-    /// Show/hide the preview dock (pins survive a hide). ⌥⌘P and the palette.
+    /// Show/hide the preview dock (pins survive a hide). ⌥⌘P and the toolbar.
     public static func togglePreviewDock() { frontmostManager()?.togglePreviewDock() }
 
     /// `BENTO_OPEN_SESSIONS` says "open exactly these, and nothing else".
@@ -1063,10 +1043,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onOpenSessionInNewWindow = { key in
             if let id = TmuxSessionID(key: key) { BentoTerminalWindow.openInNewWindow(id) }
         }
-        toolbar.onOpenSearch = { [weak self] in
-            guard let self else { return }
-            self.tab.paneHost?.presentCommandPalette(from: self.toolbar.searchAnchor)
-        }
         // New ⌄ → New Session…: the launcher, the one place that asks what to
         // open (agent, empty, plain shell, ssh host). Not ⌘N any more — see
         // `BentoTerminalWindow.newPaneOrWindow`.
@@ -1124,22 +1100,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     nonisolated static let defaultContentSize = NSSize(width: 980, height: 640)
 
     var activeTab: SessionTab? { tab }
-
-    /// ⌘P over a plain (no-tmux) tab, which has no pane host to build the
-    /// pane-flavoured sections. The file context comes from the tab's single
-    /// surface instead; everything else the panel offers still applies.
-    func presentCommandPaletteForPlainTab() {
-        let ctx = plainSurfaceContext
-        CommandPaletteController.shared.present(
-            fileContext: ctx,
-            hostLabel: ctx?.hostLabel ?? "This Mac",
-            staticSpecs: [],
-            from: nil)
-    }
-
-    private var plainSurfaceContext: PathPreviewContext? {
-        tab.plainSurface?.pathPreviewContext
-    }
 
     /// Open a preview in the side dock (expanding it) and bring the window front.
     func openPreview(path: String, line: Int?, context: PathPreviewContext) {
@@ -1842,8 +1802,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         if hasOverflow {
             items.append(("", "more", NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More windows")))
         }
-        // The centre is shared with the location title (which opens the
-        // palette). A switcher for ONE window says nothing, and in Focus the
+        // The centre is shared with the location title. A switcher for ONE window says nothing, and in Focus the
         // sidebar is already the window list — so in both cases that space says
         // where the focused pane is instead.
         let isFocus = tab.viewModel.sessionMode == .list

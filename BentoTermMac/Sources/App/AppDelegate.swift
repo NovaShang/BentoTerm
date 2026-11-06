@@ -145,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // DEBUG-only for the company it keeps, not for its blast
                 // radius: it can only reach a session named above.
                 // Test hook: "N|name" — N seconds later, pick session `name`
-                // the way Session ⌄ / ⌘P / the Dock menu do, which switches
+                // the way Session ⌄ / the Dock menu do, which switches
                 // the frontmost window onto it (switch-client) rather than
                 // opening another. Like the split hook, it exists because the
                 // menus need synthesized clicks a headless run can't make.

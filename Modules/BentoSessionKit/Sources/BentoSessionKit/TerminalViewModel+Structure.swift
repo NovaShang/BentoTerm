@@ -364,7 +364,7 @@ public extension TerminalViewModel {
             // A creation the user spelled out. Remember it (the policy drops
             // the uninteresting ones) — this is a chokepoint for BOTH splits
             // and new windows, on the Mac panel and on iPad's typed form.
-            PaletteRecents.shared.recordLaunchIfUseful(dir: path, command: command, host: launchHost)
+            LaunchRecents.shared.recordLaunchIfUseful(dir: path, command: command, host: launchHost)
             return (blankToNil(path), blankToNil(command).map(SpawnCommand.shell))
         case .duplicateCurrent:
             guard let pane = activePaneID else { return (nil, nil) }
@@ -382,7 +382,7 @@ public extension TerminalViewModel {
             // The directory is worth remembering — it is a place the user works.
             // The foreground program is not: see above, there is no truthful
             // command to be had from tmux here.
-            PaletteRecents.shared.recordLaunchIfUseful(dir: path, command: nil, host: launchHost)
+            LaunchRecents.shared.recordLaunchIfUseful(dir: path, command: nil, host: launchHost)
             return (path, nil)
         }
     }
@@ -407,7 +407,7 @@ public extension TerminalViewModel {
     internal func recordActivePaneLaunch() async {
         guard usingTmux, let pane = activePaneID else { return }
         let dir = await displayValue("#{pane_current_path}", pane: pane)
-        PaletteRecents.shared.recordLaunchIfUseful(dir: dir, command: nil, host: launchHost)
+        LaunchRecents.shared.recordLaunchIfUseful(dir: dir, command: nil, host: launchHost)
     }
 
     func displayValue(_ format: String, pane: TmuxPaneID) async -> String? {

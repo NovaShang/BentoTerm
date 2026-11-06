@@ -166,25 +166,6 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         for c in controllers { c.model.refresh() }
     }
 
-    /// ⌘P over a launcher window.
-    ///
-    /// It opens the palette, the same as it does anywhere else. This used to
-    /// put the caret in a filter field on this page instead, back when the page
-    /// was described as the palette's level 0 and the toolbar's search slot
-    /// filtered these very rows. That was a second, weaker search: it could
-    /// only find the dozen things this page draws, while the palette's own
-    /// level-0 content comes from the same `OpenTargets` provider and reaches
-    /// every session, every recent launch and every ssh host. Search belongs in
-    /// one place and this is not it.
-    ///
-    /// Returns false when the key window isn't a launcher, so the caller falls
-    /// through to the pane-host route.
-    static func presentPaletteIfKey() -> Bool {
-        guard let c = controllers.first(where: { $0.window.isKeyWindow }) else { return false }
-        c.presentPalette()
-        return true
-    }
-
     private override init() {
         model = LauncherModel()
         window = TerminalSessionWindow.makeShell()
@@ -214,10 +195,6 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         // this one sat behind it still asking would be the bug this whole
         // window exists to remove, so it just comes forward.
         toolbar.onNewSession = { [weak self] in self?.window.makeKeyAndOrderFront(nil) }
-        // No `customSearchView`: the search slot keeps the button a session
-        // window has, meaning the same thing it means there. See
-        // `presentPalette`.
-        toolbar.onOpenSearch = { [weak self] in self?.presentPalette() }
         window.toolbar = toolbar.makeToolbar()
         window.toolbarStyle = .unified
     }
@@ -241,82 +218,6 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         }
         window.setContentSize(TerminalWindowManager.defaultContentSize)
         window.center()
-    }
-
-    // MARK: The palette
-
-    /// The command palette over a launcher window.
-    ///
-    /// A session window routes ⌘P and the toolbar's search button through its
-    /// pane host, because the palette's File / Command / Pane sections are
-    /// about the focused pane. A launcher has no pane host, so it builds the
-    /// sections that are still true with nothing open — everything you can
-    /// open, plus the three ways to make something — and hands them to the same
-    /// controller, anchored to the same toolbar control. The panel that drops
-    /// is the panel a session window drops, in the same place.
-    private func presentPalette() {
-        CommandPaletteController.shared.present(
-            fileContext: nil, hostLabel: "This Mac",
-            staticSpecs: Self.paletteSpecs(
-                .shared,
-                open: { [weak self] in self?.open($0) },
-                perform: { [weak self] in self?.perform($0) }),
-            from: toolbar.searchAnchor)
-    }
-
-    /// What the palette shows over an empty window.
-    ///
-    /// Deliberately the same three groups the page draws plus the hosts the
-    /// page keeps in a menu — this is where a typed hostname is found, which is
-    /// why the page does not need a filter of its own. Every row fills THIS
-    /// window rather than opening another, for the same reason the New ⌄ menu's
-    /// rows do: the question this window is asking is the one being answered.
-    ///
-    /// Static and closure-driven so the structure can be built — and asserted —
-    /// without a window on screen.
-    static func paletteSpecs(_ targets: OpenTargetProvider,
-                             open: @escaping @MainActor (OpenTarget) -> Void,
-                             perform: @escaping @MainActor (LaunchAction) -> Void)
-        -> [PaletteSectionSpec] {
-        func row(_ target: OpenTarget) -> PaletteItem {
-            PaletteItem(id: target.id, title: target.title, subtitle: target.subtitle,
-                        systemImage: target.systemImage, matchText: target.matchText,
-                        action: .run { open(target) })
-        }
-        var specs: [PaletteSectionSpec] = []
-        let sessions = targets.sessionTargets().map(row)
-        if !sessions.isEmpty {
-            specs.append(PaletteSectionSpec(id: "sessions", title: "Sessions",
-                                            items: sessions, limit: 8))
-        }
-        let launches = targets.recentTargets().map(row)
-        if !launches.isEmpty {
-            specs.append(PaletteSectionSpec(id: "launches", title: "Recent Launches",
-                                            items: launches, limit: 6))
-        }
-        // A host row drills rather than acts: "open dev" has no answer until you
-        // know whether you mean the session already running there or a new one,
-        // and that list only exists on the host. The drill lists it, with the
-        // plain `ssh dev` shell still one row away.
-        let hosts = targets.sshTargets().map { target -> PaletteItem in
-            guard case .sshHost(let alias) = target.kind else { return row(target) }
-            return PaletteItem(id: target.id, title: target.title,
-                               subtitle: "tmux sessions on \(alias)",
-                               systemImage: target.systemImage, matchText: target.matchText,
-                               action: .drillHost(alias: alias))
-        }
-        if !hosts.isEmpty {
-            specs.append(PaletteSectionSpec(id: "sshHosts", title: "SSH Hosts",
-                                            items: hosts, limit: 8))
-        }
-        let commands = LaunchAction.displayOrder.map { action in
-            PaletteItem(id: action.id, title: action.title, subtitle: action.detail,
-                        systemImage: action.systemImage, matchText: action.matchText,
-                        action: .run { perform(action) })
-        }
-        specs.append(PaletteSectionSpec(id: "commands", title: "Commands",
-                                        items: commands, limit: 10))
-        return specs
     }
 
     // MARK: Row actions
@@ -364,13 +265,12 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         fill { BentoTerminalWindow.fill($0, plainTitle: host, command: ["ssh", host]); return true }
     }
 
-    /// The launcher's "New Remote tmux Session → dev" opens the palette on that
-    /// host's session list rather than creating a session sight unseen: the
-    /// list is the part that only exists on the far end.
-    private func openRemoteTmux(_ host: String) {
-        CommandPaletteController.shared.present(
-            fileContext: nil, hostLabel: host, staticSpecs: [],
-            from: toolbar.searchAnchor, openingHost: host)
+    /// A session picked from "New Remote tmux Session ▸ dev ▸". The window is
+    /// filled with it, like every other row on this page.
+    private func openRemoteTmux(_ host: String, session: String?) {
+        RemoteTmuxSessions.invalidate(host)
+        let name = session ?? BentoTerminalWindow.nextSessionName()
+        fill { BentoTerminalWindow.fill($0, tmuxHost: host, session: name) }
     }
 
     // MARK: The SSH menu
@@ -388,7 +288,8 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
     func showSSHMenu() {
         let menu = SSHHostMenu.menu(target: self,
                                     connect: #selector(sshConnectAction(_:)),
-                                    remoteTmux: #selector(sshRemoteTmuxAction(_:)))
+                                    remoteTmux: #selector(sshRemoteTmuxAction(_:)),
+                                    shell: #selector(sshConnectAction(_:)))
         if let view = window.contentView, sshRowFrame != .zero {
             menu.popUp(positioning: nil,
                        at: CGPoint(x: sshRowFrame.minX, y: sshRowFrame.maxY),
@@ -403,7 +304,8 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
     }
 
     @objc private func sshRemoteTmuxAction(_ sender: NSMenuItem) {
-        if let host = sender.representedObject as? String { openRemoteTmux(host) }
+        guard let pick = sender.representedObject as? SSHHostMenu.RemoteSessionPick else { return }
+        openRemoteTmux(pick.host, session: pick.session)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -441,9 +343,7 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
 /// is otherwise empty. A tagline or a first-run sequence would still be wrong.
 /// See docs/launcher-design.md §5.
 ///
-/// **Nothing here filters.** The toolbar's search field is the app's search and
-/// means the same thing here as in a session window; this page is static
-/// content (see `LauncherModel`).
+/// **Nothing here filters.** This page is static content (see `LauncherModel`).
 struct LauncherView: View {
     @ObservedObject var model: LauncherModel
     /// Unowned: the controller owns the window that owns this view.
@@ -511,7 +411,7 @@ struct LauncherView: View {
     /// Vertical rather than a side-by-side lockup because the logo is meant to
     /// be large — it is doing the work of filling a window — and a 64pt icon
     /// beside 28pt text is a lockup with a hole in it. The 20pt inset matches
-    /// `PaletteRowView`'s own (8 outer + 12 inner), so the icon column and the
+    /// `LauncherRowView`'s own (8 outer + 12 inner), so the icon column and the
     /// wordmark share a left edge.
     private func brand(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -541,7 +441,7 @@ struct LauncherView: View {
         Button {
             activate(row)
         } label: {
-            PaletteRowView(title: row.title, subtitle: row.subtitle,
+            LauncherRowView(title: row.title, subtitle: row.subtitle,
                            systemImage: row.systemImage, selected: false,
                            subtitleLineLimit: 2) {
                 if isDefault {
@@ -565,7 +465,7 @@ struct LauncherView: View {
         Button {
             owner.showSSHMenu()
         } label: {
-            PaletteRowView(title: model.sshMenuRow.title,
+            LauncherRowView(title: model.sshMenuRow.title,
                            subtitle: model.sshMenuRow.subtitle,
                            systemImage: model.sshMenuRow.systemImage,
                            selected: false) {
@@ -614,12 +514,12 @@ struct LauncherView: View {
     @ViewBuilder
     private func section(_ title: String, _ rows: [LauncherModel.Row]) -> some View {
         if !rows.isEmpty {
-            PaletteSectionHeader(title: title)
+            LauncherSectionHeader(title: title)
             ForEach(rows) { row in
                 Button {
                     activate(row)
                 } label: {
-                    PaletteRowView(title: row.title, subtitle: row.subtitle,
+                    LauncherRowView(title: row.title, subtitle: row.subtitle,
                                    systemImage: row.systemImage, selected: false) {
                         if isOpenSession(row) {
                             Text("open")
@@ -678,9 +578,8 @@ struct LauncherView: View {
 
 /// A row that lights up under the pointer and presses in when clicked.
 ///
-/// `PaletteRowView` draws its own selection fill for the palette's keyboard
-/// cursor; this page has no cursor, so the only state a row has is "the mouse
-/// is on it". Kept as a button style rather than an `onTapGesture` so the row
+/// `LauncherRowView` can draw a selection fill, but this page has no keyboard
+/// cursor, so the only state a row has is "the mouse is on it". Kept as a button style rather than an `onTapGesture` so the row
 /// is a real control: it gets the pressed state, the accessibility role and the
 /// keyboard activation for free.
 private struct HoverRowButtonStyle: ButtonStyle {
@@ -710,6 +609,82 @@ private struct DefaultActionIf: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+// MARK: - Row views
+
+/// A section label ("SESSIONS"). The caller supplies the background.
+struct LauncherSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One row of a launcher list: symbol, title, dimmed second line, selection
+/// fill. `accessory` is an optional trailing control.
+struct LauncherRowView<Accessory: View>: View {
+    let title: String
+    let subtitle: String?
+    let systemImage: String
+    let selected: Bool
+    /// How many lines the second line may take. One everywhere except the
+    /// three create rows: those explain themselves in a full sentence, and the
+    /// left column is a third of a window, so a sentence cut through the middle
+    /// would stop explaining. Wrapping is the smaller evil.
+    var subtitleLineLimit: Int = 1
+    @ViewBuilder var accessory: () -> Accessory
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14))
+                .foregroundStyle(selected ? Color.white : .secondary)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 13))
+                    .foregroundStyle(selected ? Color.white : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let sub = subtitle, !sub.isEmpty {
+                    Text(sub)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(selected ? Color.white.opacity(0.75) : .secondary)
+                        .lineLimit(subtitleLineLimit)
+                        // A wrapped sentence loses nothing at the tail; a
+                        // one-line path loses its meaning there, which is why
+                        // the single-line case keeps eliding the middle.
+                        .truncationMode(subtitleLineLimit > 1 ? .tail : .middle)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+            accessory()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(selected ? Color.accentColor : .clear))
+        .padding(.horizontal, 8)
+    }
+}
+
+extension LauncherRowView where Accessory == EmptyView {
+    init(title: String, subtitle: String?, systemImage: String, selected: Bool,
+         subtitleLineLimit: Int = 1) {
+        self.init(title: title, subtitle: subtitle, systemImage: systemImage,
+                  selected: selected, subtitleLineLimit: subtitleLineLimit,
+                  accessory: { EmptyView() })
     }
 }
 #endif

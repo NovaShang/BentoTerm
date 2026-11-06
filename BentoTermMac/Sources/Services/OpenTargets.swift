@@ -3,9 +3,9 @@ import BentoUISharedKit
 
 /// "Things you can open" — the one list behind every launcher surface.
 ///
-/// Three surfaces want the same answer to "what can I open right now?": the
-/// command palette (⌘P), the Dock icon's menu, and App Intents / Shortcuts.
-/// They can't share a palette section, an `NSMenu`, or an `AppEntity` — so what
+/// Several surfaces want the same answer to "what can I open right now?": the
+/// launcher page, the Dock icon's menu, and App Intents / Shortcuts. They
+/// can't share a SwiftUI row, an `NSMenu`, or an `AppEntity` — so what
 /// they share is this: plain data with a stable identity, plus one place that
 /// knows how to act on it. The data types (`OpenTarget`, `LaunchAction`,
 /// `LocalSessionInfo`, `TmuxSessionNaming`, `tildeAbbreviated`) now live in
@@ -45,7 +45,7 @@ public final class OpenTargetProvider {
 
     public init(sessions: @escaping @MainActor () -> [String] = { BentoTerminalWindow.serverSessions },
                 sshHosts: @escaping @MainActor () -> [String] = { SSHConfigHosts.hosts() },
-                launches: @escaping @MainActor () -> [LaunchRecord] = { PaletteRecents.shared.launches },
+                launches: @escaping @MainActor () -> [LaunchRecord] = { LaunchRecents.shared.launches },
                 sessionInfo: @escaping @MainActor () -> [String: LocalSessionInfo] = { BentoTerminalWindow.serverSessionInfo }) {
         self.sessionSource = sessions
         self.sshHostSource = sshHosts
@@ -62,14 +62,14 @@ public final class OpenTargetProvider {
         return sessionSource().map { name in
             OpenTarget(kind: .tmuxSession(name: name), title: name,
                        subtitle: info[name]?.subtitle(),
-                       systemImage: "macwindow", matchText: "session \(name)")
+                       systemImage: "macwindow")
         }
     }
 
     public func sshTargets() -> [OpenTarget] {
         sshHostSource().map { alias in
             OpenTarget(kind: .sshHost(alias: alias), title: alias, subtitle: "ssh \(alias)",
-                       systemImage: "network", matchText: "ssh \(alias)")
+                       systemImage: "network")
         }
     }
 
@@ -84,8 +84,7 @@ public final class OpenTargetProvider {
             return OpenTarget(kind: .recentLaunch(record),
                               title: "\(program)  ·  \(where_)",
                               subtitle: nil,
-                              systemImage: "clock.arrow.circlepath",
-                              matchText: "\(program) \(record.dir)")
+                              systemImage: "clock.arrow.circlepath")
         }
     }
 
@@ -98,8 +97,8 @@ public final class OpenTargetProvider {
 
     /// WHAT opening a target means, with no opinion about WHERE it lands.
     ///
-    /// Two surfaces open targets into two different places — the palette and
-    /// the Dock menu through `focusOrOpen` (a session switches the front
+    /// Two surfaces open targets into two different places — the Dock menu
+    /// through `focusOrOpen` (a session switches the front
     /// window; the rest get a window of their own), the launcher into the
     /// window it is already occupying — and the one thing they must never disagree about is
     /// what a row does. So the decision is made once, here, and the
@@ -147,7 +146,7 @@ public final class OpenTargetProvider {
         }
     }
 
-    /// Do the thing, in a window of its own (palette, Dock menu, Shortcuts).
+    /// Do the thing, in a window of its own (Dock menu, Shortcuts).
     public func open(_ target: OpenTarget) {
         switch route(for: target) {
         case .localSession(let name): BentoTerminalWindow.focusOrOpen(.local(name))

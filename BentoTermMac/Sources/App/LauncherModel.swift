@@ -7,20 +7,12 @@ import BentoUISharedKit
 
 /// The launcher's content: what a window with no session yet offers to open.
 ///
-/// It reads `OpenTargetProvider`, exactly like the ⌘P palette and the Dock
-/// menu, so the three surfaces cannot disagree about what exists or what it is
-/// called. What differs is *weight* and *shape*, not vocabulary and not
+/// It reads `OpenTargetProvider`, exactly like the Dock menu, so the two
+/// surfaces cannot disagree about what exists or what it is called. What differs is *weight* and *shape*, not vocabulary and not
 /// membership.
 ///
-/// **It is a page, not a search result.** This model used to carry a query, a
-/// fuzzy ranking and a selection cursor, because the launcher was described as
-/// "the level-0 palette rendered as a page" and the toolbar's search slot held
-/// a filter over these very rows. That conflated two things. The toolbar's
-/// search field is the app's search — the command palette — and it means the
-/// same thing in every window, launcher or session. So the palette does the
-/// searching (its own level-0 content comes from the same provider, hosts
-/// included), and this page went back to being a page: a fixed, short list of
-/// what you can make and what you can go back to.
+/// **It is a page, not a search result.** A fixed, short list of what you can
+/// make and what you can go back to — no query, no ranking, no cursor.
 ///
 /// **Two columns, and the verbs come first.** A window is usually far bigger
 /// than this page's content, so a single left-aligned list stranded a dozen
@@ -82,8 +74,7 @@ public final class LauncherModel: ObservableObject {
         public var column: Column {
             switch self {
             // Hosts are a left-column row here because what the row does is
-            // open a menu, and opening a menu is a verb. The section title
-            // exists for the palette's Hosts group, not for this page.
+            // open a menu, and opening a menu is a verb.
             case .actions, .hosts:  return .left
             case .sessions, .recents: return .right
             }

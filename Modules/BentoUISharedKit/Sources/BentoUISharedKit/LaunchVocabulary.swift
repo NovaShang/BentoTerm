@@ -3,13 +3,12 @@ import BentoSessionKit
 
 /// "Things you can open" — the vocabulary behind every launcher surface.
 ///
-/// Three surfaces want the same answer to "what can I open right now?": the
-/// command palette (⌘P), the Dock icon's menu, and App Intents / Shortcuts.
-/// They can't share a palette section, an `NSMenu`, or an `AppEntity` — so what
-/// they share is this: plain data with a stable identity. Nothing here is
-/// palette-shaped; `OpenTarget` carries no SwiftUI, no closures, and no palette
-/// types, so an `NSMenuItem` or an `AppEntity` can be built from it just as
-/// easily as a `PaletteItem`. The provider that composes these targets and
+/// Several surfaces want the same answer to "what can I open right now?": the
+/// launcher page, the Dock icon's menu, and App Intents / Shortcuts. They can't
+/// share a SwiftUI row, an `NSMenu`, or an `AppEntity` — so what they share is
+/// this: plain data with a stable identity. `OpenTarget` carries no SwiftUI and
+/// no closures, so an `NSMenuItem` or an `AppEntity` can be built from it just
+/// as easily as a launcher row. The provider that composes these targets and
 /// performs them stays app-side (`OpenTargetProvider` on Mac) because acting on
 /// a target means calling the app's own window API.
 ///
@@ -191,7 +190,7 @@ public struct LocalSessionInfo: Equatable, Sendable {
 
 // MARK: - The target model
 
-/// One openable thing. `id` is stable across rebuilds so a menu, a palette row,
+/// One openable thing. `id` is stable across rebuilds so a menu, a launcher row,
 /// and an App Intent entity can all key off the same string.
 public struct OpenTarget: Identifiable, Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
@@ -211,8 +210,6 @@ public struct OpenTarget: Identifiable, Equatable, Sendable {
     public let subtitle: String?
     /// SF Symbol name — AppKit menus, SwiftUI rows and App Intents all take one.
     public let systemImage: String
-    /// Free-text the consumer can match against (the palette fuzzy-ranks it).
-    public let matchText: String
 
     public var id: String {
         switch kind {
@@ -223,12 +220,11 @@ public struct OpenTarget: Identifiable, Equatable, Sendable {
     }
 
     public init(kind: Kind, title: String, subtitle: String?,
-                systemImage: String, matchText: String) {
+                systemImage: String) {
         self.kind = kind
         self.title = title
         self.subtitle = subtitle
         self.systemImage = systemImage
-        self.matchText = matchText
     }
 }
 
@@ -291,17 +287,6 @@ public enum LaunchAction: String, CaseIterable, Identifiable, Sendable {
         case .plainTerminal: return "terminal"
         case .agentSession:  return "rectangle.stack"
         case .emptySession:  return "plus.rectangle"
-        }
-    }
-
-    /// What a typed query is matched against. The detail text is deliberately
-    /// excluded: "shell", "tmux" and "session" appear in all three sentences,
-    /// so matching them would make every query hit every action.
-    public var matchText: String {
-        switch self {
-        case .plainTerminal: return "new terminal without tmux shell"
-        case .agentSession:  return "new agent session claude codex"
-        case .emptySession:  return "new empty session tmux"
         }
     }
 

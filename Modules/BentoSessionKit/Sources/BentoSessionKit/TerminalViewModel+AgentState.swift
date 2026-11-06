@@ -136,7 +136,7 @@ extension TerminalViewModel {
     }
 
     /// Remember "an agent ran here" so it can be started again later — the
-    /// list behind the Recent Agents rows in the split menu and ⌘P.
+    /// list behind the Recent Agents rows in the split and New menus.
     ///
     /// The command comes from the agent id the hook wrote, never from tmux's
     /// `pane_current_command`. That value is the executed file's name, which on
@@ -160,7 +160,7 @@ extension TerminalViewModel {
             rememberedAgentLaunches.remove(key)
             return
         }
-        PaletteRecents.shared.recordLaunchIfUseful(dir: dir, command: command, host: launchHost)
+        LaunchRecents.shared.recordLaunchIfUseful(dir: dir, command: command, host: launchHost)
     }
 
     /// Maintain the "done, unseen" flag. An agent pane that transitions into

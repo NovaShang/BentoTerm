@@ -50,19 +50,6 @@ struct PaneCommandsTests {
         #expect(symbols == ["macwindow", "square.split.2x1"])
     }
 
-    @Test func macPaletteCommands() {
-        #expect(PaneMenuLayout.macPalette.map { $0.title(on: .macPalette) } == [
-            "Split Right (-h)", "Split Down (-v)", "Split Pane",
-            "Close Pane", "Toggle Zoom", "Select Next Pane", "Select Previous Pane",
-            "New tmux Window",
-        ])
-        #expect(PaneMenuLayout.macPalette.map(\.paletteID) == [
-            "splitRight", "splitDown", "duplicate", "closePane", "zoom",
-            "nextPane", "prevPane", "newTmuxWindow",
-        ])
-        #expect(PaneCommand.closePane.symbol(on: .macPalette) == "xmark.square")
-    }
-
     @Test func iosPaneMenuForATmuxPane() {
         let rows = PaneMenuLayout.IOSSection.allCases.flatMap {
             PaneMenuLayout.iosPaneMenu($0, parallel)

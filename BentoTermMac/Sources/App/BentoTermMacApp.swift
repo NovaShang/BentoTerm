@@ -55,13 +55,11 @@ struct TerminalCommands: Commands {
         }
 
         CommandMenu("Shell") {
-            Button("Command Palette…") { BentoTerminalWindow.presentCommandPalette() }
-                .keyboardShortcut("p", modifiers: .command)
             Button("Toggle Preview Panel") { BentoTerminalWindow.togglePreviewDock() }
                 .keyboardShortcut("p", modifiers: [.command, .option])
             Divider()
-            // Scoped to the ACTIVE PANE's scrollback — the omnibox above is the
-            // app-wide one. Standard macOS find keys so nobody has to learn them.
+            // Scoped to the ACTIVE PANE's scrollback. Standard macOS find keys
+            // so nobody has to learn them.
             Button("Find…") { BentoPaneAction.dispatch(BentoPaneAction.findInPane) }
                 .keyboardShortcut("f", modifiers: .command)
             Button("Find Next") { BentoPaneAction.dispatch(BentoPaneAction.findNext) }

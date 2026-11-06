@@ -97,11 +97,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// - **Preview** shows the focused pane's folder, so it needs a pane. A
     ///   PLAIN terminal keeps it: it has a real working directory (the shell's
     ///   OSC 7 report), which is exactly what the dock browses.
-    /// - Search, New and Settings survive every state — searching, creating and
-    ///   configuring are what a window with nothing in it is FOR.
+    /// - New survives every state — creating is what a window with nothing in
+    ///   it is FOR.
     ///
     /// The window strip is not here: it is a variable-width list, and its slot
-    /// is already shared with search by `setCenterShowsTabs`.
+    /// is already shared with the location by `setCenterShowsTabs`.
     private func syncToolbarItems() {
         guard let tb = toolbarRef else { return }
         setItem(Self.sessionsID, visible: hasSession, insertAt: 0)
@@ -124,7 +124,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// the item draws its own background: a plain terminal showed an empty
     /// switch-shaped capsule with no labels in it, the control gone but the
     /// thing it sat in still there. Removing the item is what the centre strip
-    /// already does to swap tabs for search.
+    /// already does to swap tabs for the location.
     private func setItem(_ id: NSToolbarItem.Identifier, visible: Bool, insertAt: Int) {
         guard let tb = toolbarRef else { return }
         let existing = tb.items.firstIndex { $0.itemIdentifier == id }
@@ -135,15 +135,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         }
     }
 
-    /// A view to put in the search slot instead of the palette button.
-    ///
-    /// A session window has nothing to type INTO up there — the palette owns
-    /// the query and the results — so its search item is a button that opens
-    /// the palette. A launcher window is the opposite case: its query has
-    /// nowhere else to live, and the page below it is the results. Same slot,
-    /// same identifier, same position; the occupant differs because what the
-    /// window can do with a keystroke differs.
-    var customSearchView: NSView?
     /// EVERY tmux session on the machine, open here or not, with its dot.
     /// Native tabs can only switch between sessions that are already open, so
     /// without this list a session running on the machine but not loaded in
@@ -233,31 +224,17 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     fileprivate static let newID = NSToolbarItem.Identifier("bento.new")
     fileprivate static let centerID = NSToolbarItem.Identifier("bento.center")
     fileprivate static let sizeID = NSToolbarItem.Identifier("bento.size")
-    fileprivate static let searchID = NSToolbarItem.Identifier("bento.search")
-    fileprivate static let searchCompactID = NSToolbarItem.Identifier("bento.searchCompact")
+    fileprivate static let locationID = NSToolbarItem.Identifier("bento.location")
 
-    /// Opens the palette — the toolbar's search field is an ENTRY POINT, not a
-    /// results view: the palette already knows how to search files, commands,
-    /// sessions, windows and panes, so clicking here drops it open the way
-    /// ⌘P does.
-    var onOpenSearch: (() -> Void)?
-    /// Wide, field-styled button shown in the centre when the window strip
-    /// isn't needed; `searchCompact` is the magnifier that replaces it when the
-    /// strip takes the centre.
-    private let searchField = NSButton()
-    private let searchCompact = NSButton()
-    /// A SESSION window's centre at rest: where the focused pane is
-    /// (`claude · ~/proj`), as quiet title text that opens the palette.
+    /// The centre at rest: where the focused pane is (`claude · ~/proj`), as
+    /// quiet status text. Not a control — it says where you are and does
+    /// nothing when clicked. Empty on a launcher, which has no pane to name.
     ///
-    /// It replaced the search-field button there (owner's call): a field-shaped
-    /// control in the middle of every window was the loudest thing on screen
-    /// and said nothing about the window. A title says where you are, and the
-    /// palette is still one click (or ⌘P) away. The launcher keeps the field —
-    /// it has no location to name and its whole job is the search.
-    ///
-    /// A stock toolbar button: the glass capsule and the leading magnifier are
-    /// what say "this is clickable" (a borderless title read as a label).
-    private let locationButton = NSButton()
+    /// A borderless button with no action, because that is what renders as
+    /// plain text in a macOS 26 toolbar: a BORDERED button there is drawn in
+    /// the item's glass capsule whatever `showsBorderOnlyWhileMouseInside` or
+    /// `NSToolbarItem.isBordered` say.
+    private let locationLabel = NSButton()
     /// ~40% of the window: the location is the one variable-length item, and a
     /// deep path must truncate rather than shove the side items around.
     private var locationWidthCap: NSLayoutConstraint?
@@ -290,10 +267,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         applyActionSegments()
         configure(sizeButton, symbol: TerminalSizingMode.thisDevice.symbol, title: "",
                   action: #selector(sizeBannerTapped))
-        configureSearchField()
-        configureLocationButton()
-        configure(searchCompact, symbol: "magnifyingglass", title: "", action: #selector(searchTapped))
-        searchCompact.toolTip = "Search commands, files, sessions, windows, panes (⌘P)"
+        configureLocationLabel()
         configureGroup(tabsGroup)   // placeholder until the first updateTabs
         // The menu chevrons are rasterized (non-template) images — unlike the
         // dynamic `.labelColor` text they sit beside, they can't re-resolve on
@@ -341,69 +315,17 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         onSelectMode?(modeSwitch.selectedSegment == 1 ? .list : .tiled)
     }
 
-    /// A button dressed as a search field: magnifier + placeholder, left
-    /// aligned, wide enough to read as somewhere you type. It isn't an
-    /// NSSearchField because there is nothing to type INTO — the palette owns
-    /// both the query and the results, and two text fields for one query would
-    /// be a state to keep in sync for no gain.
-    private func configureSearchField() {
-        searchField.bezelStyle = .roundRect
-        searchField.controlSize = .large
-        searchField.imagePosition = .imageLeading
-        searchField.image = NSImage(systemSymbolName: "magnifyingglass",
-                                    accessibilityDescription: "Search")
-        searchField.alignment = .left
-        // The magnifier and the placeholder are PROMPTS, not content, and the
-        // button draws both at full label strength — the loudest thing in the
-        // toolbar on the one item that has nothing to say yet.
-        //
-        // Two mechanisms, because one does not cover both: `contentTintColor`
-        // colors the template image, but a BORDERED button (`.roundRect`) draws
-        // its title with its own style and ignores the tint there — setting only
-        // the tint left the text at full `labelColor`, i.e. near-black on light.
-        // The title's color can only be set through `attributedTitle`.
-        searchField.contentTintColor = .tertiaryLabelColor
-        searchField.attributedTitle = NSAttributedString(
-            string: "Search commands, files, sessions…",
-            attributes: [
-                .foregroundColor: NSColor.placeholderTextColor,
-                // The button's own font: an attributed title with no font
-                // attribute does not reliably inherit the control's, so leaving
-                // it out would resize the text while recoloring it.
-                .font: searchField.font
-                    ?? NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .large)),
-            ])
-        searchField.target = self
-        searchField.action = #selector(searchTapped)
-        searchField.toolTip = "⌘P"
-        searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        searchField.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
-        ])
-    }
-
-    @objc private func searchTapped() { onOpenSearch?() }
-
-    private func configureLocationButton() {
-        let b = locationButton
-        // A stock bordered toolbar button, like its neighbours: the capsule
-        // plus the magnifier is what makes it read as something to click. A
-        // borderless title was tried and read as a plain label nobody would
-        // think to press. Quieter than the old search field anyway: it is only
-        // as wide as its text and the text is the secondary colour.
-        b.bezelStyle = .texturedRounded
-        b.controlSize = .large
-        b.image = NSImage(systemSymbolName: "magnifyingglass",
-                          accessibilityDescription: "Search")
-        b.imagePosition = .imageLeading
-        b.contentTintColor = .secondaryLabelColor
-        b.target = self
-        b.action = #selector(searchTapped)
-        b.toolTip = "Search commands, files, sessions (⌘P)"
-        b.setAccessibilityLabel("Search commands, files, sessions")
+    private func configureLocationLabel() {
+        let b = locationLabel
+        b.isBordered = false
+        b.imagePosition = .noImage
+        b.controlSize = .regular
+        b.refusesFirstResponder = true
+        // No press flash: there is nothing to press.
+        (b.cell as? NSButtonCell)?.highlightsBy = []
         (b.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingMiddle
         (b.cell as? NSButtonCell)?.truncatesLastVisibleLine = true
+        b.setAccessibilityRole(.staticText)
         // Size to the text, but give way (truncate) before anything else does.
         b.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         b.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -417,18 +339,20 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// What the centre title says — `<program> · <path>`, already composed by
     /// the window (it knows the pane, the host and the shell rule).
     func setLocation(_ text: String) {
-        let size = NSFont.systemFontSize
+        // A point under the toolbar's own text: status, not a title to read first.
+        let size = NSFont.systemFontSize - 1
         let para = NSMutableParagraphStyle()
         para.lineBreakMode = .byTruncatingMiddle
         para.alignment = .center
-        locationButton.attributedTitle = NSAttributedString(
+        locationLabel.attributedTitle = NSAttributedString(
             string: text,
             attributes: [
                 .font: NSFont.systemFont(ofSize: size),
                 .foregroundColor: NSColor.secondaryLabelColor,
                 .paragraphStyle: para,
             ])
-        locationButton.invalidateIntrinsicContentSize()
+        locationLabel.setAccessibilityValue(text)
+        locationLabel.invalidateIntrinsicContentSize()
     }
 
     private func observeHostWidth(old: NSWindow?) {
@@ -443,11 +367,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func applyLocationWidthCap() {
         guard let width = hostWindow?.frame.width, width > 0 else { return }
         locationWidthCap?.constant = (width * 0.4).rounded()
-    }
-
-    /// The centre occupant when the window strip isn't showing.
-    private var centerSearchView: NSView {
-        customSearchView ?? (hasSession ? locationButton : searchField)
     }
 
     /// Every session on the machine. Picking one moves this window onto it
@@ -592,35 +511,21 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         onOpenSessionInNewWindow?(key)
     }
 
-    /// Whichever search control is currently on screen — the panel hangs off it.
-    var searchAnchor: NSView {
-        centerShowsTabs ? searchCompact : centerSearchView
-    }
-
     /// The centre of the toolbar is shared: the window strip when the session
-    /// has more than one window, otherwise the focused pane's location title
-    /// (the search field on a launcher), which opens the palette.
+    /// has more than one window, otherwise the focused pane's location title.
     ///
     /// A single-window session is the common case, and a one-item switcher is
-    /// chrome that says nothing. When the strip does take over, the palette
-    /// entry shrinks to the magnifier beside New rather than disappearing.
+    /// chrome that says nothing.
     func setCenterShowsTabs(_ showTabs: Bool) {
         guard let tb = toolbarRef, showTabs != centerShowsTabs || tb.items.isEmpty else { return }
         centerShowsTabs = showTabs
-        let want = showTabs ? Self.centerID : Self.searchID
+        let want = showTabs ? Self.centerID : Self.locationID
         if let idx = tb.items.firstIndex(where: {
-            $0.itemIdentifier == Self.centerID || $0.itemIdentifier == Self.searchID
+            $0.itemIdentifier == Self.centerID || $0.itemIdentifier == Self.locationID
         }), tb.items[idx].itemIdentifier != want {
             tb.removeItem(at: idx)
             tb.insertItem(withItemIdentifier: want, at: idx)
             tb.centeredItemIdentifiers = [want]
-        }
-        let compactIdx = tb.items.firstIndex { $0.itemIdentifier == Self.searchCompactID }
-        if showTabs, compactIdx == nil,
-           let newIdx = tb.items.firstIndex(where: { $0.itemIdentifier == Self.newID }) {
-            tb.insertItem(withItemIdentifier: Self.searchCompactID, at: newIdx)
-        } else if !showTabs, let compactIdx {
-            tb.removeItem(at: compactIdx)
         }
     }
 
@@ -778,7 +683,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // Pin the session strip to the WINDOW's center, independent of the side
         // items' widths — so the session-name button can size to its text without
         // ever nudging the tabs (the native alternative to hardcoding widths).
-        tb.centeredItemIdentifiers = [hasSession ? Self.centerID : Self.searchID]
+        tb.centeredItemIdentifiers = [hasSession ? Self.centerID : Self.locationID]
         toolbarRef = tb
         // State decided before the toolbar existed still has to land.
         syncToolbarItems()
@@ -856,20 +761,19 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         //
         // Same slots with no session — only the centre differs, and only
         // because a window strip with no windows in it is not a control that
-        // can be disabled. Search takes the centre there, which is where a
-        // one-window session puts it too.
+        // can be disabled. The (empty) location takes the centre there, which
+        // is where a one-window session puts it too.
         [Self.sessionsID, Self.modeID, .flexibleSpace,
-         hasSession ? Self.centerID : Self.searchID,
+         hasSession ? Self.centerID : Self.locationID,
          .flexibleSpace, Self.newID]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // The centre swaps between the window strip and the search field, and
-        // the compact magnifier comes and goes with it, so both must be
-        // ALLOWED even though only one of each pair is in the default set.
+        // The centre swaps between the window strip and the location, so both
+        // must be ALLOWED even though only one is in the default set.
         // The size banner is never in the DEFAULT set — it exists only while the
         // canvas is someone else's — but an item can't be inserted unless it is
         // allowed.
-        toolbarDefaultItemIdentifiers(toolbar) + [Self.searchID, Self.searchCompactID, Self.sizeID]
+        toolbarDefaultItemIdentifiers(toolbar) + [Self.locationID, Self.sizeID]
     }
 
     /// Segment 0 is always New; segment 1 (only with a session — a launcher
@@ -909,8 +813,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         case Self.modeID:     item.view = modeSwitch;     item.label = "Layout"
         case Self.newID:      item.view = actionsControl; item.label = "New"
         case Self.sizeID:     item.view = sizeButton;     item.label = "Session Size"
-        case Self.searchID:   item.view = centerSearchView; item.label = "Search"
-        case Self.searchCompactID: item.view = searchCompact; item.label = "Search"
+        case Self.locationID: item.view = locationLabel;  item.label = "Location"
         default: return nil
         }
         return item
@@ -1138,8 +1041,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 ///
 /// Hosts are re-read from `~/.ssh/config` on every open, so edits to the file
 /// show up without a relaunch, and the read is a single small local file — the
-/// launcher's "never block on the network" rule holds here too. Nothing
-/// enumerates sessions on the far end.
+/// launcher's "never block on the network" rule holds here too. The one network
+/// read is a host's tmux session list, fetched when its submenu under
+/// `New Remote tmux Session` opens (see `RemoteSessionsMenuFiller`).
 enum SSHHostMenu {
     static let connectTitle = "New SSH Connection"
     static let connectTip = "A terminal connected to a host from your ~/.ssh/config."
@@ -1151,23 +1055,51 @@ enum SSHHostMenu {
     static let remoteTmuxTitle = "New Remote tmux Session"
     static let remoteTmuxTip = "A tiled tmux session running on a host from your ~/.ssh/config."
 
-    /// The two rows, each with a host submenu. `representedObject` on the leaf
-    /// items is the host alias.
-    private static func items(target: AnyObject, connect: Selector, remoteTmux: Selector) -> [NSMenuItem] {
+    /// What a row under `New Remote tmux Session ▸ host ▸` carries:
+    /// `session` nil = a new session.
+    struct RemoteSessionPick {
+        let host: String
+        let session: String?
+    }
+
+    /// The submenus' delegates. `NSMenu.delegate` is weak, so something has to
+    /// hold them for as long as the menu can open; replaced per build.
+    @MainActor private static var fillers: [RemoteSessionsMenuFiller] = []
+
+    /// The two rows, each with a host submenu. `connect` and `shell` get the
+    /// host alias as `representedObject`; `remoteTmux` gets a
+    /// `RemoteSessionPick`. Under the remote-tmux row each host is itself a
+    /// submenu: the sessions running there, then New Session and a plain shell.
+    @MainActor
+    private static func items(target: AnyObject, connect: Selector, remoteTmux: Selector,
+                              shell: Selector) -> [NSMenuItem] {
         let hosts = SSHConfigHosts.hosts()
         let ssh = row(symbol: "network", title: connectTitle, tip: connectTip)
         ssh.submenu = hostSubmenu(hosts: hosts, target: target, action: connect)
         // `nil` symbol on the second row: the icon marks where the group
         // starts, and repeating it says nothing the eye did not already get.
         let tmux = row(symbol: nil, title: remoteTmuxTitle, tip: remoteTmuxTip)
-        tmux.submenu = hostSubmenu(hosts: hosts, target: target, action: remoteTmux)
+        let hostMenu = hostSubmenu(hosts: hosts, target: target, action: nil)
+        fillers = []
+        for item in hostMenu.items {
+            guard let host = item.representedObject as? String else { continue }
+            let filler = RemoteSessionsMenuFiller(host: host, target: target,
+                                                  pick: remoteTmux, shell: shell)
+            let sessions = NSMenu()
+            sessions.delegate = filler
+            fillers.append(filler)
+            item.submenu = sessions
+        }
+        tmux.submenu = hostMenu
         return [ssh, tmux]
     }
 
     /// The two rows as a standalone menu — what the launcher's `SSH` row pops.
-    static func menu(target: AnyObject, connect: Selector, remoteTmux: Selector) -> NSMenu {
+    @MainActor
+    static func menu(target: AnyObject, connect: Selector, remoteTmux: Selector,
+                     shell: Selector) -> NSMenu {
         let menu = NSMenu()
-        for item in items(target: target, connect: connect, remoteTmux: remoteTmux) {
+        for item in items(target: target, connect: connect, remoteTmux: remoteTmux, shell: shell) {
             menu.addItem(item)
         }
         return menu
@@ -1185,7 +1117,7 @@ enum SSHHostMenu {
     /// One item per concrete host; a disabled hint when there are none —
     /// including a missing or unreadable config.
     private static func hostSubmenu(hosts: [String], target: AnyObject,
-                                    action: Selector) -> NSMenu {
+                                    action: Selector?) -> NSMenu {
         let menu = NSMenu()
         guard !hosts.isEmpty else {
             menu.addItem(NSMenuItem(title: "No hosts in ~/.ssh/config",
@@ -1199,6 +1131,89 @@ enum SSHHostMenu {
             menu.addItem(item)
         }
         return menu
+    }
+}
+
+/// Fills `New Remote tmux Session ▸ host ▸` when it opens: what is running on
+/// the host, then the two ways in that need no list.
+///
+/// The list comes over ssh (`RemoteTmuxSessions`, ~6s ceiling), so the menu
+/// opens at once with a "Listing…" row and is filled in place when the answer
+/// lands — the main actor still runs while a menu is tracking. New Session and
+/// the plain shell are there from the first frame: a host you cannot list is
+/// still a host you can connect to.
+@MainActor
+final class RemoteSessionsMenuFiller: NSObject, NSMenuDelegate {
+    private let host: String
+    private weak var target: AnyObject?
+    private let pick: Selector
+    private let shell: Selector
+    private var loading = false
+
+    init(host: String, target: AnyObject, pick: Selector, shell: Selector) {
+        self.host = host
+        self.target = target
+        self.pick = pick
+        self.shell = shell
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        if let cached = RemoteTmuxSessions.cached(host) {
+            fill(menu, with: cached)
+            return
+        }
+        fill(menu, with: nil)
+        guard !loading else { return }
+        loading = true
+        Task { @MainActor [weak self, weak menu] in
+            guard let self else { return }
+            let result = await RemoteTmuxSessions.list(alias: self.host)
+            self.loading = false
+            if let menu { self.fill(menu, with: result) }
+        }
+    }
+
+    private func fill(_ menu: NSMenu,
+                      with result: Result<[RemoteTmuxSessions.Session], RemoteTmuxSessions.Failure>?) {
+        menu.removeAllItems()
+        switch result {
+        case nil:
+            menu.addItem(disabled("Listing sessions on \(host)…"))
+        case .success(let sessions) where sessions.isEmpty:
+            menu.addItem(disabled("No tmux sessions on \(host)"))
+        case .success(let sessions):
+            for session in sessions {
+                let item = NSMenuItem(title: session.name, action: pick, keyEquivalent: "")
+                item.target = target
+                item.representedObject = SSHHostMenu.RemoteSessionPick(host: host, session: session.name)
+                item.image = NSImage(systemSymbolName: session.attached ? "record.circle" : "rectangle.stack",
+                                     accessibilityDescription: nil)
+                let windows = session.windows == 1 ? "1 window" : "\(session.windows) windows"
+                if #available(macOS 14.4, *) {
+                    item.subtitle = session.attached ? "\(windows) · attached" : windows
+                }
+                menu.addItem(item)
+            }
+        case .failure(let why):
+            menu.addItem(disabled(why.message))
+        }
+        menu.addItem(.separator())
+        let new = NSMenuItem(title: "New Session", action: pick, keyEquivalent: "")
+        new.target = target
+        new.representedObject = SSHHostMenu.RemoteSessionPick(host: host, session: nil)
+        new.image = NSImage(systemSymbolName: "plus.rectangle.on.rectangle", accessibilityDescription: nil)
+        menu.addItem(new)
+        let plain = NSMenuItem(title: "Shell (no tmux)", action: shell, keyEquivalent: "")
+        plain.target = target
+        plain.representedObject = host
+        plain.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        menu.addItem(plain)
+    }
+
+    private func disabled(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
     }
 }
 

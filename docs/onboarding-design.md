@@ -4,6 +4,8 @@
 > 2026-07-27 的分叉里搬去 Bento Agents（`~/code/bento-acp`）。本仓库的受众下限是「会用或愿意学会用 shell」。
 > 相关：`Modules/BentoUISharedKit/.../BentoSettingsSections.swift`（被本设计取代）、`docs/launcher-design.md`。
 >
+> **2026-11-05：⌘P 命令面板已删除**，下文凡提 ⌘P 的都是历史。
+>
 > 文档里的界面文案一律用英文写（app 目前无本地化，所有既有 string 都是英文）；中文是设计注解。
 
 ---

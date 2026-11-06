@@ -1,9 +1,8 @@
 import Foundation
 
 /// One directory listing per (source, path, maxChildren) — the lazy
-/// incremental index shared by browse, tap search, and the palette. A
-/// directory listed once (by a browse expansion, a search walk, or the
-/// palette) is served from cache for every later consumer, so a search only
+/// incremental index shared by browse and tap search. A directory listed
+/// once (by a browse expansion or a search walk) is served from cache for every later consumer, so a search only
 /// walks directories it hasn't seen. Nothing here knows about trees or
 /// budgets — it's a dumb per-directory cache with in-flight dedup.
 public actor DirectoryListCache {

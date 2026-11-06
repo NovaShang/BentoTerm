@@ -4,12 +4,11 @@ import BentoSessionKit
 /// Every pane action the two apps offer, with the words and symbols each
 /// surface shows for it, and the rules for when it is offered.
 ///
-/// Four surfaces render them: the Mac pane menu (title-bar ⌄ and right-click),
-/// the Mac command palette, the Mac toolbar's New ⌄ menu, and the iOS pane
-/// menu. They used to be spelled out by hand and had drifted (iOS said
-/// "Maximize" for Zoom); one table is what keeps them from drifting again.
-/// Where a surface still words a row differently — the palette's verb-first
-/// "Toggle Zoom", a New-menu "Split Pane" — it is chosen here, in the open.
+/// Three surfaces render them: the Mac pane menu (title-bar ⌄ and right-click),
+/// the Mac toolbar's New ⌄ menu, and the iOS pane menu. They used to be
+/// spelled out by hand and had drifted (iOS said "Maximize" for Zoom); one
+/// table is what keeps them from drifting again. Where a surface still words a
+/// row differently — a New-menu "Split Pane" — it is chosen here, in the open.
 ///
 /// Performing a command stays with each platform: the Mac routes through the
 /// responder chain to the focused pane host (`BentoPaneAction`), iOS through
@@ -24,20 +23,13 @@ public enum PaneCommand: String, CaseIterable, Sendable {
     case zoom
     case exitCopyMode
     case closePane
-    case nextPane
-    case previousPane
-    /// A tmux window: a plain one in Parallel, a duplicate of the current pane
-    /// in Focus (the palette's row).
-    case newTmuxWindow
     /// A tmux window seeded with the current pane's folder and command, in
-    /// either mode (the New menu's row — same title, different action).
+    /// either mode (the New menu's row).
     case newTmuxWindowDuplicate
 
     public enum Surface: Sendable {
         /// Mac: the title bar's ⌄ and the surface's right-click menu.
         case macPaneMenu
-        /// Mac: ⌘K / omnibox commands.
-        case macPalette
         /// Mac: the toolbar's `New ⌄` menu.
         case macNewMenu
         /// iOS: a pane's title-bar menu.
@@ -54,20 +46,14 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case .splitDown: return "Split Down (-v)"
         case .splitDuplicate:
             switch surface {
-            case .macPalette, .macNewMenu: return "Split Pane"
+            case .macNewMenu: return "Split Pane"
             default: return "Split — Duplicate Current"
             }
         case .splitPathCommand: return "Split — Path & Command…"
-        case .zoom:
-            switch surface {
-            case .macPalette: return "Toggle Zoom"
-            default: return zoomed ? "Unzoom" : "Zoom"
-            }
+        case .zoom: return zoomed ? "Unzoom" : "Zoom"
         case .exitCopyMode: return "Exit tmux copy-mode"
         case .closePane: return "Close Pane"
-        case .nextPane: return "Select Next Pane"
-        case .previousPane: return "Select Previous Pane"
-        case .newTmuxWindow, .newTmuxWindowDuplicate: return "New tmux Window"
+        case .newTmuxWindowDuplicate: return "New tmux Window"
         }
     }
 
@@ -81,13 +67,9 @@ public enum PaneCommand: String, CaseIterable, Sendable {
             return surface == .macNewMenu ? "square.split.2x1" : "plus.square.on.square"
         case .splitPathCommand: return "terminal"
         case .zoom:
-            if surface == .macPalette { return "arrow.up.left.and.arrow.down.right" }
             return zoomed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
         case .exitCopyMode: return "arrow.uturn.backward"
-        case .closePane: return surface == .macPalette ? "xmark.square" : "xmark"
-        case .nextPane: return "arrow.right.square"
-        case .previousPane: return "arrow.left.square"
-        case .newTmuxWindow: return "plus.rectangle.on.folder"
+        case .closePane: return "xmark"
         case .newTmuxWindowDuplicate: return "macwindow"
         }
     }
@@ -105,22 +87,6 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case .splitDuplicate:
             return "Split the current pane, inheriting its folder and command."
         default: return nil
-        }
-    }
-
-    /// Stable id for palette rows (`cmd:<id>`), kept from before the catalog
-    /// so palette recents still match.
-    public var paletteID: String {
-        switch self {
-        case .splitRight: return "splitRight"
-        case .splitDown: return "splitDown"
-        case .splitDuplicate: return "duplicate"
-        case .closePane: return "closePane"
-        case .zoom: return "zoom"
-        case .nextPane: return "nextPane"
-        case .previousPane: return "prevPane"
-        case .newTmuxWindow: return "newTmuxWindow"
-        default: return rawValue
         }
     }
 }
@@ -202,14 +168,6 @@ public enum PaneMenuLayout {
         return [.separator, .command(.newTmuxWindowDuplicate), .command(.splitDuplicate),
                 .recentAgents]
     }
-
-    /// Mac palette's pane commands, after the layout rows. (The palette's
-    /// window-level commands — new empty session, preview panel —
-    /// are the Mac's own.)
-    public static let macPalette: [PaneCommand] = [
-        .splitRight, .splitDown, .splitDuplicate, .closePane, .zoom,
-        .nextPane, .previousPane, .newTmuxWindow,
-    ]
 
     /// iOS pane menu, as its five sections. `find` and `paste` are always
     /// there — they are about the terminal, which a plain shell has too; the
