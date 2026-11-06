@@ -69,7 +69,6 @@ final class SessionManager: ObservableObject {
     @Published var evictionNotice: String? = nil
 
     let maxSessions: Int
-    private let liveActivity = AggregateLiveActivityController()
 
     /// Non-published cache so SwiftUI `body` can resolve the VM synchronously
     /// without triggering "modifying state during view update". Registration
@@ -178,11 +177,7 @@ final class SessionManager: ObservableObject {
             // estimate made during connect), and it reads UIKit either way.
             idealTerminalSize: { MainActor.assumeIsolated { Self.terminalGridEstimate() } },
             loadKeychainPassword: { key in try? KeychainService.shared.loadPassword(for: key) },
-            onAwaitingTriggered: { HapticService.shared.awaitingTriggered() },
-            onSessionUpdate: { [weak self] hostID, name, awaiting, prompt in
-                self?.sessionDidUpdate(hostID: hostID, tmuxSessionName: name,
-                                       awaitingPanes: awaiting, latestPrompt: prompt)
-            }
+            onAwaitingTriggered: { HapticService.shared.awaitingTriggered() }
         )
         let vm = TerminalViewModel(host: host, transport: SSHService(), environment: env)
         cache[key] = vm
@@ -252,14 +247,12 @@ final class SessionManager: ObservableObject {
         }
         cache.removeValue(forKey: key)
         activeSessions.removeAll { $0.key == key }
-        liveActivity.sync(sessions: activeSessions)
     }
 
     func disconnectAll() {
         for vm in cache.values { vm.disconnect() }
         cache.removeAll()
         activeSessions.removeAll()
-        liveActivity.sync(sessions: activeSessions)
     }
 
     func handleHostDeleted(_ host: Host) {
@@ -283,7 +276,6 @@ final class SessionManager: ObservableObject {
         switch phase {
         case .background:
             beginBackgroundGrace()
-            liveActivity.sync(sessions: activeSessions)
         case .active:
             let reconnect = endBackgroundGrace()
             if reconnect {
@@ -291,7 +283,6 @@ final class SessionManager: ObservableObject {
                     Task { await entry.viewModel.resumeFromBackground() }
                 }
             }
-            liveActivity.sync(sessions: activeSessions)
         case .inactive:
             break
         @unknown default:
@@ -337,20 +328,6 @@ final class SessionManager: ObservableObject {
             UIApplication.shared.endBackgroundTask(bgTask)
             bgTask = .invalid
         }
-    }
-
-    // MARK: - State fan-in
-
-    /// Called by `TerminalViewModel` whenever its phase or pane states change.
-    /// Identifies the entry by hostID + the VM's current tmux session name.
-    func sessionDidUpdate(hostID: UUID, tmuxSessionName: String, awaitingPanes: Int, latestPrompt: String) {
-        let key = SessionKey(hostID: hostID, tmuxSessionName: tmuxSessionName)
-        guard activeSessions.contains(where: { $0.key == key }) else { return }
-        liveActivity.sync(
-            sessions: activeSessions,
-            spotlightKey: key,
-            spotlightPrompt: latestPrompt
-        )
     }
 
     // MARK: - LRU eviction
