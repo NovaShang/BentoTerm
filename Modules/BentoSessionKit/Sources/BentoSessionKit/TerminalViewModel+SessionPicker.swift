@@ -154,8 +154,8 @@ extension TerminalViewModel {
         case .shareWithDesktop(let target):
             await launchTmux(sessionName: "\(target)-mobile", groupWith: target, resizeToScreen: false)
         case .createAgent(let spec):
-            // Seed the session on the -CC launch line itself, then build out the
-            // extra panes over control mode.
+            // Seed the session on the -CC launch line itself; it opens as one
+            // pane.
             //
             // This used to type a `tmux new-session -d …; tmux split-window …`
             // script into the shell first and sleep 1s before attaching. That
@@ -163,9 +163,8 @@ extension TerminalViewModel {
             // before the pty was ready the line was mangled, `-c <dir>` went with
             // it, and the agent came up in the app's cwd instead of the folder
             // the user picked — silently, because nothing reads a shell's stderr
-            // here. Everything below is either a write we had to make anyway or a
-            // control-mode command with a response we can log.
-            dlog("Creating agent session \(spec.sessionName) (\(spec.layout.paneCount) panes)")
+            // here.
+            dlog("Creating agent session \(spec.sessionName)")
             // An explicit directory AND command, chosen deliberately in the
             // wizard — the most reusable launch there is, and the reason the
             // recents list exists. Recorded here rather than at the macOS
@@ -179,36 +178,7 @@ extension TerminalViewModel {
                 path: spec.workingDir,
                 command: spec.agentCommand
             )
-            await applyAgentLayout(spec)
         }
-    }
-
-    /// Add the spec's extra panes once control mode is up, so each split is a
-    /// tracked command with a real response instead of text typed at a shell.
-    ///
-    /// Splits deliberately pass no path: `split-window` already defaults to
-    /// `-c '#{pane_current_path}'`, which tmux expands server-side against the
-    /// source pane — the first pane, which the launch line put in the right
-    /// directory. Re-sending the path here would be worse than redundant, since
-    /// control mode has no shell to expand a leading `~`.
-    func applyAgentLayout(_ spec: AgentSpec) async {
-        let extraPanes = max(spec.layout.paneCount - 1, 0)
-        guard extraPanes > 0 || spec.layout.tmuxLayoutName != nil else { return }
-
-        let program: SpawnCommand? = spec.agentCommand.isEmpty ? nil : .shell(spec.agentCommand)
-        for i in 0..<extraPanes {
-            let resp = await tmuxService.send(.splitWindow(horizontal: true, command: program))
-            if resp.isError {
-                dlog("createAgent: split \(i + 1)/\(extraPanes) failed: \(resp.output)")
-            }
-        }
-        if let layoutName = spec.layout.tmuxLayoutName {
-            let resp = await tmuxService.send(
-                .selectLayoutTarget(target: "\(spec.sessionName):", layout: layoutName))
-            if resp.isError { dlog("createAgent: select-layout failed: \(resp.output)") }
-        }
-        await refreshPanes()
-        await refreshWindows()
     }
 
     func launchTmux(

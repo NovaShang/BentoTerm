@@ -5,8 +5,8 @@ import BentoFoundationKit
 
 /// Shared state for the agent-session wizard — one instance per presentation.
 ///
-/// Both platforms present the same five-field form (name / working directory /
-/// agent / layout) with the same validity rules; what differs is only the
+/// Both platforms present the same form (name / working directory /
+/// agent) with the same validity rules; what differs is only the
 /// chrome around it — Mac wraps it in a titled NSWindow with a bottom action
 /// bar, iOS in a NavigationStack sheet. Mac semantics are the reference: the
 /// default working directory is `~/code`, inputs are NOT trimmed, and launch
@@ -17,7 +17,6 @@ public final class AgentWizardModel: ObservableObject {
     @Published public var workingDir: String
     @Published public var agentPreset: AgentPreset
     @Published public var customCommand: String
-    @Published public var layout: TmuxLayout
     @Published public var error: String?
 
     public init(
@@ -28,14 +27,12 @@ public final class AgentWizardModel: ObservableObject {
         // fine for a path the user types over anyway.
         workingDir: String = NSHomeDirectory() + "/code",
         agentPreset: AgentPreset = .claudeCode,
-        customCommand: String = "",
-        layout: TmuxLayout = .sideBySide
+        customCommand: String = ""
     ) {
         self.sessionName = sessionName
         self.workingDir = workingDir
         self.agentPreset = agentPreset
         self.customCommand = customCommand
-        self.layout = layout
     }
 
     public var canLaunch: Bool {
@@ -59,8 +56,7 @@ public final class AgentWizardModel: ObservableObject {
         AgentSpec(
             sessionName: sessionName,
             workingDir: workingDir,
-            agentCommand: resolvedAgentCommand ?? "",
-            layout: layout
+            agentCommand: resolvedAgentCommand ?? ""
         )
     }
 }

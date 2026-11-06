@@ -120,6 +120,6 @@ enum TmuxCLI {
     }
 }
 
-// AgentPreset / AgentSpec / TmuxLayout live in BentoTerminalCore (AgentSpec.swift)
+// AgentPreset / AgentSpec live in BentoTerminalCore (AgentSpec.swift)
 // — the canonical copies. Duplicates here were removed in the module split;
 // keep edits in core only.

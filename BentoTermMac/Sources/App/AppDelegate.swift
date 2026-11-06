@@ -161,8 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     BentoTerminalWindow.newWindow(agent: BentoAgentKit.AgentSpec(
                         sessionName: parts[0],
                         workingDir: parts[1],
-                        agentCommand: parts.count > 2 ? parts[2] : "",
-                        layout: BentoAgentKit.TmuxLayout.solo))
+                        agentCommand: parts.count > 2 ? parts[2] : ""))
                 }
                 return
             }

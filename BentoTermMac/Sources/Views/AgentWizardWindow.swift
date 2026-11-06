@@ -6,7 +6,7 @@ import BentoUISharedKit
 
 /// AgentWizardWindow hosts the shared `AgentWizardForm` (see BentoUISharedKit)
 /// in a titled NSWindow with the macOS action bar. The form itself — fields,
-/// validity rules, layout grid — is shared with iOS; only the chrome
+/// validity rules — is shared with iOS; only the chrome
 /// is platform-specific. `Form().formStyle(.grouped)` keeps the visual
 /// hierarchy in line with System Settings panes.
 struct AgentWizardWindow: View {
@@ -34,7 +34,7 @@ struct AgentWizardWindow: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
         }
-        .frame(width: 560, height: 620)
+        .frame(width: 560, height: 440)
     }
 
     private func pickDirectory(_ binding: Binding<String>) {
