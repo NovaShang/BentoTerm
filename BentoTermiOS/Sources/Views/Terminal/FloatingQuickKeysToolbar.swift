@@ -27,7 +27,7 @@ final class FloatingQuickKeysToolbar: UIView {
     var onKeyTap: ((AccessoryKey) -> Void)?
 
     /// The pane-menu button — the host sets `.menu` to the active pane's menu
-    /// (Find / Maximize / Paste / Split / Profile / Close). Shown only when
+    /// (Find / Zoom / Paste / Split / Profile / Close). Shown only when
     /// `showsPaneActions`.
     let menuButton = UIButton(type: .system)
 
@@ -582,14 +582,8 @@ final class PaneFindBar: UIView, UITextFieldDelegate {
 
     // MARK: - Actions
 
-    @objc private func previousTapped() {
-        model.flushPendingQuery(query)
-        model.onPrevious?()
-    }
-    @objc private func nextTapped() {
-        model.flushPendingQuery(query)
-        model.onNext?()
-    }
+    @objc private func previousTapped() { model.previous(currentText: query) }
+    @objc private func nextTapped() { model.next(currentText: query) }
     @objc private func closeTapped() { model.onClose?() }
 
     @objc private func textChanged() {
@@ -599,8 +593,7 @@ final class PaneFindBar: UIView, UITextFieldDelegate {
     // MARK: - UITextFieldDelegate
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        model.flushPendingQuery(query)
-        model.onNext?()
+        model.next(currentText: query)
         return false   // keep the keyboard up; you're stepping through hits
     }
 

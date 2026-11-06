@@ -31,13 +31,9 @@ public enum BentoTerminalWindow {
     /// The session created when the window opens with no previous session.
     /// User-configurable (Settings → Sessions); defaults to the app name.
     public nonisolated static let defaultSessionNameKey = "default_session_name"
-    private nonisolated static let fallbackDefaultSessionName = "bento"
     public nonisolated static var defaultSessionName: String {
-        let raw = UserDefaults.standard.string(forKey: defaultSessionNameKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty else { return fallbackDefaultSessionName }
-        // tmux uses ':' and '.' as target separators — keep them out of names.
-        return raw.replacingOccurrences(of: ":", with: "-").replacingOccurrences(of: ".", with: "-")
+        TmuxSessionNaming.typed(UserDefaults.standard.string(forKey: defaultSessionNameKey) ?? "")
+            ?? TmuxSessionNaming.defaultName
     }
 
     /// App-provided hooks for toolbar actions that live in the app target.
@@ -80,9 +76,9 @@ public enum BentoTerminalWindow {
     /// Open/focus `id` and land on the window with tmux INDEX `windowIndex`.
     ///
     /// The whole point of listing another session's windows in a menu is to
-    /// arrive in the one you picked. `TmuxCLI.attach` takes a `window:` and
-    /// documents that it ignores it, so the old menu-bar version of this quietly
-    /// landed on whatever window the session was last on.
+    /// arrive in the one you picked. The old menu-bar version of this attached
+    /// with a window argument that was ignored, so it quietly landed on
+    /// whatever window the session was last on.
     ///
     /// The select cannot be issued with the open: the window's tmux ID isn't
     /// known until the control channel has attached and listed them, and the
@@ -157,11 +153,6 @@ public enum BentoTerminalWindow {
     /// The strip's stable left-to-right tab order, persisted so it survives
     /// relaunches instead of re-alphabetizing on every cold start.
     nonisolated static let sessionOrderKey = "mac_session_strip_order"
-    public nonisolated static let autoHideToolbarFullscreenKey = "auto_hide_toolbar_fullscreen"
-
-    static var autoHideToolbarInFullscreen: Bool {
-        UserDefaults.standard.object(forKey: autoHideToolbarFullscreenKey) as? Bool ?? true
-    }
 
     /// Open (or focus) the terminal window — the behavior when the app icon is
     /// clicked, and at launch.
@@ -197,14 +188,6 @@ public enum BentoTerminalWindow {
     /// means by "frontmost". Same call the menu makes.
     public static func splitFrontmostPane() {
         frontmostManager()?.tab.viewModel.splitPane(horizontal: true)
-    }
-
-    /// Menu-bar command: hand sizing back to this window. A one-shot re-fit
-    /// used to live here and looked broken — tmux recomputes a window's size
-    /// from its clients, so the push was undone as soon as any other client was
-    /// used. This sets the sticky policy instead (see `TerminalSizingMode`).
-    public static func trackActiveSessionSize() {
-        frontmostManager()?.tab.viewModel.setSizingMode(.tracking)
     }
 
     /// ⌘P: open the command palette over the focused window's active pane.
@@ -397,10 +380,10 @@ public enum BentoTerminalWindow {
     /// a window and then asks what to put in it; ⌘⇧T says don't ask, give me a
     /// session now (docs/launcher-design.md §9).
     ///
-    /// **It is no longer forced standalone.** `4f93e6b` made ⌘N ignore
-    /// `newSessionPlacement` on the grounds that the preference answers "where
-    /// does a new SESSION land" and pressing ⌘N had already answered it — which
-    /// was true while ⌘N created a session outright. It doesn't now. What ⌘N
+    /// **It is no longer forced standalone.** `4f93e6b` made ⌘N ignore the
+    /// tab-vs-window preference on the grounds that it answers "where does a
+    /// new SESSION land" and pressing ⌘N had already answered it — which was
+    /// true while ⌘N created a session outright. It doesn't now. What ⌘N
     /// produces is an empty window that is about to BECOME a session, so the
     /// preference applies to it exactly as it applies to every other route into
     /// a session; forcing a standalone window meant a tabs user got a stray
@@ -449,40 +432,6 @@ public enum BentoTerminalWindow {
         openPlain(title: host, command: ["ssh", host])
     }
 
-    /// Open a plain (no-tmux) tab running an arbitrary command (exec-style
-    /// argv). Used by the first-run wizard to run agent install one-liners in
-    /// a VISIBLE terminal — transparency over a hidden Process.
-    public static func newCommandWindow(command: [String], title: String) {
-        openPlain(title: title, command: command)
-    }
-
-    /// Where a new session lands: a tab in the existing group, or its own
-    /// window. macOS already asks this question globally (System Settings →
-    /// Desktop & Dock → "Prefer tabs when opening documents"), so the default
-    /// is to follow it rather than invent a second answer; the override is for
-    /// people who want Bento specifically different from the rest of their Mac.
-    public enum NewSessionPlacement: String, CaseIterable, Sendable {
-        case system, tab, window
-
-        public var title: String {
-            switch self {
-            case .system: return "Follow System Setting"
-            case .tab:    return "As a Tab"
-            case .window: return "In a New Window"
-            }
-        }
-    }
-
-    public nonisolated static let newSessionPlacementKey = "mac_new_session_placement"
-
-    public nonisolated static var newSessionPlacement: NewSessionPlacement {
-        get {
-            UserDefaults.standard.string(forKey: newSessionPlacementKey)
-                .flatMap(NewSessionPlacement.init(rawValue:)) ?? .system
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: newSessionPlacementKey) }
-    }
-
     /// Whether the NEXT session should join the current tab group.
     ///
     /// A launcher window asks this too, and must: it is a session window whose
@@ -490,12 +439,12 @@ public enum BentoTerminalWindow {
     /// question "what should I open?" belongs in a tab as well — otherwise
     /// answering it moves the answer from a window into the tab bar, or leaves
     /// a stray window behind.
+    ///
+    /// macOS already asks this question globally (System Settings → Desktop &
+    /// Dock → "Prefer tabs when opening documents"), so Bento follows that
+    /// answer instead of keeping a second one.
     static var shouldOpenAsTab: Bool {
-        switch newSessionPlacement {
-        case .tab:    return true
-        case .window: return false
-        case .system: return NSWindow.userTabbingPreference == .always
-        }
+        NSWindow.userTabbingPreference == .always
     }
 
     /// Create a window for `tab` and join it to the existing tab group.
@@ -780,16 +729,14 @@ final class SessionTab {
             // shell's OSC 7 report (ghostty shell integration). A quick-connect
             // `ssh <host>` tab is remote for its whole life (it dies when ssh
             // exits) — refuse local browsing/preview honestly.
-            let remote = PathPreviewContext.isRemoteShellCommand(command?.first)
-            let sshBlock: @Sendable @MainActor () async -> String? = {
-                "This is a remote (SSH) session — its files aren’t browsable here yet."
-            }
+            let block = PathPreviewContext.localSourceBlock(sessionHost: nil,
+                                                            foregroundCommand: command?.first)
             surface.pathPreviewContext = PathPreviewContext(
                 source: LocalFileSource(),
                 cwd: { [weak surface] in surface?.reportedPwd },
                 hostLabel: "This Mac",
                 isLocal: true,
-                remoteBlock: remote ? sshBlock : nil)
+                remoteBlock: block.map { reason in { @Sendable @MainActor in reason } })
             surface.onOpenPreview = { path, line, context in
                 BentoTerminalWindow.openPreview(path: path, line: line, context: context)
             }
@@ -1070,21 +1017,11 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             guard let self else { return }
             self.tab.paneHost?.presentCommandPalette(from: self.toolbar.searchAnchor)
         }
-        toolbar.onNewAgent = { BentoTerminalWindow.onNewAgentSession?() }
-        toolbar.onNewTerminal = { BentoTerminalWindow.newSessionTab() }
-        toolbar.onNewPlainShell = { BentoTerminalWindow.newWindowNoTmux() }
-        toolbar.onNewSSHHost = { BentoTerminalWindow.newSSHWindow(host: $0) }
-        // Picking the machine is half the question; the palette answers the
-        // other half (which session) with what is actually running there.
-        toolbar.onNewRemoteTmuxHost = { [weak self] host in
-            CommandPaletteController.shared.present(
-                fileContext: nil, hostLabel: host, staticSpecs: [],
-                from: self?.toolbar.searchAnchor, openingHost: host)
-        }
+        // ⌘N's behaviour: a launcher, which becomes the new session.
+        toolbar.onNewSession = { BentoTerminalWindow.newSessionWindow() }
         toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
-        toolbar.onCloseWindow = { [weak self] in self?.activeTab?.viewModel.closeWindow() }
-        toolbar.onSetSizingMode = { [weak self] mode in
-            self?.activeTab?.viewModel.setSizingMode(mode)
+        toolbar.onReleaseSize = { [weak self] in
+            self?.activeTab?.viewModel.releaseSessionSize()
             self?.rebuildTabBar()
         }
         toolbar.onClaimSessionSize = { [weak self] in
@@ -1201,11 +1138,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // rendered bg) still wins in `applyWindowBackground`, so a custom ghostty
         // `background =` is honored the moment a surface reports; this is only the
         // pre-first-report fallback, and it must track the theme, not a stale config.
-        let bg = ThemeStore.shared.current.bg
-        return NSColor(
-            srgbRed: CGFloat((bg >> 16) & 0xff) / 255,
-            green: CGFloat((bg >> 8) & 0xff) / 255,
-            blue: CGFloat(bg & 0xff) / 255, alpha: 1)
+        return NSColor(hex: ThemeStore.shared.current.bg)
     }
 
     @objc private func themeChanged() {
@@ -1302,13 +1235,13 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         guard let tab = activeTab, !tab.isPlain else { return }
         let vm = tab.viewModel
         Task { [weak self] in
-            let switched = await vm.setMode(mode)
+            let switched = await vm.requestMode(mode)
             guard !switched, let self else { return }
+            let copy = SessionPromptCopy.flatten
             let alert = NSAlert()
-            alert.messageText = "Switch to Focus mode?"
-            alert.informativeText = "This session contains a complex layout created "
-                + "outside Bento. Switching will flatten every pane into its own window."
-            alert.addButton(withTitle: "Flatten")
+            alert.messageText = copy.title
+            alert.informativeText = copy.message ?? ""
+            alert.addButton(withTitle: copy.confirm)
             alert.addButton(withTitle: "Cancel")
             alert.beginSheetModal(for: self.window) { [weak self] response in
                 if response == .alertFirstButtonReturn {
@@ -1418,11 +1351,12 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // Kill Session is destructive AND irreversible — every window/pane and
         // its running processes die. Confirm first (parity with iOS) so a stray
         // click doesn't silently end a session with work in it.
+        let copy = SessionPromptCopy.killSession(name)
         let alert = NSAlert()
-        alert.messageText = "Kill session “\(name)”?"
-        alert.informativeText = "Every window and pane in this session is closed and its running processes are terminated. This can’t be undone."
+        alert.messageText = copy.title
+        alert.informativeText = copy.message ?? ""
         alert.alertStyle = .warning
-        let killButton = alert.addButton(withTitle: "Kill Session")
+        let killButton = alert.addButton(withTitle: copy.confirm)
         alert.addButton(withTitle: "Cancel")
         killButton.keyEquivalent = ""   // require a deliberate click, not Return
         if #available(macOS 11.0, *) { killButton.hasDestructiveAction = true }
@@ -1875,9 +1809,11 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     fileprivate func sessionDot() -> SessionDot {
         if tab.isPlain { return .plain }   // no tmux → a terminal glyph, not a dot
         let vm = tab.viewModel
+        // Same priority as a window's status (`windowStatus`): something still
+        // running outranks something that finished while you were away.
         if vm.agentsWaiting > 0    { return .awaiting }
-        if vm.agentsDoneUnseen > 0 { return .doneUnseen }
         if vm.agentsWorking > 0    { return .working }
+        if vm.agentsDoneUnseen > 0 { return .doneUnseen }
         return .idle           // open, no agent activity → filled gray
     }
 
@@ -1966,18 +1902,11 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     private func presentRenameSheet() {
         guard let tab = activeTab else { return }
-        let alert = NSAlert()
-        alert.messageText = "Rename Session"
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = tab.viewModel.activeTmuxSessionName ?? ""
-        field.placeholderString = "session name"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            tab.viewModel.renameSession(to: field.stringValue)
+        Task { [window] in
+            guard let name = await window?.askName(SessionPromptCopy.renameSession,
+                                                  initial: tab.viewModel.activeTmuxSessionName ?? "")
+            else { return }
+            tab.viewModel.renameSession(to: name)
         }
     }
 
@@ -2026,29 +1955,22 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     private func promptRenameWindow(_ id: TmuxWindowID) {
         let vm = tab.viewModel
-        let alert = NSAlert()
-        alert.messageText = "Rename Window"
-        alert.informativeText = "tmux stops auto-naming this window from what's running in it."
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = vm.windowBodyName(id)
-        field.placeholderString = "window name"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            vm.renameWindow(id, to: field.stringValue)
+        Task { [window] in
+            guard let name = await window?.askName(SessionPromptCopy.renameWindow,
+                                                  initial: vm.windowBodyName(id))
+            else { return }
+            vm.renameWindow(id, to: name)
         }
     }
 
     private func confirmCloseWindow(_ id: TmuxWindowID) {
         let vm = tab.viewModel
+        let copy = SessionPromptCopy.closeWindow(vm.windowDisplayName(id))
         let alert = NSAlert()
-        alert.messageText = "Close “\(vm.windowDisplayName(id))”?"
-        alert.informativeText = "Everything running in its panes stops."
+        alert.messageText = copy.title
+        alert.informativeText = copy.message ?? ""
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Close Window")
+        alert.addButton(withTitle: copy.confirm)
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { response in
             guard response == .alertFirstButtonReturn else { return }
@@ -2057,47 +1979,23 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     }
 
     private func promptMoveToNewSession(_ id: TmuxWindowID) {
-        let alert = NSAlert()
-        alert.messageText = "Move to New Session"
-        alert.informativeText = "The window keeps running — it moves to the new session."
-        alert.addButton(withTitle: "Move")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.placeholderString = "session name"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
+        Task { [weak self, window] in
+            guard let name = await window?.askName(SessionPromptCopy.moveWindowToNewSession)
+            else { return }
             // A typed name may match an EXISTING session, so this goes through
             // the same landing pipeline as a menu pick rather than assuming new.
-            self?.moveWindow(id, to: field.stringValue)
+            self?.moveWindow(id, to: name)
         }
     }
 
     /// Run the move; a target session that hasn't settled into Parallel or Focus
-    /// bounces back and asks where the window should land (same pipeline the
-    /// sidebar uses — see `TerminalViewModel.moveWindow`).
-    private func moveWindow(_ id: TmuxWindowID, to session: String,
-                            landing: MoveLanding = .auto) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            guard await self.tab.viewModel.moveWindow(id, toSession: session, landing: landing)
-                == .needsLandingChoice else { return }
-            let alert = NSAlert()
-            alert.messageText = "Move to “\(session)”"
-            alert.informativeText =
-                "That session isn't settled into Parallel or Focus yet. Where should this land?"
-            alert.addButton(withTitle: "Into Current Window (Parallel)")
-            alert.addButton(withTitle: "As New Window (Focus)")
-            alert.addButton(withTitle: "Cancel")
-            alert.beginSheetModal(for: self.window) { [weak self] response in
-                switch response {
-                case .alertFirstButtonReturn:
-                    self?.moveWindow(id, to: session, landing: .joinCurrentWindow)
-                case .alertSecondButtonReturn:
-                    self?.moveWindow(id, to: session, landing: .newWindow)
-                default: break
-                }
+    /// asks where the window should land (same pipeline the sidebar uses — see
+    /// `TerminalViewModel.moveWindow`).
+    private func moveWindow(_ id: TmuxWindowID, to session: String) {
+        let vm = tab.viewModel
+        Task { [window] in
+            await vm.moveWindow(id, toSession: session) { session in
+                await window?.askMoveLanding(session: session)
             }
         }
     }
@@ -2107,9 +2005,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     func window(_ window: NSWindow,
                 willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions)
         -> NSApplication.PresentationOptions {
-        BentoTerminalWindow.autoHideToolbarInFullscreen
-            ? proposedOptions.union(.autoHideToolbar)
-            : proposedOptions
+        proposedOptions.union(.autoHideToolbar)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -2269,3 +2165,49 @@ private final class LayoutHookView: NSView {
     }
 }
 #endif
+
+// MARK: - Session prompts as sheets
+
+extension NSWindow {
+    /// The landing question for a move into an unsettled session, as a sheet
+    /// on this window; nil = cancelled. Pass it as a move's `chooseLanding`.
+    func askMoveLanding(session: String) async -> MoveLanding? {
+        let copy = SessionPromptCopy.landing(session)
+        let alert = NSAlert()
+        alert.messageText = copy.title
+        alert.informativeText = copy.message
+        alert.addButton(withTitle: copy.joinCurrentWindow)
+        alert.addButton(withTitle: copy.newWindow)
+        alert.addButton(withTitle: "Cancel")
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: self) { response in
+                switch response {
+                case .alertFirstButtonReturn:  continuation.resume(returning: .joinCurrentWindow)
+                case .alertSecondButtonReturn: continuation.resume(returning: .newWindow)
+                default:                       continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    /// A one-field name prompt as a sheet on this window: the typed text, or
+    /// nil if cancelled.
+    func askName(_ prompt: SessionPromptCopy.Prompt, initial: String = "") async -> String? {
+        let alert = NSAlert()
+        alert.messageText = prompt.title
+        alert.informativeText = prompt.message ?? ""
+        alert.addButton(withTitle: prompt.confirm)
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = initial
+        field.placeholderString = prompt.placeholder
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: self) { response in
+                continuation.resume(returning: response == .alertFirstButtonReturn
+                                    ? field.stringValue : nil)
+            }
+        }
+    }
+}

@@ -1,5 +1,6 @@
 import Foundation
 import BentoFoundationKit
+import BentoTmuxKit
 
 /// What tmux sessions exist on an ssh host, asked before connecting to it.
 ///
@@ -16,40 +17,8 @@ import BentoFoundationKit
 @MainActor
 public enum RemoteTmuxSessions {
 
-    public struct Session: Equatable, Sendable {
-        public let name: String
-        public let windows: Int
-        /// Someone (maybe another machine) has a client on it right now.
-        public let attached: Bool
-
-        public init(name: String, windows: Int, attached: Bool) {
-            self.name = name
-            self.windows = windows
-            self.attached = attached
-        }
-    }
-
-    public enum Failure: Error, Equatable, Sendable {
-        /// ssh could not authenticate without asking a human.
-        case needsCredentials
-        /// tmux is not installed, or not on the login shell's PATH.
-        case noTmux
-        /// tmux is there, but no server is running — no sessions yet.
-        case noSessions
-        /// Anything else: unreachable, host-key trouble, timeout.
-        case unreachable(String)
-
-        /// One line, for the row that stands in for the list.
-        public var message: String {
-            switch self {
-            case .needsCredentials:
-                return "Needs a password — connect once and save it to list sessions here"
-            case .noTmux: return "tmux isn’t installed on this host"
-            case .noSessions: return "No tmux sessions running"
-            case .unreachable(let why): return why
-            }
-        }
-    }
+    public typealias Session = TmuxSessionListing.Session
+    public typealias Failure = TmuxSessionListing.Failure
 
     /// Cached per alias. Short: the point of the list is that it is current, and
     /// the cost of being wrong is attaching to a session that just died.
@@ -78,13 +47,13 @@ public enum RemoteTmuxSessions {
         // `$SHELL -lc` for the same reason the launch line uses it: tmux is
         // routinely in a PATH that only the login shell builds, and a
         // non-interactive ssh command does not get one.
-        let remote = "$SHELL -lc 'tmux list-sessions -F \"#{session_name}|#{session_windows}|#{session_attached}\"'"
+        let remote = "$SHELL -lc 'tmux list-sessions -F \"\(TmuxSessionListing.format)\"'"
         var args = ["-o", "ConnectTimeout=6", "-o", "NumberOfPasswordPrompts=1"]
 
         // A password we were told to remember is a password we can use here.
         // Without one, BatchMode keeps ssh from sitting on a prompt that has no
         // window to appear in.
-        let stored = MacKeychain.load("sshPassword:\(alias)")
+        let stored = MacKeychain.load(SecretKeys.sshPassword(host: alias))
         var env = ProcessInfo.processInfo.environment
         var askpass: URL?
         if let stored, let helper = try? makeAskpassHelper() {
@@ -98,7 +67,7 @@ public enum RemoteTmuxSessions {
         defer { if let askpass { try? FileManager.default.removeItem(at: askpass) } }
 
         let out = await Self.capture(["/usr/bin/ssh"] + args + [alias, remote], env: env)
-        return parse(status: out.status, stdout: out.stdout, stderr: out.stderr)
+        return TmuxSessionListing.result(status: out.status, stdout: out.stdout, stderr: out.stderr)
     }
 
     /// A one-line executable that prints the password ssh is asking for.
@@ -149,46 +118,5 @@ public enum RemoteTmuxSessions {
                     stderr: String(decoding: e, as: UTF8.self)))
             }
         }
-    }
-
-    // MARK: - Reading the answer
-
-    /// Pure, so the cases that matter can be tested without an ssh host.
-    public static func parse(status: Int32, stdout: String, stderr: String) -> Result<[Session], Failure> {
-        let sessions = stdout
-            .split(separator: "\n")
-            .compactMap { line -> Session? in
-                // Split from the right: the two trailing fields are numbers we
-                // wrote, and a session name is allowed to contain the separator.
-                let f = line.split(separator: "|", omittingEmptySubsequences: false)
-                guard f.count >= 3 else { return nil }
-                let name = f.dropLast(2).joined(separator: "|")
-                guard !name.isEmpty else { return nil }
-                return Session(name: name,
-                               windows: Int(f[f.count - 2]) ?? 1,
-                               attached: (Int(f[f.count - 1]) ?? 0) > 0)
-            }
-        if !sessions.isEmpty { return .success(sessions) }
-
-        let err = stderr.lowercased()
-        // ssh's own failures come back as 255; anything else is the remote
-        // command's own exit code, and tmux is the only thing we ran.
-        if err.contains("permission denied") || err.contains("no supported authentication")
-            || err.contains("password") {
-            return .failure(.needsCredentials)
-        }
-        if err.contains("host key verification failed") {
-            return .failure(.unreachable("Host key verification failed"))
-        }
-        if err.contains("command not found") || err.contains("no such file") {
-            return .failure(.noTmux)
-        }
-        if err.contains("no server running") || err.contains("error connecting to") {
-            return .failure(.noSessions)
-        }
-        if status == 0 { return .failure(.noSessions) }
-        let firstLine = stderr.split(separator: "\n").first.map(String.init)?
-            .trimmingCharacters(in: .whitespaces)
-        return .failure(.unreachable(firstLine?.isEmpty == false ? firstLine! : "Couldn’t reach this host"))
     }
 }

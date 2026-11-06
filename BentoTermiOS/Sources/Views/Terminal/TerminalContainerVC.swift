@@ -9,18 +9,6 @@ import BentoFoundationKit
 import BentoGhosttyKit
 import BentoUISharedKit
 
-/// Phases of a pane title-bar drag (tiled mode), reported to the parent so it
-/// can resolve the pane + drop zone under the finger (center = swap, edge =
-/// dock). Points are in WINDOW coordinates (`gesture.location(in: nil)`) so
-/// the parent can hit-test across all panes. Mirrors the macOS host's
-/// `PaneDragPhase`.
-enum TitleDragPhase {
-    case began
-    case moved(CGPoint)
-    case ended(CGPoint)
-    case cancelled
-}
-
 /// Hosts a single libghostty terminal surface for one pane.
 /// Owns its narrow title bar (above the terminal) and the gesture wiring for
 /// voice press, pane selection tap, and double-tap-to-keyboard.
@@ -66,6 +54,8 @@ final class TerminalContainerVC: UIViewController {
 
     /// User asked to split this pane (horizontally or vertically).
     var onSplitRequested: ((_ horizontal: Bool) -> Void)?
+    /// User asked to split this pane, choosing the folder and command first.
+    var onSplitPathCommandRequested: (() -> Void)?
 
     /// Whether the pane menu should offer Split entries — checked when the
     /// menu opens. Split only exists in Tiled mode (in List a split would
@@ -93,8 +83,8 @@ final class TerminalContainerVC: UIViewController {
     /// User asked to toggle zoom (maximize / restore) on this pane.
     var onToggleZoom: (() -> Void)?
 
-    /// Whether this pane is currently zoomed — the pane menu's Maximize /
-    /// Restore entry reads it at open time (deferred element), so the host
+    /// Whether this pane is currently zoomed — the pane menu's Zoom /
+    /// Unzoom entry reads it at open time (deferred element), so the host
     /// wires it once per active-pane change.
     var isZoomed: (() -> Bool)?
 
@@ -113,7 +103,7 @@ final class TerminalContainerVC: UIViewController {
     /// User is dragging this pane's title bar (tiled mode) onto another pane.
     /// Parent VC resolves the target + drop zone and swaps (center) or docks
     /// (edge). Mirrors the macOS host's title-bar drag-to-dock.
-    var onTitleDrag: ((_ phase: TitleDragPhase) -> Void)?
+    var onTitleDrag: ((_ phase: PaneDrag.Phase) -> Void)?
 
     /// The surface reported its current size (cols × rows + cell px) after
     /// layout. Parent VC uses this to drive tmux client resize (refresh-client
@@ -454,10 +444,10 @@ final class TerminalContainerVC: UIViewController {
     /// Serial number so a slow stat can't surface a chip for a superseded tap.
     private var pathTapSeq = 0
 
-    /// Whether a path candidate could be offered at all — the preference is on
-    /// AND this pane knows where to read files from.
+    /// Whether a path candidate could be offered at all — this pane knows
+    /// where to read files from.
     private var canPreviewPaths: Bool {
-        PathPreviewSettings.isEnabled && pathPreviewContext != nil
+        pathPreviewContext != nil
     }
 
     /// Verify the tap's path candidates and show a chip if one of them exists:
@@ -608,8 +598,7 @@ final class TerminalContainerVC: UIViewController {
     /// it isn't private.
     func presentPathPreviewSheet(path: String, line: Int?) {
         guard let context = pathPreviewContext?() else { return }
-        let model = FilePreviewSheetModel(path: path)
-        model.load(path: path, line: line, context: context)
+        let model = FilePreviewLoadModel(path: path, line: line, context: context)
         let host = UIHostingController(rootView: FilePreviewSheet(model: model))
         if let sheet = host.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
@@ -674,8 +663,7 @@ final class TerminalContainerVC: UIViewController {
         // (Drop targets are previewed by the parent's PaneDropZoneOverlayView,
         // not the border.)
         view.layer.borderWidth = active ? 2.0 : 0.5
-        let faint = UIColor(white: STTheme.isLight ? 0 : 1, alpha: STTheme.isLight ? 0.09 : 0.06)
-        view.layer.borderColor = (active ? view.tintColor : faint).cgColor
+        view.layer.borderColor = (active ? view.tintColor : PaneChromeColors.idleBorder()).cgColor
     }
 
     // MARK: - Binding
@@ -901,9 +889,12 @@ extension TerminalContainerVC {
     /// terminal bg — it's the shared chrome; see `PaneTitleBar.updateChrome`.)
     private func applyBackgrounds(animated: Bool) {
         let bgColor = resolvedTerminalBackground()
-        let surround = STTheme.fusedBackground(
-            bg: bgColor, state: titleBar.paneState, doneUnseen: titleBar.agentFinishedUnseen)
-        let tint = titleBar.paneState.tintUIColor ?? .clear
+        let status = PaneChrome.Status(state: titleBar.paneState,
+                                       agentFinishedUnseen: titleBar.agentFinishedUnseen)
+        // The surround is the terminal bg FUSED with the same wash the surface
+        // wears, so the band and an empty washed terminal read as one color.
+        let surround = PaneChromeColors.washed(bgColor, status: status)
+        let tint = PaneChromeColors.wash(status) ?? .clear
         let apply = {
             self.view.backgroundColor = surround
             self.surface.backgroundColor = bgColor
@@ -1389,96 +1380,80 @@ extension TerminalContainerVC {
     private var isTmuxPane: Bool { paneVM != nil }
 
     private func makePaneMenu() -> UIMenu {
-        // Split entries are resolved when the menu OPENS (deferred), so a
-        // mode switch after the menu was attached still hides/shows them
-        // correctly. Tiled only — List mode has no split entry anywhere.
-        let splitSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self, self.isTmuxPane, self.showsSplitActions?() ?? true else {
-                completion([])
-                return
+        // Rows, words and conditions come from the shared catalog
+        // (PaneMenuLayout.iosPaneMenu). Every section that depends on state is
+        // resolved when the menu OPENS (deferred, uncached): the session mode,
+        // the zoom and tmux's copy-mode can all flip under the user — another
+        // client, a mode switch after the menu was attached. Find and paste are
+        // about the TERMINAL, so a plain shell keeps them; the rest is tmux
+        // structure and is empty for a plain session.
+        let children: [UIMenuElement] = PaneMenuLayout.IOSSection.allCases.flatMap {
+            section -> [UIMenuElement] in
+            switch section {
+            case .find, .paste:
+                return self.menuElements(PaneMenuLayout.iosPaneMenu(section, self.paneMenuContext()))
+            default:
+                return [UIDeferredMenuElement.uncached { [weak self] completion in
+                    guard let self else { completion([]); return }
+                    completion(self.menuElements(
+                        PaneMenuLayout.iosPaneMenu(section, self.paneMenuContext())))
+                }]
             }
-            completion([
-                UIAction(title: "Split Right (-h)",
-                         image: UIImage(systemName: "rectangle.split.2x1")) { [weak self] _ in
-                    self?.onSplitRequested?(true)
-                },
-                UIAction(title: "Split Down (-v)",
-                         image: UIImage(systemName: "rectangle.split.1x2")) { [weak self] _ in
-                    self?.onSplitRequested?(false)
-                },
-            ])
         }
-        // Only offered while tmux actually has the pane in a mode. Resolved at
-        // menu-open (deferred) like the split entries, since the mode can be
-        // entered and left by another client at any moment.
-        let copyModeSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self, self.titleBar.modeBadge == .copyMode else {
-                completion([])
-                return
+        return UIMenu(children: children)
+    }
+
+    /// The pane's state as the menu needs it, read at open.
+    private func paneMenuContext() -> PaneMenuContext {
+        // The mode isn't read here: the wrapper's `showsSplitActions` already
+        // answers "does this pane offer splits" (Parallel only).
+        PaneMenuContext(isTmuxPane: isTmuxPane,
+                        sessionMode: .tiled,
+                        zoomed: isZoomed?() ?? false,
+                        inCopyMode: titleBar.modeBadge == .copyMode,
+                        showsSplitActions: showsSplitActions?() ?? true)
+    }
+
+    private func menuElements(_ rows: [PaneMenuEntry]) -> [UIMenuElement] {
+        rows.compactMap { row -> UIMenuElement? in
+            switch row {
+            case .command(let command):
+                let zoomed = isZoomed?() ?? false
+                let symbol = command.symbol(on: .iosPaneMenu, zoomed: zoomed)
+                return UIAction(title: command.title(on: .iosPaneMenu, zoomed: zoomed),
+                                image: symbol.map { UIImage(systemName: $0) } ?? nil,
+                                attributes: command.role(on: .iosPaneMenu) == .destructive
+                                    ? .destructive : []) { [weak self] _ in
+                    self?.perform(command)
+                }
+            case .paste:
+                return UIAction(title: "Paste",
+                                image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
+                    // Same path the bar's paste key used: the pane surface's
+                    // clipboard paste.
+                    self?.handleAccessoryKey(.paste)
+                }
+            case .moveToSession:
+                return makeMoveToSessionMenu()
+            case .separator, .recentAgents, .layouts:
+                return nil   // not iOS pane-menu rows
             }
-            completion([
-                UIAction(title: "Exit tmux copy-mode",
-                         image: UIImage(systemName: "arrow.uturn.backward")) { [weak self] _ in
-                    self?.onExitCopyMode?()
-                },
-            ])
         }
-        // Maximize / Restore — state resolved at menu-open (deferred) like the
-        // split entries, since the zoom can flip under the user at any moment
-        // (another client, or the old title-bar target). Moved off the quick
-        // keys bar (2026-08-02 user decision: the bar was longer than the
-        // screen; the zoom button and paste now live here).
-        let zoomSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self, self.isTmuxPane else {
-                completion([])
-                return
-            }
-            let zoomed = self.isZoomed?() ?? false
-            completion([
-                UIAction(title: zoomed ? "Restore" : "Maximize",
-                         image: UIImage(systemName: zoomed
-                             ? "arrow.down.right.and.arrow.up.left"
-                             : "arrow.up.left.and.arrow.down.right")) { [weak self] _ in
-                    self?.onToggleZoom?()
-                },
-            ])
+    }
+
+    /// How iOS performs a catalog command: the container's callbacks into the
+    /// wrapper, which owns the session.
+    private func perform(_ command: PaneCommand) {
+        switch command {
+        case .find: onFindRequested?(nil)
+        case .zoom: onToggleZoom?()
+        case .splitRight: onSplitRequested?(true)
+        case .splitDown: onSplitRequested?(false)
+        case .splitPathCommand: onSplitPathCommandRequested?()
+        case .exitCopyMode: onExitCopyMode?()
+        case .closePane: onCloseRequested?()
+        default: break   // not offered in this menu
         }
-        // Moving a pane between sessions and closing one are tmux structure;
-        // a plain shell has neither. Deferred like everything else here so the
-        // menu is built once and answers correctly at open time.
-        let structureSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self, self.isTmuxPane else {
-                completion([])
-                return
-            }
-            completion([
-                self.makeMoveToSessionMenu(),
-                UIAction(title: "Close Pane",
-                         image: UIImage(systemName: "xmark"),
-                         attributes: .destructive) { [weak self] _ in
-                    self?.onCloseRequested?()
-                },
-            ])
-        }
-        // What remains for a plain session is everything about the TERMINAL —
-        // find and paste. It used to get no menu at all (the button was
-        // hidden outright), which took search and paste with it.
-        return UIMenu(children: [
-            UIAction(title: "Find…",
-                     image: UIImage(systemName: "magnifyingglass")) { [weak self] _ in
-                self?.onFindRequested?(nil)
-            },
-            zoomSection,
-            UIAction(title: "Paste",
-                     image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
-                // Same path the bar's paste key used: the pane surface's
-                // clipboard paste.
-                self?.handleAccessoryKey(.paste)
-            },
-            splitSection,
-            copyModeSection,
-            structureSection,
-        ])
     }
 
     /// Pane menu → Move to Session: other sessions (from the parent's cached
@@ -1506,13 +1481,12 @@ extension TerminalContainerVC {
     }
 
     private func promptMoveToNewSession() {
-        let alert = UIAlertController(
-            title: "Move to New Session",
-            message: "The pane keeps running — it becomes a window of the new session.",
-            preferredStyle: .alert)
-        alert.addTextField { $0.placeholder = "Session name" }
+        let copy = SessionPromptCopy.movePaneToNewSession
+        let alert = UIAlertController(title: copy.title, message: copy.message,
+                                      preferredStyle: .alert)
+        alert.addTextField { $0.placeholder = copy.placeholder }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Move", style: .default) { [weak self, weak alert] _ in
+        alert.addAction(UIAlertAction(title: copy.confirm, style: .default) { [weak self, weak alert] _ in
             guard let name = alert?.textFields?.first?.text, !name.isEmpty else { return }
             self?.onMoveToSession?(name)
         })
@@ -1682,7 +1656,7 @@ final class PaneTitleBar: UIView {
     private func updateChrome() {
         // Done-unseen wins the band, otherwise the per-state color (nil for
         // idle → neutral band) — the shared chrome precedence.
-        let accent: UIColor? = status.accentHex.map { PaneState.uiColor(hex: $0) }
+        let accent: UIColor? = status.accentHex.map { UIColor(hex: $0) }
         backgroundColor = PaneChromeColors.titleBand(accent: accent, active: isActivePane)
         titleLabel.textColor = PaneChromeColors.ink(accent: accent, active: isActivePane)
         // Same ink as the title: a mode is information, not an alarm, and it must
@@ -1702,7 +1676,7 @@ final class PaneTitleBar: UIView {
 
     /// The leading glyph for the current state.
     private func updateStateVisuals() {
-        let color = PaneState.uiColor(hex: status.glyphHex)
+        let color = UIColor(hex: status.glyphHex)
         stateIcon.image = UIImage(systemName: status.symbol, withConfiguration:
             UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
         stateIcon.tintColor = color
@@ -1760,8 +1734,8 @@ final class SelectionHandle: UIView {
 
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
-        let accent = STTheme.isLight ? STTheme.ChromeLight.accent : STTheme.ChromeDark.accent
-        ctx.setFillColor(accent.cgColor)
+        // systemBlue resolves against this view's trait during draw.
+        ctx.setFillColor(UIColor.systemBlue.cgColor)
         let cx = bounds.midX
         let top = Self.inset
         ctx.fill(CGRect(x: cx - stemWidth / 2, y: top, width: stemWidth, height: cellHeight))

@@ -26,7 +26,7 @@ struct HostSessionsView: View {
 
     @StateObject private var lister: TmuxLister
 
-    @State private var newSessionName: String = "bento"
+    @State private var newSessionName: String = TmuxSessionNaming.defaultName
     @State private var showNameField = false
     @FocusState private var nameFieldFocused: Bool
     @State private var isStartingNew = false
@@ -310,8 +310,7 @@ struct HostSessionsView: View {
     // MARK: - Helpers
 
     private func createEmptySession() {
-        let name = newSessionName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
+        guard let name = TmuxSessionNaming.typed(newSessionName) else { return }
         startNewSession(.createOrAttach(name: name))
     }
 

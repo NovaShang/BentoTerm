@@ -17,28 +17,23 @@ import AppKit
 /// The named left button carries the session (its switcher today, its actions
 /// once sessions become native window tabs); the centre strip is the current
 /// session's tmux WINDOWS, labelled `index:name` the way `list-windows` labels
-/// them; New creates at every level (session / window / pane) plus the two
-/// non-tmux things; ⚙ opens Settings; ▤ toggles the preview dock.
+/// them; New creates at every level (session / window / pane); ⚙ opens
+/// Settings; ▤ toggles the preview dock.
 @MainActor
 final class TerminalToolbarController: NSObject, NSToolbarDelegate {
-    var onNewAgent: (() -> Void)?
-    var onNewTerminal: (() -> Void)?
-    var onNewPlainShell: (() -> Void)?
-    var onNewSSHHost: ((String) -> Void)?
-    /// Open a tiled tmux SESSION on an ssh host (as opposed to `onNewSSHHost`,
-    /// which is a bare `ssh <host>` in a plain tab).
-    var onNewRemoteTmuxHost: ((String) -> Void)?
+    /// New ⌄ → New Session…: the launcher, where every kind of session
+    /// (agent, empty, plain shell, ssh host, a remembered launch) is offered.
+    var onNewSession: (() -> Void)?
     var onOpenSettings: (() -> Void)?
-    var onCloseWindow: (() -> Void)?
     var onRenameSession: (() -> Void)?
     var onDetach: (() -> Void)?
     var onKillSession: (() -> Void)?
-    var onSetSizingMode: ((TerminalSizingMode) -> Void)?
-    /// The active session's current sizing policy (drives the checkmark).
+    /// Session ⌄ → Release Size: back to tmux's default policy.
+    var onReleaseSize: (() -> Void)?
+    /// The active session's current sizing policy (whether Release shows).
     var sizingMode: TerminalSizingMode = .tracking
-    /// Who owns the size under `.thisDevice`, and whether that's us — the menu
-    /// has to name the other device, since this window can't reflow the session
-    /// until that device hands it over (or leaves).
+    /// Who owns the size under `.thisDevice`, and whether that's us — Release
+    /// names the device it would take the size away from.
     var sizingOwner: TmuxSizingOwner?
     var sizingOwnerIsMe = false
     /// The take-over banner's state, or nil when this window's grid IS the
@@ -824,54 +819,34 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             return menu
         }
         add(menu, "Rename Session…", #selector(renameAction))
-        menu.addItem(sizingMenuItem())
+        // Only when something has fixed the size: taking it over is the
+        // banner's job, and the default needs no row.
+        if sizingMode.offersRelease {
+            let release = NSMenuItem(title: TerminalSizingMode.releaseTitle,
+                                     action: #selector(releaseSizeAction), keyEquivalent: "")
+            release.target = self
+            release.image = NSImage(systemSymbolName: TerminalSizingMode.releaseSymbol,
+                                    accessibilityDescription: TerminalSizingMode.releaseTitle)
+            release.toolTip = sizingMode.releaseNote(owner: sizingOwner, ownerIsMe: sizingOwnerIsMe)
+            menu.addItem(release)
+        }
         menu.addItem(.separator())
         add(menu, "Detach (keep running)", #selector(detachAction))  // unload; session survives
         // Destructive, and one row away from Detach — which is its harmless
         // twin — so a separator keeps them from being adjacent targets.
         menu.addItem(.separator())
         add(menu, "Kill Session", #selector(killAction))
-        menu.addItem(.separator())
-        add(menu, "Close Window", #selector(closeWindowAction))
+        // No "Close Window" here: next to ⇧⌘W (which closes the MAC window and
+        // leaves the session running) a row that killed the tmux window read
+        // as the same thing. Killing a window lives on the strip and the
+        // sidebar, beside the window it kills.
+        //
         // No window SWITCH list here any more: windows own the centre strip, so
         // duplicating them in this menu would give the same thing two homes and
         // leave the user unsure which one is authoritative.
         return menu
     }
 
-
-    /// Who governs the window size — a checked pair, not a "do it now" button.
-    /// The old single "Fit Session to This Window" was a one-shot that tmux
-    /// undid as soon as any other client was used (see `TerminalSizingMode`).
-    private func sizingMenuItem() -> NSMenuItem {
-        let root = NSMenuItem(title: "Session Size", action: nil, keyEquivalent: "")
-        root.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right",
-                             accessibilityDescription: "Session Size")
-        let sub = NSMenu()
-        for mode in TerminalSizingMode.allCases {
-            let it = NSMenuItem(title: mode.title, action: #selector(sizingAction(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = mode.rawValue
-            it.state = (mode == sizingMode) ? .on : .off
-            it.image = NSImage(systemSymbolName: mode.symbol, accessibilityDescription: mode.title)
-            sub.addItem(it)
-        }
-        sub.addItem(.separator())
-        // Under `manual` the interesting fact is WHO owns the size, not which
-        // mode is checked — a device that can't reflow the session needs to be
-        // told which other device to go touch.
-        let noteText: String
-        if sizingMode == .thisDevice, let owner = sizingOwner, !sizingOwnerIsMe {
-            noteText = "Sized by \(owner.displayName). Choose “\(TerminalSizingMode.thisDevice.title)” to take over."
-        } else {
-            noteText = sizingMode.explanation
-        }
-        let note = NSMenuItem(title: noteText, action: nil, keyEquivalent: "")
-        note.isEnabled = false
-        sub.addItem(note)
-        root.submenu = sub
-        return root
-    }
 
     /// Put the banner's copy on the button and add or drop its toolbar item.
     /// The button carries WHY the canvas looks wrong; the tooltip carries the
@@ -922,129 +897,65 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         }
     }
 
-    @objc private func sizingAction(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let mode = TerminalSizingMode(rawValue: raw) else { return }
-        onSetSizingMode?(mode)
-    }
-
-    /// Everything you can create, grouped by which level of tmux it lands on —
-    /// session, then window, then pane — with the two non-tmux things last.
+    /// The quick creates, by tmux level: a session (via the launcher), a
+    /// window, a pane, and the agents you already had open.
     ///
-    /// The old list mixed levels and named them by adjective: "New Multi Pane
-    /// Session" and "New Persistent Session" are both just tmux sessions
-    /// ("multi pane" is a layout, not a kind; EVERY tmux session is
-    /// persistent), and neither said anything about windows or panes, which
-    /// you could only create from elsewhere entirely.
-    /// Everything you can create, FLAT — creation is frequent, and a submenu
-    /// in front of a fixed pair of choices charges a hover for every use.
+    /// The kinds of SESSION — agent, empty, a shell without tmux, an ssh host —
+    /// live on the launcher page and nowhere else. This menu used to repeat all
+    /// of them plus two "…at a Path…" rows, which made it the longest menu in
+    /// the app for the rarest choices. Picking a folder and command stays where
+    /// it's in context: the pane menu (splits) and the Focus sidebar (windows).
     ///
-    /// This follows what terminals with the same problem do: iTerm2's Shell
-    /// menu and Terminal.app both keep New Window / New Tab / the splits at the
-    /// top level and put only the open-ended list (profiles) behind a submenu;
-    /// VS Code's terminal `+` acts immediately and hides the profile list
-    /// behind a chevron. Fixed choices stay flat; unbounded lists nest — which
-    /// is why SSH hosts are the one submenu here.
-    ///
-    /// Every row is a complete command — "New …" and the level it creates at.
-    /// Leaning on the button's own label to supply the verb saves a word and
-    /// costs the row its ability to be read on its own, which is why every
-    /// macOS File menu spells out New Window / New Tab / New Folder.
-    ///
-    /// The ICON says the level and nothing else, and only the FIRST row of a
-    /// level carries it — it marks where a group starts, so the column reads as
-    /// three groups reinforcing the separators while the words carry what
-    /// differs. Eight unrelated glyphs
-    /// (sparkles, a history clock, two different rectangle-plus variants…) made
-    /// the column noise: nothing to group by, and each symbol asking to be
-    /// decoded on its own. `rectangle.stack` = a session holding windows,
-    /// `macwindow` = one window, `square.split.2x1` = a split, and the two
-    /// non-tmux rows get literal ones.
-    ///
-    /// The level has to be spelled out too. A
-    /// row reading just "Window" is read as a Mac window — that is what the
-    /// word means everywhere else in the OS — when it means a tmux window; the
-    /// menu bar already says "New tmux Window", and this now matches. "Pane"
-    /// alone had the same problem, so it says the verb people already use for
-    /// it: Split Pane.
-    ///
-    /// Naming each row uniquely is also what killed the earlier repetition: a
-    /// previous version listed "Duplicate Current" and "Path & Command…" twice,
-    /// under Window and under Pane, told apart only by a disabled header — the
-    /// weakest thing on screen. Separators group; nothing depends on grey text.
+    /// The level is spelled out in each title ("New tmux Window", "Split
+    /// Pane"): a bare "Window" reads as a Mac window everywhere else in the OS.
     @objc private func newTapped() {
         let menu = NSMenu()
 
-        // Titles and tips come from `LaunchAction`, which is also what the
-        // launcher page, the Dock menu and the Shell menu render — one concept,
-        // one name, four surfaces. This row used to read "New Session with
-        // Agent…" while the launcher's said "New Agent Session…"; the launcher's
-        // wording won because it makes the pair parallel ("New _ Session"), so
-        // the two rows differ by exactly the word that differs.
+        // One row for every kind of session: the launcher already lists them
+        // (agent, empty, plain shell, ssh hosts, remembered launches), so
+        // repeating them here was a second, longer copy of that page.
         menu.addItem(plainItem(
-            symbol: LaunchAction.agentSession.systemImage,
-            title: LaunchAction.agentSession.title,
-            tip: LaunchAction.agentSession.detail,
-            action: #selector(newAgentAction)))
-        menu.addItem(plainItem(
-            symbol: nil, title: LaunchAction.emptySession.title,
-            tip: LaunchAction.emptySession.detail,
-            action: #selector(newTerminalAction)))
+            symbol: "plus.rectangle", title: "New Session…",
+            tip: "Choose what to open: an agent, an empty session, a shell or an ssh host.",
+            action: #selector(newSessionAction)))
 
         // The window and pane levels need a session to create INSIDE. On a
         // launcher there isn't one, and these are dropped rather than disabled:
         // a menu is opened, read and closed, so its width and its rows are not
         // geometry anyone is relying on staying put — unlike the toolbar behind
         // it, where four greyed rows would just be a longer list to read past.
-        if hasSession {
-            menu.addItem(.separator())
-            menu.addItem(plainItem(
-                symbol: "macwindow", title: "New tmux Window",
-                tip: "A tmux window in this session, with the current pane's folder and command.",
-                action: #selector(newWindowDuplicateAction)))
-            menu.addItem(plainItem(
-                symbol: nil, title: "New tmux Window at a Path…",
-                tip: "A tmux window, choosing the folder and what to run in it.",
-                action: #selector(newWindowPathCommandAction)))
-
-            menu.addItem(.separator())
-            menu.addItem(plainItem(
-                symbol: "square.split.2x1", title: "New Pane",
-                tip: "Split the current pane, inheriting its folder and command.",
-                action: #selector(newPaneDuplicateAction)))
-            menu.addItem(plainItem(
-                symbol: nil, title: "New Pane at a Path…",
-                tip: "Split off a pane, choosing the folder and what to run in it.",
-                action: #selector(newPanePathCommandAction)))
-
-            // The middle ground between those two: not "whatever this pane is
-            // running" and not "type it all out", but the agent you already had
-            // open in that repo. Rows carry their record and are dispatched
-            // through the responder chain like every other pane action here.
-            let recents = GhosttyTiledPaneHost.recentAgentItems(
-                host: launchHost, target: self, action: #selector(splitRecentAction(_:)))
-            if !recents.isEmpty {
+        // Rows from the shared catalog (PaneMenuLayout.macNewMenuSessionRows).
+        // Creation goes through the responder chain, the same route the menu
+        // bar and the pane menu use, so it lands on the pane host of whichever
+        // tab is active.
+        for row in PaneMenuLayout.macNewMenuSessionRows(hasSession: hasSession) {
+            switch row {
+            case .command(let command):
+                menu.addItem(plainItem(
+                    symbol: command.symbol(on: .macNewMenu),
+                    title: command.title(on: .macNewMenu),
+                    tip: command.tip(on: .macNewMenu) ?? "",
+                    action: #selector(paneCommandAction(_:))))
+                menu.items.last?.representedObject = command.rawValue
+            case .separator:
                 menu.addItem(.separator())
-                let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
-                header.isEnabled = false
-                menu.addItem(header)
-                recents.forEach { menu.addItem($0) }
+            case .recentAgents:
+                // The middle ground between "whatever this pane is running"
+                // and "type it all out": the agent you already had open in that
+                // repo. Rows carry their record and are dispatched through the
+                // responder chain like every other pane action here.
+                let recents = GhosttyTiledPaneHost.recentAgentItems(
+                    host: launchHost, target: self, action: #selector(splitRecentAction(_:)))
+                if !recents.isEmpty {
+                    menu.addItem(.separator())
+                    let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
+                    header.isEnabled = false
+                    menu.addItem(header)
+                    recents.forEach { menu.addItem($0) }
+                }
+            case .layouts, .moveToSession, .paste:
+                break   // not New-menu rows
             }
-        }
-
-        menu.addItem(.separator())
-        menu.addItem(plainItem(
-            symbol: LaunchAction.plainTerminal.systemImage,
-            title: LaunchAction.plainTerminal.title,
-            tip: LaunchAction.plainTerminal.detail,
-            action: #selector(newPlainShellAction)))
-        // The one unbounded list — however many hosts ~/.ssh/config has. Built
-        // by `SSHHostMenu` rather than here, because the launcher page's `SSH`
-        // row opens the same two rows and they must not drift.
-        for item in SSHHostMenu.items(target: self,
-                                      connect: #selector(newSSHHostAction(_:)),
-                                      remoteTmux: #selector(newRemoteTmuxHostAction(_:))) {
-            menu.addItem(item)
         }
 
         pop(menu, from: newButton)
@@ -1054,11 +965,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     private func plainItem(symbol: String?, title: String, tip: String, action: Selector?) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
-        // `nil` on a level's SECOND row: the icon marks where a group starts,
-        // and repeating it on the row below says nothing the eye didn't already
-        // get. AppKit reserves the image column for the whole menu as soon as
-        // any item has one, so the title stays aligned and the blank reads as
-        // "same as above".
         if let symbol {
             item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         }
@@ -1085,32 +991,25 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     // MARK: - Actions
 
-    @objc private func newAgentAction() { onNewAgent?() }
-    @objc private func newTerminalAction() { onNewTerminal?() }
-    @objc private func closeWindowAction() { onCloseWindow?() }
+    @objc private func newSessionAction() { onNewSession?() }
     @objc private func closeTabAction() { onCloseTab?() }
-    @objc private func newPlainShellAction() { onNewPlainShell?() }
-    // Window / pane creation goes through the responder chain, the same route
-    // the menu bar and the pane menu use, so it always lands on the pane host
-    // of whichever tab is active.
-    @objc private func newWindowDuplicateAction() { BentoPaneAction.dispatch(BentoPaneAction.newWindowDuplicate) }
-    @objc private func newWindowPathCommandAction() { BentoPaneAction.dispatch(BentoPaneAction.newWindowPathCommand) }
-    @objc private func newPaneDuplicateAction() { BentoPaneAction.dispatch(BentoPaneAction.splitDuplicate) }
-    @objc private func newPanePathCommandAction() { BentoPaneAction.dispatch(BentoPaneAction.splitPathCommand) }
+    /// A catalog row from the New menu, dispatched through the responder chain
+    /// to the active tab's pane host.
+    @objc private func paneCommandAction(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let command = PaneCommand(rawValue: raw),
+              let action = GhosttyTiledPaneHost.paneMenuSelector(command) else { return }
+        BentoPaneAction.dispatch(action)
+    }
     /// Forwarded with the menu item as the sender, because the record it
     /// carries IS the argument.
     @objc private func splitRecentAction(_ sender: Any?) {
         BentoPaneAction.dispatch(BentoPaneAction.splitRecent, from: sender)
     }
-    @objc private func newSSHHostAction(_ sender: NSMenuItem) {
-        if let host = sender.representedObject as? String { onNewSSHHost?(host) }
-    }
-    @objc private func newRemoteTmuxHostAction(_ sender: NSMenuItem) {
-        if let host = sender.representedObject as? String { onNewRemoteTmuxHost?(host) }
-    }
     @objc private func settingsAction() { onOpenSettings?() }
     @objc private func renameAction() { onRenameSession?() }
     @objc private func detachAction() { onDetach?() }
+    @objc private func releaseSizeAction() { onReleaseSize?() }
     @objc private func killAction() { onKillSession?() }
 }
 
@@ -1118,12 +1017,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
 /// The two ways to reach an ssh host, and the host list under each.
 ///
-/// Two surfaces offer them: the toolbar's `New ⌄` menu and the launcher page's
-/// `SSH` row. There is no third vocabulary — the launcher opens *this*, so the
-/// titles, the tooltips, the order and the "no hosts" hint are the same object,
-/// not the same wording maintained twice. `LaunchAction` already does this for
-/// the three creation verbs (docs/launcher-design.md §5, "one concept one
-/// name"); this is the same rule applied to the one list it did not cover.
+/// The launcher page's `SSH` row pops this. (The toolbar's `New ⌄` used to
+/// carry the same two rows; it now sends you to the launcher instead.)
 ///
 /// Hosts are re-read from `~/.ssh/config` on every open, so edits to the file
 /// show up without a relaunch, and the read is a single small local file — the
@@ -1142,7 +1037,7 @@ enum SSHHostMenu {
 
     /// The two rows, each with a host submenu. `representedObject` on the leaf
     /// items is the host alias.
-    static func items(target: AnyObject, connect: Selector, remoteTmux: Selector) -> [NSMenuItem] {
+    private static func items(target: AnyObject, connect: Selector, remoteTmux: Selector) -> [NSMenuItem] {
         let hosts = SSHConfigHosts.hosts()
         let ssh = row(symbol: "network", title: connectTitle, tip: connectTip)
         ssh.submenu = hostSubmenu(hosts: hosts, target: target, action: connect)

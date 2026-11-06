@@ -210,19 +210,10 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         toolbar.hasSession = false
         toolbar.hostWindow = window
         toolbar.setSessionTitle("No Session")
-        // Everything New ⌄ offers here fills THIS window, exactly as the page's
-        // own create rows do. A New menu that opened a second window while the
-        // first one sat behind it still asking would be the bug this whole
-        // window exists to remove.
-        toolbar.onNewAgent = { OpenTargetProvider.shared.perform(.agentSession) }
-        toolbar.onNewTerminal = { [weak self] in
-            self?.fill { OpenTargetProvider.shared.perform(.emptySession, into: $0) }
-        }
-        toolbar.onNewPlainShell = { [weak self] in
-            self?.fill { OpenTargetProvider.shared.perform(.plainTerminal, into: $0) }
-        }
-        toolbar.onNewSSHHost = { [weak self] host in self?.openSSH(host) }
-        toolbar.onNewRemoteTmuxHost = { [weak self] host in self?.openRemoteTmux(host) }
+        // New ⌄ → New Session… is this page. Opening a second launcher while
+        // this one sat behind it still asking would be the bug this whole
+        // window exists to remove, so it just comes forward.
+        toolbar.onNewSession = { [weak self] in self?.window.makeKeyAndOrderFront(nil) }
         toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
         // No `customSearchView`: the search slot keeps the button a session
         // window has, meaning the same thing it means there. See

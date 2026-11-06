@@ -56,6 +56,18 @@ public enum WindowDisplayStatus: Equatable, Sendable {
         case .doneUnseen: return "doneUnseen"
         }
     }
+
+    /// A window row or tab says the same four things a pane's chrome does, so
+    /// every window surface reads glyph and color from the pane table rather
+    /// than keeping a parallel one.
+    public var chrome: PaneChrome.Status {
+        switch self {
+        case .working:    return .working
+        case .awaiting:   return .awaitingInput
+        case .doneUnseen: return .doneUnseen
+        case .idle:       return .idle
+        }
+    }
 }
 
 /// Where a cross-session move lands in the target session. `.auto` derives
@@ -161,6 +173,18 @@ public extension TerminalViewModel {
         return true
     }
 
+    /// The mode switch a control asks for: leave a zoomed pane first, so the
+    /// transformed session isn't hidden behind it, then `setMode`. Picking the
+    /// mode the session is already in does nothing. Returns false when
+    /// `setMode` declined — flattening a mixed external structure — so the
+    /// caller can confirm and call `setMode(mode, force: true)`.
+    @discardableResult
+    func requestMode(_ mode: TmuxSessionMode) async -> Bool {
+        guard mode != sessionMode else { return true }
+        if let zoomed = zoomedPaneID { toggleZoom(zoomed) }
+        return await setMode(mode)
+    }
+
     // MARK: - Grouping & naming
 
     /// Session panes grouped by window, in `list-panes -s` order (window
@@ -239,23 +263,25 @@ public extension TerminalViewModel {
         return (sawWorking ? .working : nil, sawDone)
     }
 
-    /// Aggregate agent state for a window's row/tab, highest priority first:
-    /// any pane awaiting input → awaiting; else any working → working; else
-    /// idle.
-    func windowState(_ windowID: TmuxWindowID) -> PaneState {
-        aggregateWindowStatus(windowID).state ?? .idle
-    }
-
-    /// A window's display status, richest first — the same aggregate as
-    /// `windowState` PLUS the blue "done, unseen" layer, which isn't a
-    /// PaneState (an agent finished its turn in a window you weren't looking
-    /// at). Priority: awaiting → working → done → idle.
+    /// A window's display status for its row/tab: the panes' aggregate agent
+    /// state PLUS the green "done, unseen" layer, which isn't a PaneState (an
+    /// agent finished its turn in a window you weren't looking at). Priority:
+    /// awaiting → working → done → idle.
     func windowStatus(_ windowID: TmuxWindowID) -> WindowDisplayStatus {
         let aggregate = aggregateWindowStatus(windowID)
         switch aggregate.state {
         case .awaitingInput?: return .awaiting
         case .working?: return .working
         default: return aggregate.doneUnseen ? .doneUnseen : .idle
+        }
+    }
+
+    /// Panes across the whole session waiting on the user — the count a
+    /// session row and the Live Activity badge.
+    var awaitingPaneCount: Int {
+        paneViewModels.reduce(0) { count, pane in
+            if case .awaitingInput = pane.paneState { return count + 1 }
+            return count
         }
     }
 
@@ -984,6 +1010,27 @@ public extension TerminalViewModel {
                 .breakPane(source: paneID, targetSession: $0)) })
     }
 
+    /// `movePane` for a UI that can ask: an unsettled target calls
+    /// `chooseLanding` with the session name and the move runs again with the
+    /// answer. A nil answer (the user cancelled) moves nothing and returns
+    /// `.needsLandingChoice`.
+    @discardableResult
+    func movePane(_ paneID: TmuxPaneID, toSession target: String,
+                  chooseLanding: @MainActor (String) async -> MoveLanding?) async -> MoveResult {
+        await Self.move(toSession: target, chooseLanding: chooseLanding) { landing in
+            await self.movePane(paneID, toSession: target, landing: landing)
+        }
+    }
+
+    /// `moveWindow` for a UI that can ask — see `movePane(_:toSession:chooseLanding:)`.
+    @discardableResult
+    func moveWindow(_ windowID: TmuxWindowID, toSession target: String,
+                    chooseLanding: @MainActor (String) async -> MoveLanding?) async -> MoveResult {
+        await Self.move(toSession: target, chooseLanding: chooseLanding) { landing in
+            await self.moveWindow(windowID, toSession: target, landing: landing)
+        }
+    }
+
     /// Move a whole window into another session: the Focus/List window row's
     /// counterpart of `movePane`, with the same landing rules — a Focus
     /// window IS one pane, so a Parallel target absorbs that pane into its
@@ -1151,5 +1198,19 @@ public extension TerminalViewModel {
             value = String(value.dropFirst().dropLast())
         }
         return value.isEmpty ? nil : value
+    }
+}
+
+extension TerminalViewModel {
+    /// The ask-and-retry every move UI used to spell out for itself: try with
+    /// `.auto`, and only if the target is unsettled, ask once and try again
+    /// with the explicit landing.
+    static func move(toSession target: String,
+                     chooseLanding: @MainActor (String) async -> MoveLanding?,
+                     attempt: (MoveLanding) async -> MoveResult) async -> MoveResult {
+        let first = await attempt(.auto)
+        guard first == .needsLandingChoice,
+              let landing = await chooseLanding(target) else { return first }
+        return await attempt(landing)
     }
 }

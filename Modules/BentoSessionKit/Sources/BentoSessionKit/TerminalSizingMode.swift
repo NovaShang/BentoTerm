@@ -62,17 +62,41 @@ public enum TerminalSizingMode: String, Sendable, CaseIterable {
         }
     }
 
-    /// One line of consequence, shown under the choices. Each says what the
-    /// OTHER devices experience, since that is the part a per-device menu
-    /// cannot show you.
-    public var explanation: String {
+    /// The device that governs this session's size when it is NOT this one.
+    /// nil unless `.thisDevice` is owned elsewhere.
+    public func foreignOwner(_ owner: TmuxSizingOwner?, ownerIsMe: Bool) -> TmuxSizingOwner? {
+        guard self == .thisDevice, !ownerIsMe else { return nil }
+        return owner
+    }
+
+    // MARK: - Release
+
+    /// The one sizing action the menus offer. Taking the size over is the
+    /// banner's job (it appears exactly when this device's grid isn't the
+    /// session's); handing it back is this. Picking among the three policies
+    /// was a menu of tmux internals for a question users only ever asked as
+    /// "make it fit me" or "stop pinning it".
+    public static let releaseTitle = "Release Size"
+    public static let releaseSymbol = "pin.slash"
+
+    /// Whether there is a size to hand back — anything but the default
+    /// (`latest`), whichever device set it. A `smallest` session counts: with
+    /// the policy menu gone, Release is the only way out of it.
+    public var offersRelease: Bool { self != .tracking }
+
+    /// What Release would undo, for the row's subtitle. nil when there is
+    /// nothing to release.
+    public func releaseNote(owner: TmuxSizingOwner?, ownerIsMe: Bool) -> String? {
         switch self {
         case .tracking:
-            return "Whichever device you last used sets the size."
+            return nil
         case .smallest:
-            return "Sized to the smallest attached device, so nothing is clipped."
+            return "Sized to the smallest device"
         case .thisDevice:
-            return "This device sets the size; others can't change it."
+            if let foreign = foreignOwner(owner, ownerIsMe: ownerIsMe) {
+                return "Sized by \(foreign.displayName)"
+            }
+            return ownerIsMe ? "Sized by this device" : "Size is fixed"
         }
     }
 

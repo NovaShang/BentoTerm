@@ -1,13 +1,14 @@
 import UIKit
 import SwiftUI
-import BentoAgentKit
 import BentoSessionKit
 import BentoFoundationKit
 
 // MARK: - Design Tokens
 
-/// Centralized design tokens matching the Bento design prototype.
-/// iOS system color palette + terminal dark/light themes.
+/// The terminal-side design tokens: the pre-report terminal background and the
+/// terminal font the chrome beside it should match. Pane state colors live in
+/// the shared `PaneState` palette / `PaneChromeColors`; app chrome uses the
+/// system semantic colors (`BentoBrand`).
 enum STTheme {
 
     // MARK: - Terminal Palettes
@@ -23,50 +24,6 @@ enum STTheme {
         static let bg = UIColor.white
     }
 
-    // MARK: - Chrome Palettes (iOS System Colors)
-
-    enum ChromeDark {
-        static let app        = UIColor.black
-        static let surface    = UIColor(hex: 0x1C1C1E)
-        static let surface2   = UIColor(hex: 0x2C2C2E)
-        static let grouped    = UIColor.black
-        static let groupedSec = UIColor(hex: 0x1C1C1E)
-        static let line       = UIColor(red: 84/255, green: 84/255, blue: 88/255, alpha: 0.65)
-        static let lineO      = UIColor(red: 84/255, green: 84/255, blue: 88/255, alpha: 0.35)
-        static let ink        = UIColor.white
-        static let inkDim     = UIColor(red: 235/255, green: 235/255, blue: 245/255, alpha: 0.6)
-        static let inkMute    = UIColor(red: 235/255, green: 235/255, blue: 245/255, alpha: 0.3)
-        static let accent     = UIColor(hex: 0x0A84FF)
-        static let amber      = UIColor(hex: 0xFF9F0A)
-        static let green      = UIColor(hex: 0x30D158)
-        static let red        = UIColor(hex: 0xFF453A)
-    }
-
-    enum ChromeLight {
-        static let app        = UIColor(hex: 0xF2F2F7)
-        static let surface    = UIColor.white
-        static let surface2   = UIColor(hex: 0xF2F2F7)
-        static let grouped    = UIColor(hex: 0xF2F2F7)
-        static let groupedSec = UIColor.white
-        static let line       = UIColor(red: 60/255, green: 60/255, blue: 67/255, alpha: 0.29)
-        static let lineO      = UIColor(red: 60/255, green: 60/255, blue: 67/255, alpha: 0.12)
-        static let ink        = UIColor.black
-        static let inkDim     = UIColor(red: 60/255, green: 60/255, blue: 67/255, alpha: 0.6)
-        static let inkMute    = UIColor(red: 60/255, green: 60/255, blue: 67/255, alpha: 0.3)
-        static let accent     = UIColor(hex: 0x007AFF)
-        static let amber      = UIColor(hex: 0xFF9500)
-        static let green      = UIColor(hex: 0x34C759)
-        static let red        = UIColor(hex: 0xFF3B30)
-    }
-
-    // MARK: - Pane State Visuals
-
-    /// State dot colors (consistent across light/dark). `dotWorking` is sourced
-    /// from the shared `PaneState` palette so the green↔blue swap stays global.
-    static let dotWorking  = PaneState.uiColor(hex: PaneState.workingHex)
-    static let dotIdle     = UIColor.systemGray
-    static let dotAwaiting = UIColor(hex: 0xFF9F0A)
-
     // MARK: - Appearance-Adaptive Helpers
 
     /// Whether the current trait collection is light mode
@@ -80,54 +37,7 @@ enum STTheme {
         isLight ? TermLight.bg : TermDark.bg
     }
 
-    // MARK: - Background-fused chrome
-    //
-    // Status chrome that emerges from the terminal's REAL background instead of
-    // sitting on top as an independent colored strip. `bg` is the engine's
-    // reported background (initial resolution / config reload / OSC 11), so the
-    // band is always harmonious with whatever theme or program is running.
-
-    // (The title BAND used to be fused from `bg` here too. 2026-08-07 it moved to
-    // the shared `PaneChromeColors`, which is the macOS treatment: an
-    // appearance-driven strip, not one cut from the terminal's own color.)
-
-    /// The pane surround / reserved-band color: the terminal bg FUSED with the
-    /// pane's running state — the old per-state pane background (bgWorking /
-    /// bgAwait), now derived from the live terminal bg instead of a hardcoded
-    /// hex. Idle = the plain bg (full fusion). Done-unseen (green ✓) has no
-    /// PaneState case, so it layers on like the title bar does.
-    ///
-    /// The overlay is applied with the SAME alpha the surface wash uses
-    /// (`PaneState.tintAlpha`; done-unseen 0.10 as the macOS wash) so the band
-    /// and an empty washed terminal read as ONE color — not a darker cousin.
-    static func fusedBackground(bg: UIColor, state: PaneState, doneUnseen: Bool) -> UIColor {
-        if doneUnseen {
-            return bg.mixed(with: PaneState.uiColor(hex: PaneState.doneUnseenHex), 0.10)
-        }
-        let alpha = state.tintAlpha   // 0 idle / 0.05 working / 0.12 awaiting
-        guard alpha > 0 else { return bg }
-        return bg.mixed(with: state.uiColor, alpha)
-    }
-
-    /// Dot color for pane state
-    static func dotColor(for state: PaneState) -> UIColor {
-        switch state {
-        case .working:       return dotWorking
-        case .idle:          return dotIdle
-        case .awaitingInput: return dotAwaiting
-        }
-    }
-
-    // MARK: - Glass Pill Style
-
-    /// Glass pill background for dark chrome
-    static let glassDark = UIColor(red: 120/255, green: 120/255, blue: 128/255, alpha: 0.32)
-
     // MARK: - Fonts
-
-    static let mono = UIFont.monospacedSystemFont(ofSize: 11, weight: .medium)
-    static let sans = UIFont.systemFont(ofSize: 14, weight: .regular)
-    static let display = UIFont.systemFont(ofSize: 34, weight: .bold)
 
     /// Terminal font size — a CGFloat view onto `ThemeStore.fontSize`, which
     /// owns the stored value, the post-unlock cache, and the fallback.
@@ -142,31 +52,27 @@ enum STTheme {
     /// User-selected terminal font for the CHROME beside the terminal, matching
     /// what the surface renders inside it.
     ///
-    /// The stored value is a real family name now (the picker enumerates every
-    /// monospaced family on the device); the legacy token cases stay because an
-    /// install that hasn't opened the Appearance panel since the change still
-    /// holds one, and they resolve to the same faces they always did. Anything
-    /// else is passed to `UIFont(name:)` as a family, with the system monospace
-    /// as the last resort — the same shape as
-    /// `ThemeStore.ghosttyFontFamily`, so the chrome and the terminal can't
-    /// disagree about which font was picked.
+    /// The family comes from `ThemeStore.ghosttyFontFamily` — the very answer
+    /// the engine is configured with — so the chrome and the terminal can't
+    /// disagree about which font was picked. (This used to keep its own token
+    /// table, which defaulted to Maple while the engine defaulted to its
+    /// built-in face, and didn't know "jetbrains".) nil means the engine's
+    /// built-in default, which isn't a font UIKit can load, so the system
+    /// monospace stands in.
     static var terminalFont: UIFont {
         let size = terminalFontSize
-        let family = UserDefaults.standard.string(forKey: "terminal_font_family") ?? "Maple Mono NF CN"
+        let token = ThemeStore.storedFontFamilyToken
+        guard let family = ThemeStore.ghosttyFontFamily(forToken: token) else {
+            return .monospacedSystemFont(
+                ofSize: size, weight: token == "system-medium" ? .medium : .regular)
+        }
         switch family {
-        case "maple-nf-cn", "Maple Mono NF CN":
+        case "Maple Mono NF CN":
             return UIFont(name: "MapleMono-NF-CN-Regular", size: size)
-                ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        case "menlo":
-            return UIFont(name: "Menlo-Regular", size: size)
-                ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        case "courier":
+                ?? namedFont(family: family, size: size)
+        case "Courier New":
             return UIFont(name: "CourierNewPSMT", size: size)
-                ?? UIFont(name: "Courier", size: size)
-                ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        case "sf-mono", "system", "system-medium":
-            return UIFont.monospacedSystemFont(
-                ofSize: size, weight: family == "system-medium" ? .medium : .regular)
+                ?? namedFont(family: family, size: size)
         default:
             return namedFont(family: family, size: size)
         }
@@ -190,44 +96,15 @@ enum STTheme {
     }
 }
 
-// MARK: - UIColor Hex Initializer
+// MARK: - UIColor helpers
 
 extension UIColor {
-    convenience init(hex: UInt32, alpha: CGFloat = 1.0) {
-        self.init(
-            red: CGFloat((hex >> 16) & 0xFF) / 255,
-            green: CGFloat((hex >> 8) & 0xFF) / 255,
-            blue: CGFloat(hex & 0xFF) / 255,
-            alpha: alpha
-        )
-    }
-
     /// A trait-reactive color that resolves to `light` or `dark` based on the
     /// rendering view's interface style. Bridged into SwiftUI as `Color(_:)`,
     /// these flip automatically when the app's appearance changes — no manual
     /// re-theming of SwiftUI chrome needed.
     static func bentoDynamic(light: UIColor, dark: UIColor) -> UIColor {
         UIColor { $0.userInterfaceStyle == .dark ? dark : light }
-    }
-
-    /// Linear blend toward `other` by `t` (0…1), used to lighten the accent into
-    /// readable ink over the dark band.
-    func mixed(with other: UIColor, _ t: CGFloat) -> UIColor {
-        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
-        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
-        getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
-        other.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
-        return UIColor(red: r1 + (r2 - r1) * t, green: g1 + (g2 - g1) * t,
-                       blue: b1 + (b2 - b1) * t, alpha: a1 + (a2 - a1) * t)
-    }
-
-    /// Relative luminance (Rec. 709), 0…1. Used to pick ink / band treatment
-    /// from a background color the UI trait can't describe — a TUI or shell may
-    /// repaint the terminal bg at runtime (OSC 11), so `isLight` would be wrong.
-    var luminance: CGFloat {
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        getRed(&r, green: &g, blue: &b, alpha: &a)
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
     }
 }
 
@@ -396,27 +273,4 @@ extension Color {
     static let bentoVeg        = Color(BentoBrand.veg)
     static let bentoVegDeep    = Color(BentoBrand.vegDeep)
     static let bentoRed        = Color(BentoBrand.red)
-}
-
-// MARK: - SwiftUI Color Bridges
-//
-// Trait-reactive: each bridges the ChromeLight/ChromeDark (or TermLight/TermDark)
-// pair through a dynamic UIColor so SwiftUI views recolor on an appearance flip.
-
-private func stDyn(_ light: UIColor, _ dark: UIColor) -> Color {
-    Color(UIColor.bentoDynamic(light: light, dark: dark))
-}
-
-extension Color {
-    static let stAccent   = stDyn(STTheme.ChromeLight.accent,   STTheme.ChromeDark.accent)
-    static let stAmber    = stDyn(STTheme.ChromeLight.amber,    STTheme.ChromeDark.amber)
-    static let stGreen    = stDyn(STTheme.ChromeLight.green,    STTheme.ChromeDark.green)
-    static let stRed      = stDyn(STTheme.ChromeLight.red,      STTheme.ChromeDark.red)
-    static let stInk      = stDyn(STTheme.ChromeLight.ink,      STTheme.ChromeDark.ink)
-    static let stInkDim   = stDyn(STTheme.ChromeLight.inkDim,   STTheme.ChromeDark.inkDim)
-    static let stInkMute  = stDyn(STTheme.ChromeLight.inkMute,  STTheme.ChromeDark.inkMute)
-    static let stSurface  = stDyn(STTheme.ChromeLight.surface,  STTheme.ChromeDark.surface)
-    static let stSurface2 = stDyn(STTheme.ChromeLight.surface2, STTheme.ChromeDark.surface2)
-    static let stLine     = stDyn(STTheme.ChromeLight.line,     STTheme.ChromeDark.line)
-    static let stLineO    = stDyn(STTheme.ChromeLight.lineO,    STTheme.ChromeDark.lineO)
 }

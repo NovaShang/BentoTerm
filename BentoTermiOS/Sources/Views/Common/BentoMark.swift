@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import BentoFoundationKit
 
 // MARK: - Shared form header
 
@@ -164,11 +165,5 @@ struct BentoMark: View {
             .fill(Color(red: 138/255, green: 147/255, blue: 166/255).opacity(0.22))
             .frame(width: size * w, height: size * 0.0254)
             .offset(x: size * x, y: size * y)
-    }
-}
-
-private extension Color {
-    init(hex: UInt32) {
-        self.init(UIColor(hex: hex))
     }
 }

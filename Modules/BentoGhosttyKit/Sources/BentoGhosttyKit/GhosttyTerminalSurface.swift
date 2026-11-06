@@ -37,7 +37,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     }
     public var mouseReporting = MouseReporting()
     /// Sub-cell scroll remainder, so slow drags still accumulate to whole rows.
-    private var scrollWheelAccum: CGFloat = 0
+    private var wheelRows = ScrollRowAccumulator()
 
     /// tmux has this pane in a mode (copy-mode), entered from outside Bento —
     /// another client, a script, or the user's own binding. Bento does not
@@ -48,7 +48,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// Scroll travel while tmux owns the viewport, in rows (positive = toward
     /// older output). The host turns this into `send-keys -X scroll-up`.
     public var onCopyModeScroll: ((Int) -> Void)?
-    private var copyModeScrollAccum: CGFloat = 0
+    private var copyModeRows = ScrollRowAccumulator()
 
     /// The Metal renderer's health, reported by the engine.
     ///
@@ -92,7 +92,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
         // Non-zero initial frame so the Metal layer can size itself before layout.
         super.init(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         isOpaque = true
-        backgroundColor = UIColor(rgb: theme.background)
+        backgroundColor = UIColor(hex: theme.background)
         isMultipleTouchEnabled = true
         contentScaleFactor = traitCollection.displayScale > 0 ? traitCollection.displayScale : UIScreen.main.scale
     }
@@ -549,12 +549,9 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// wheel-up (button 64); finger up = wheel-down (65) — matching the local
     /// scrollback direction.
     private func forwardWheel(deltaY: CGFloat, at point: CGPoint) {
-        guard let size = currentSize, size.cellHeightPx > 0 else { return }
-        let cellH = CGFloat(size.cellHeightPx) / renderScale   // points per row
-        scrollWheelAccum += deltaY
-        let rows = Int(scrollWheelAccum / cellH)
+        guard let cell = cellSize else { return }
+        let rows = wheelRows.rows(adding: deltaY, rowHeight: cell.height)
         guard rows != 0 else { return }
-        scrollWheelAccum -= CGFloat(rows) * cellH
         let button = rows > 0 ? 64 : 65
         let (col, row) = cellCoord(point)
         // A wheel notch is a press with no release — there is no "wheel up" event.
@@ -584,26 +581,22 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// as the local scrollback path, so a pane in copy-mode scrolls at the speed
     /// every other pane does.
     private func copyModeScrollRows(_ deltaY: CGFloat) -> Int {
-        guard let size = currentSize, size.cellHeightPx > 0 else { return 0 }
-        let cellH = CGFloat(size.cellHeightPx) / renderScale
-        copyModeScrollAccum += deltaY
-        let rows = Int(copyModeScrollAccum / cellH)
+        guard let cell = cellSize else { return 0 }
+        let rows = copyModeRows.rows(adding: deltaY, rowHeight: cell.height)
         guard rows != 0 else { return 0 }
-        copyModeScrollAccum -= CGFloat(rows) * cellH
         // Cap the burst: a flick would otherwise hand tmux a very large repeat
         // count in one command, and over a laggy link that lands as a lurch.
         return max(-12, min(12, rows))
     }
 
-    /// 1-based cell (col,row) under a view point, from the engine's cell pixel
-    /// size (mirrors the macOS `cellCoord`).
+    /// 1-based cell (col,row) under a view point.
     private func cellCoord(_ point: CGPoint) -> (col: Int, row: Int) {
-        guard let size = currentSize, size.cellWidthPx > 0, size.cellHeightPx > 0 else { return (1, 1) }
-        let s = renderScale
-        let col = max(1, Int(point.x / (CGFloat(size.cellWidthPx) / s)) + 1)
-        let row = max(1, Int(point.y / (CGFloat(size.cellHeightPx) / s)) + 1)
-        return (col, row)
+        GhosttyCellGeometry.cell(at: point, size: currentSize, scale: renderScale)
     }
+
+    /// One cell in points at the scale the drawable renders at, or nil before
+    /// the engine has reported a size.
+    private var cellSize: CGSize? { GhosttyCellGeometry.cellSize(currentSize, scale: renderScale) }
 
     /// Encode a mouse event and send it to the program via `onInput`. `button`:
     /// 0 = left, 64 = wheel-up, 65 = wheel-down. No modifier bits — a touch has
@@ -673,13 +666,9 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// from the highlight ghostty renders. The cell sizes from `currentSize`
     /// ARE device pixels, so only those divide by scale.
     public func selectionGeometry() -> (topLeft: CGPoint, cell: CGSize)? {
-        guard let surface, let size = currentSize,
+        guard let surface, let cell = cellSize,
               let tl = GhosttySel.selectionTopLeftPx(surface) else { return nil }
-        let s = renderScale
-        guard s > 0 else { return nil }
-        return (CGPoint(x: tl.x, y: tl.y),
-                CGSize(width: CGFloat(size.cellWidthPx) / s,
-                       height: CGFloat(size.cellHeightPx) / s))
+        return (CGPoint(x: tl.x, y: tl.y), cell)
     }
 
     /// The currently selected text, or nil.
@@ -796,7 +785,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
 
     public func applyTheme(_ theme: TerminalTheme) {
         self.theme = theme
-        backgroundColor = UIColor(rgb: theme.background)
+        backgroundColor = UIColor(hex: theme.background)
         // Light/dark can flip with the font size untouched, so this sits outside
         // the recreate branch.
         syncColorScheme()
@@ -905,10 +894,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// nil falls back to ghostty's grid. Public: the iOS host lives in the app
     /// target.
     public func pathTapHits(at point: CGPoint, wrapCols: Int?) -> SurfacePathHitEngine.TapScan {
-        guard let cs = currentSize, cs.cellWidthPx > 0, cs.cellHeightPx > 0 else { return .empty }
-        let s = renderScale
-        guard s > 0 else { return .empty }
-        let cell = CGSize(width: CGFloat(cs.cellWidthPx) / s, height: CGFloat(cs.cellHeightPx) / s)
+        guard let cs = currentSize, let cell = cellSize else { return .empty }
         return pathHitEngine.tapHits(
             point: point, cellSize: cell, viewportRows: cs.rows,
             cols: wrapCols ?? cs.columns,
@@ -920,7 +906,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// SCROLLBAR row space). Public: the iOS host lives in the app target.
     public func readScrollback() -> String? {
         guard let surface else { return nil }
-        return GhosttySel.readRegion(surface, tag: GHOSTTY_POINT_SCREEN)?.text
+        return GhosttySel.screenText(surface)
     }
 
     /// Mark the surface dirty so the next display-link tick draws it. Called by
@@ -983,9 +969,8 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     /// Current selection, when it makes a usable needle (single-line, non-empty).
     /// Seeds the find field the way ⌘E does on the Mac.
     public func selectionAsNeedle() -> String? {
-        guard let surface, let text = GhosttySel.selectedText(surface),
-              !text.isEmpty, !text.contains("\n") else { return nil }
-        return text
+        guard let surface else { return nil }
+        return SearchBarModel.needle(fromSelection: GhosttySel.selectedText(surface))
     }
 
     public func handleStartSearch(needle: String?) { onSearchStartRequested?(needle) }
@@ -1060,38 +1045,20 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
     }
 
     private func detectLink(at point: CGPoint, wrapCols: Int? = nil) -> String? {
-        guard !isTornDown, let size = currentSize, size.cellWidthPx > 0, size.cellHeightPx > 0
-        else { return nil }
-        // Ask the ENGINE first: an OSC 8 hyperlink's target lives in the cell
-        // attributes, never on screen, so a scrape cannot find it (Claude Code's
-        // links routinely have prose anchors in another language). A touch has
-        // no hover, so report the pointer at the tapped cell to provoke the
-        // answer, then take it if one arrived.
+        guard !isTornDown, let size = currentSize, let cell = cellSize else { return nil }
+        // A touch has no hover, so report the pointer at the tapped cell to
+        // provoke the engine's OSC 8 answer, then take it if one arrived.
         engineLinkURL = nil
         if let surface {
             ghostty_surface_mouse_pos(surface, Double(point.x), Double(point.y), GHOSTTY_MODS_NONE)
         }
-        if let url = engineLinkURL {
-            linkLog.log("link via engine (OSC 8) ⟨\(url, privacy: .public)⟩")
-            return url
+        return SurfaceLinkResolver.url(engine: engineLinkURL) {
+            pathHitEngine.logicalLine(
+                point: point, cellSize: cell, viewportRows: size.rows,
+                cols: wrapCols ?? size.columns,
+                scrollTop: lastScrollTop,
+                readText: { [weak self] in self?.readScrollback() })
         }
-        let cell = CGSize(width: CGFloat(size.cellWidthPx) / renderScale,
-                          height: CGFloat(size.cellHeightPx) / renderScale)
-        // Same screen snapshot path detection reads. The old reader drove a
-        // transient ghostty SELECTION across each nearby row to read them back —
-        // mutating live state to answer a question, and giving link detection a
-        // different picture of the screen than the path scanner had. A URL the
-        // path scanner could read whole was invisible here, and the path scanner
-        // would then fuzzy-match the URL's tail onto a local directory and open
-        // a file viewer for a link.
-        guard let (line, tappedCell) = pathHitEngine.logicalLine(
-            point: point, cellSize: cell, viewportRows: size.rows,
-            cols: wrapCols ?? size.columns,
-            scrollTop: lastScrollTop,
-            readText: { [weak self] in self?.readScrollback() }),
-            let url = TerminalLinkDetector.urlHit(inLine: line, atCell: tappedCell)
-        else { return nil }
-        return url
     }
 
     // MARK: - Input (UIKeyInput)
@@ -1330,7 +1297,7 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
             var keyEvent = ghostty_input_key_s(
                 action: action,
                 mods: keyMods,
-                consumed_mods: consumedMods(keyMods, surface: surface),
+                consumed_mods: GhosttyKeyMods.consumed(keyMods, surface: surface),
                 keycode: UInt32(key.keyCode.rawValue),
                 text: nil,
                 unshifted_codepoint: key.charactersIgnoringModifiers.unicodeScalars.first?.value ?? 0,
@@ -1347,21 +1314,6 @@ public final class GhosttyTerminalSurface: UIView, TerminalSurface, UITextInput 
             }
         }
         return handled
-    }
-
-    /// Which of the held modifiers ghostty should treat as already "consumed" to
-    /// produce this event's text — the layout's translation mods (Shift/CapsLock/
-    /// Option-as-Alt), minus Ctrl/Super. Mirrors the macOS `consumedMods(from:
-    /// surface:)`. Critical for shifted symbols whose glyph is NOT a case-fold of
-    /// the base key (":" "?" "!" "@" …): with consumed_mods hardcoded to NONE the
-    /// engine saw an unconsumed Shift over a symbol it couldn't reconcile and
-    /// dropped the key — e.g. Shift+; never emitted ":" from an external keyboard.
-    private func consumedMods(_ keyMods: ghostty_input_mods_e, surface: ghostty_surface_t) -> ghostty_input_mods_e {
-        let translated = ghostty_surface_key_translation_mods(surface, keyMods)
-        var raw = translated.rawValue
-        raw &= ~GHOSTTY_MODS_CTRL.rawValue
-        raw &= ~GHOSTTY_MODS_SUPER.rawValue
-        return ghostty_input_mods_e(rawValue: raw)
     }
 
     private func mods(from flags: UIKeyModifierFlags) -> ghostty_input_mods_e {
@@ -1402,15 +1354,5 @@ private final class TermTextRange: UITextRange {
     override var isEmpty: Bool { from == to }
 }
 
-private extension UIColor {
-    convenience init(rgb: UInt32) {
-        self.init(
-            red: CGFloat((rgb >> 16) & 0xFF) / 255.0,
-            green: CGFloat((rgb >> 8) & 0xFF) / 255.0,
-            blue: CGFloat(rgb & 0xFF) / 255.0,
-            alpha: 1.0
-        )
-    }
-}
 extension GhosttyTerminalSurface: @preconcurrency GhosttySurfaceUserdata {}
 #endif

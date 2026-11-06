@@ -23,12 +23,7 @@ let package = Package(
         ),
         .testTarget(
             name: "BentoVoiceKitTests",
-            dependencies: [
-                "BentoVoiceKit",
-                // TipCenter (shared VoiceController tests) now lives in the
-                // foundation layer.
-                "BentoFoundationKit",
-            ]
+            dependencies: ["BentoVoiceKit"]
         ),
     ]
 )

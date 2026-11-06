@@ -31,6 +31,23 @@ public enum SessionPhase: Equatable {
     case ended
 }
 
+public extension SessionPhase {
+    /// The four states a session list (host rows, the Live Activity) tells
+    /// apart — the setup steps all read as "connecting" from outside.
+    enum Liveness: Equatable, Sendable {
+        case live, connecting, suspended, ended
+    }
+
+    var liveness: Liveness {
+        switch self {
+        case .tmuxReady, .shellReady: return .live
+        case .sshConnecting, .choosingSession, .starting: return .connecting
+        case .suspended: return .suspended
+        case .ended: return .ended
+        }
+    }
+}
+
 /// Whether a session is backed by tmux — decided when the start choice is
 /// applied, and stable from then on. Deliberately NOT derived from `phase`: a
 /// plain session that suspends or ends must not change kind under the UI.

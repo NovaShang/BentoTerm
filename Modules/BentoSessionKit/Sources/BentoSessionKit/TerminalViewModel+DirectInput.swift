@@ -26,7 +26,7 @@ extension TerminalViewModel {
 
     /// Unlock the remote Mac's login keychain using stored password
     func unlockMacKeychain() async {
-        guard let password = await environment.loadKeychainPassword("macKeychain:\(host.id.uuidString)") else {
+        guard let password = await environment.loadKeychainPassword(SecretKeys.macKeychain(hostID: host.id)) else {
             dlog("No keychain password stored")
             return
         }

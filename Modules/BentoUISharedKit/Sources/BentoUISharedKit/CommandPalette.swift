@@ -207,6 +207,11 @@ public struct PaletteFileResult: Sendable {
 public enum PaletteFileBrowser {
     public static func items(query: String, root: String,
                              context: PathPreviewContext, limit: Int = 40) async -> PaletteFileResult {
+        // The source can't reach this pane's files (a remote session behind a
+        // local source): list nothing rather than this machine's disk.
+        if let block = context.remoteBlock, await block() != nil {
+            return PaletteFileResult(items: [], partial: false, dirsSearched: 0)
+        }
         let trimmed = query.trimmingCharacters(in: .whitespaces)
 
         // Literal absolute / ~ path → resolve directly (escape hatch).

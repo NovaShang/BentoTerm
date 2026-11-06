@@ -212,7 +212,7 @@ public enum TmuxCommand: Sendable {
             return cmd
 
         case .listSessions:
-            return "list-sessions -F '#{session_id}:#{session_name}'"
+            return TmuxSessionListing.command
 
         case .newWindow(let target, let name, let path, let command):
             var cmd = "new-window"

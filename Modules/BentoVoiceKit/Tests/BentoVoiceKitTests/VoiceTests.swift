@@ -1,5 +1,6 @@
 import XCTest
 import CoreGraphics
+import SwiftUI
 @testable import BentoVoiceKit
 
 /// Deterministic tests for the shared voice logic (the compass that decides what
@@ -268,6 +269,33 @@ final class VoiceTests: XCTestCase {
         let bounds = CGRect(x: 0, y: 0, width: 200, height: 400)
         let p = VoiceCompassView.Placement.resolve(anchor: CGPoint(x: 100, y: 200), in: bounds)
         XCTAssertEqual(p.bubbleShift, 0)
+    }
+
+    /// The compass stays under the press unless the ring would leave the
+    /// screen; then it's pulled in by exactly the ring's reach, insets included.
+    func testAnchorClampsOnlyByTheRing() {
+        typealias M = VoiceCompassView.Metrics
+        let bounds = CGRect(x: 0, y: 0, width: 1200, height: 800)
+        let middle = CGPoint(x: 600, y: 400)
+        XCTAssertEqual(VoiceCompassView.Placement.clampedAnchor(middle, in: bounds), middle)
+
+        let corner = VoiceCompassView.Placement.clampedAnchor(CGPoint(x: 5, y: 795), in: bounds)
+        XCTAssertEqual(corner.x, M.ringReach + 8, accuracy: 0.01)
+        XCTAssertEqual(corner.y, 800 - M.ringReach - 8, accuracy: 0.01)
+
+        let insets = EdgeInsets(top: 50, leading: 0, bottom: 100, trailing: 0)
+        let low = VoiceCompassView.Placement.clampedAnchor(CGPoint(x: 600, y: 795),
+                                                           in: bounds, insets: insets)
+        XCTAssertEqual(low.y, 800 - 100 - M.ringReach - 8, accuracy: 0.01)
+    }
+
+    /// A screen too small for the ring centers on that axis rather than letting
+    /// the inverted range pick an edge.
+    func testAnchorCentersWhenTheRingCannotFit() {
+        let bounds = CGRect(x: 0, y: 0, width: 200, height: 800)
+        let p = VoiceCompassView.Placement.clampedAnchor(CGPoint(x: 10, y: 400), in: bounds)
+        XCTAssertEqual(p.x, 100, accuracy: 0.01)
+        XCTAssertEqual(p.y, 400, accuracy: 0.01)
     }
 
     func testPhysicallyImpossibleTextIsRejectedEvenWithoutACorpus() {

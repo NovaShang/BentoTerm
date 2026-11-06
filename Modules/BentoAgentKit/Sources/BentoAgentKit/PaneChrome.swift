@@ -78,6 +78,20 @@ public enum PaneChrome {
         public var accentHex: UInt32? {
             self == .idle ? nil : glyphHex
         }
+
+        /// The translucent wash over the pane body — the state's color at a
+        /// strength that reads from across the room without fighting the text —
+        /// or nil when there's nothing to announce. The iOS pane surround is
+        /// blended with the same pair, so an empty washed terminal and the band
+        /// around it read as one color.
+        public var wash: (hex: UInt32, alpha: CGFloat)? {
+            switch self {
+            case .working:       return (glyphHex, PaneState.working.tintAlpha)
+            case .awaitingInput: return (glyphHex, PaneState.awaitingInput(profile: "").tintAlpha)
+            case .doneUnseen:    return (glyphHex, 0.10)
+            case .idle:          return nil
+            }
+        }
     }
 
     /// A non-default MODE this pane is sitting in. Deliberately separate from

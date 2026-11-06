@@ -1,5 +1,8 @@
 import Foundation
 import Darwin
+import os
+
+private let forwardLog = Logger(subsystem: "com.novashang.bento", category: "PortForward")
 
 /// One live local→remote port forward.
 ///
@@ -58,6 +61,13 @@ public enum PortForwardError: Error, Sendable, Equatable {
     case unsupported(String)
 }
 
+extension PortForwardError {
+    /// The fallback sentence when the transport gave no better reason.
+    public static func couldNotReach(_ host: LinkHost) -> PortForwardError {
+        .hostUnreachable("Couldn’t reach \(host.label)")
+    }
+}
+
 @MainActor
 public protocol PortForwarding: AnyObject {
     /// Make `remotePort` on `host` reachable from this device. Idempotent: two
@@ -83,6 +93,84 @@ public protocol PortForwarding: AnyObject {
 @MainActor
 public enum PortForwarders {
     public static var current: (any PortForwarding)?
+}
+
+// MARK: - The bookkeeping every forwarder shares
+
+/// What a forwarder has open, and the steps before the transport is asked for
+/// anything: a local pane needs no tunnel, two panes asking for the same port
+/// share one forward, a port must be forwardable, there must be a live
+/// connection, and the local port is promised before the (async) open so two
+/// requests in one runloop turn can't be handed the same number.
+///
+/// The transport — `ssh -O forward` onto a control socket on the Mac, a
+/// listener splicing `direct-tcpip` channels on iOS — is the `open` closure,
+/// and so is everything about teardown timing. `Handle` is what the transport
+/// needs back to close a forward (nothing on the Mac, the listener on iOS).
+@MainActor
+public final class PortForwardBook<Handle> {
+    private var entries: [String: (forward: PortForward, handle: Handle)] = [:]
+    /// Ports promised to a forward that may not have been bound yet.
+    private var claimed: Set<Int> = []
+
+    public init() {}
+
+    public var active: [PortForward] { entries.values.map(\.forward) }
+
+    public func contains(_ forward: PortForward) -> Bool { entries[forward.id] != nil }
+
+    public func forwards(on host: LinkHost) -> [PortForward] {
+        entries.values.map(\.forward).filter { $0.host == host }
+    }
+
+    public func forwards(remoteID: String) -> [PortForward] {
+        entries.values.map(\.forward).filter { $0.host.remoteID == remoteID }
+    }
+
+    /// Forget a forward and hand back what closes it, if it was known.
+    @discardableResult
+    public func remove(_ forward: PortForward) -> Handle? {
+        entries.removeValue(forKey: forward.id)?.handle
+    }
+
+    /// Make `remotePort` on `host` reachable. `connection` answers whether
+    /// there is anything to ride for that remote (nil = no live session);
+    /// `open` builds the tunnel on it, throwing a `PortForwardError` the user
+    /// can act on.
+    public func forward<Connection>(
+        remotePort: Int, on host: LinkHost,
+        connection: (_ remoteID: String) -> Connection?,
+        open: (_ connection: Connection, _ forward: PortForward) async throws -> Handle
+    ) async throws -> PortForward {
+        // A local pane's `localhost` is already this device. Nothing to tunnel,
+        // and nothing to tear down later.
+        guard let remoteID = host.remoteID else {
+            return PortForward(host: host, remotePort: remotePort, localPort: remotePort)
+        }
+        let key = PortForward(host: host, remotePort: remotePort, localPort: remotePort).id
+        if let existing = entries[key] { return existing.forward }
+
+        guard LocalPortProbe.isPlausible(remotePort) else {
+            throw PortForwardError.unsupported("Port \(remotePort) isn’t forwardable")
+        }
+        guard let ride = connection(remoteID) else {
+            throw PortForwardError.unsupported("No live connection to \(host.label)")
+        }
+        guard let localPort = LocalPortProbe.choose(matching: remotePort, taken: claimed) else {
+            throw PortForwardError.noLocalPort
+        }
+        claimed.insert(localPort)
+        defer { claimed.remove(localPort) }
+
+        let made = PortForward(host: host, remotePort: remotePort, localPort: localPort)
+        let handle = try await open(ride, made)
+        entries[made.id] = (made, handle)
+        forwardLog.log("""
+            forward \(host.label, privacy: .public) \
+            \(remotePort, privacy: .public)→\(localPort, privacy: .public)
+            """)
+        return made
+    }
 }
 
 // MARK: - Local port selection

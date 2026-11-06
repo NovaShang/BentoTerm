@@ -2,7 +2,7 @@ import SwiftUI
 import BentoAgentKit
 import BentoFoundationKit
 
-/// The five-field agent-session form, shared by both platforms.
+/// The agent-session form, shared by both platforms.
 ///
 /// Renders with plain system styling — Mac's look, which is the reference —
 /// and takes all its state from `AgentWizardModel`. The shell owns the chrome:
@@ -54,14 +54,6 @@ public struct AgentWizardForm: View {
                     }
                 }
             }
-            Section {
-                LayoutPickerGrid(selection: $model.layout)
-            } header: {
-                Text("Layout")
-            } footer: {
-                Text("\(model.layout.paneCount) pane\(model.layout.paneCount == 1 ? "" : "s") · \(model.layout.displayName)")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             if let error = model.error {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle")
@@ -69,57 +61,5 @@ public struct AgentWizardForm: View {
                 }
             }
         }
-    }
-}
-
-/// LayoutPickerGrid renders the six preset layouts as a row of SF-Symbol
-/// tiles. Tap to select; the chosen one gets the system accent border.
-private struct LayoutPickerGrid: View {
-    @Binding var selection: TmuxLayout
-
-    private let columns = [GridItem(.adaptive(minimum: 72, maximum: 100), spacing: 8)]
-
-    var body: some View {
-        LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(TmuxLayout.allCases) { layout in
-                LayoutTile(layout: layout, isSelected: layout == selection)
-                    .onTapGesture { selection = layout }
-                    .accessibilityLabel(layout.displayName)
-                    .accessibilityValue(layout == selection ? "Selected" : "")
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityAction { selection = layout }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-private struct LayoutTile: View {
-    let layout: TmuxLayout
-    let isSelected: Bool
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: layout.symbol)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 32, height: 24)
-                .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-            Text(layout.displayName)
-                .font(.caption2)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.secondary.opacity(0.25)), lineWidth: isSelected ? 2 : 1)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(isSelected ? AnyShapeStyle(.tint.opacity(0.12)) : AnyShapeStyle(Color.clear))
-                )
-        )
-        .contentShape(Rectangle())
     }
 }

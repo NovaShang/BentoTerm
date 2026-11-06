@@ -21,12 +21,6 @@ import BentoUISharedKit
 /// channel instead — the only thing that knows which machine to ask.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
-    @Published var tmuxSessions: [TmuxSession] = []
-    /// Windows per session, fetched alongside the session list so the
-    /// menu's submenu can render without a per-open async fetch (NSMenu
-    /// would already be on screen by the time tmux replied).
-    @Published var tmuxWindows: [LocalTmuxSessionName: [TmuxWindow]] = [:]
-
     private var pollTimer: Timer?
     /// KVO token for `NSApp.effectiveAppearance` — drives follow-system light/dark.
     private var appearanceObservation: NSKeyValueObservation?
@@ -48,12 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Links and the ports behind them. Installed before any window exists,
         // so the first clicked link already has somewhere to go.
-        PortForwarders.current = MacPortForwarder()
-        LinkRouter.inAppHandler = { request in
+        LinkRouter.install(forwarder: MacPortForwarder()) { request in
             BentoTerminalWindow.openWeb(url: request.url, origin: request.origin)
         }
-        LinkRouter.preference = LinkOpenPreference(
-            rawValue: UserDefaults.standard.string(forKey: "open_links_in") ?? "") ?? .inApp
 
         // SwiftUI has built NSApp.mainMenu by now; take ⌘W back (see below).
         reclaimClosePaneShortcut()
@@ -89,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             await self.refresh()
             self.startPolling()
             // Test hook: open a specific secondary window directly
-            // (BENTO_OPEN_WINDOW=wizard|plain|settings|firstRun), for
+            // (BENTO_OPEN_WINDOW=wizard|plain|settings), for
             // screenshot-driven verification without UI scripting. This one
             // DOES suppress the terminal window — the point of the hook is to
             // get a clean screenshot of exactly one window.
@@ -98,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 case "wizard": Windows.show(.wizard)
                 case "plain": BentoTerminalWindow.newWindowNoTmux()
                 case "settings": self.openSettings()
-                default: Windows.show(.firstRun)
+                default: break
                 }
                 return
             }
@@ -170,8 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     BentoTerminalWindow.newWindow(agent: BentoAgentKit.AgentSpec(
                         sessionName: parts[0],
                         workingDir: parts[1],
-                        agentCommand: parts.count > 2 ? parts[2] : "",
-                        layout: BentoAgentKit.TmuxLayout.solo))
+                        agentCommand: parts.count > 2 ? parts[2] : ""))
                 }
                 return
             }
@@ -179,16 +169,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // login. An app with a Dock icon that starts with zero windows just
             // looks broken; there is no menu-bar item to explain where it went.
             BentoTerminalWindow.openMainWindow()
-            // First launch → the onboarding wizard owns the stage: environment
-            // checklist, first workspace, first voice command. It comes up IN
-            // FRONT OF the terminal window rather than instead of it, so
-            // dismissing it leaves the user somewhere. BENTO_FORCE_FIRST_RUN=1
-            // re-triggers it for testing without clearing defaults.
-            let firstRunPending = !UserDefaults.standard.bool(forKey: FirstRunWindow.completedKey)
-                || ProcessInfo.processInfo.environment["BENTO_FORCE_FIRST_RUN"] == "1"
-            if firstRunPending {
-                Windows.show(.firstRun)
-            }
         }
     }
 
@@ -337,13 +317,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func refresh() async {
-        let sessions = await TmuxCLI.listSessions()
-        tmuxSessions = sessions
+        // Typed here: these rows came from THIS machine's server, and every
+        // action reachable from them (kill, rename, attach) acts on it.
+        let sessions = await TmuxCLI.listSessions().map {
+            (name: LocalTmuxSessionName(onLocalServer: $0.name), row: $0)
+        }
         // Fan-out the per-session window queries concurrently. Each call
         // is a single `tmux list-windows` shell-out (a few ms), so even
         // with many sessions this finishes well under the 5s poll period.
-        var fresh: [LocalTmuxSessionName: [TmuxWindow]] = [:]
-        await withTaskGroup(of: (LocalTmuxSessionName, [TmuxWindow]).self) { group in
+        var fresh: [LocalTmuxSessionName: [LocalWindowInfo]] = [:]
+        await withTaskGroup(of: (LocalTmuxSessionName, [LocalWindowInfo]).self) { group in
             for s in sessions {
                 group.addTask { (s.name, await TmuxCLI.listWindows(session: s.name)) }
             }
@@ -351,7 +334,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 fresh[name] = wins
             }
         }
-        tmuxWindows = fresh
         // Describe the sessions before announcing them: pushing the names is
         // what wakes the launcher up, and it should redraw with the counts
         // already in hand rather than a frame later.
@@ -360,15 +342,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return LocalSessionInfo(
                 name: s.name.rawValue,
                 windowCount: wins.count,
-                lastActivity: s.lastActivity,
-                attached: s.attached,
+                lastActivity: s.row.lastActivity ?? .distantPast,
+                attached: s.row.attached,
                 // The window rows travel with the session so the toolbar's
                 // Sessions menu can offer them the moment it opens — an async
                 // fetch would land after the menu is already on screen.
-                windows: wins.map {
-                    LocalWindowInfo(index: $0.index, name: $0.name,
-                                    isActive: $0.active, paneCount: $0.paneCount)
-                })
+                windows: wins)
         })
         // Drive the terminal window's tab strip with the full session list.
         BentoTerminalWindow.setLocalServerSessions(sessions.map(\.name))

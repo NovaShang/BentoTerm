@@ -1,7 +1,6 @@
 import Foundation
 import Testing
 @testable import BentoVoiceKit
-import BentoFoundationKit   // TipCenter
 
 /// Deterministic tests for the shared `VoiceController` state machine — the
 /// press lifecycle, compass-direction routing, preview flow, error path and
@@ -295,10 +294,8 @@ struct VoiceControllerTests {
 
     // MARK: - Preview send / cancel
 
-    @Test func sendPreviewSendsUpAndTracksCount() {
+    @Test func sendPreviewSendsUp() {
         let (c, s) = makeController()
-        let tipCenter = TipCenter(defaults: UserDefaults(suiteName: "voice-tests-\(UUID().uuidString)")!)
-        c.tipCenter = tipCenter
         s.currentTranscript = "  ls -la  "
         var result: VoiceInputResult?
         c.onResult = { result = $0 }
@@ -309,8 +306,6 @@ struct VoiceControllerTests {
         #expect(result?.text == "ls -la", "whitespace trimmed")
         #expect(result?.direction == .up)
         #expect(!c.showPreview)
-        #expect(c.voiceSendTotal == 1)
-        #expect(tipCenter.recordedVoiceSendCount == 1)
     }
 
     @Test func cancelPreviewClears() {
@@ -322,17 +317,5 @@ struct VoiceControllerTests {
         c.cancelPreview()
         #expect(!c.showPreview)
         #expect(c.previewText == "")
-    }
-
-    @Test func sendAfterRecordingIncrementsTipCenter() async {
-        let (c, s) = makeController()
-        let tipCenter = TipCenter(defaults: UserDefaults(suiteName: "voice-tests-\(UUID().uuidString)")!)
-        c.tipCenter = tipCenter
-        s.finishResult = "ls"
-        c.begin(originScreen: .zero)
-        c.update(toScreen: .init(x: 0, y: -80))
-        c.end()
-        await waitFor { c.voiceSendTotal == 1 }
-        #expect(tipCenter.recordedVoiceSendCount == 1)
     }
 }

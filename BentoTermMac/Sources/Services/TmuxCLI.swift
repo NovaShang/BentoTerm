@@ -1,6 +1,8 @@
 import Foundation
 import BentoFoundationKit
 import BentoSessionKit
+import BentoUISharedKit
+import BentoTmuxKit
 
 /// TmuxCLI shells out to a tmux binary. The Mac app never proxies the
 /// tmux protocol — sessions open in Bento's own in-app terminal, and these
@@ -20,67 +22,37 @@ enum TmuxCLI {
     /// already handle nil for "tmux missing" keep working unchanged.
     static func locate() -> URL? { TmuxResolver.url() }
 
-    static func listSessions() async -> [TmuxSession] {
-        // Use `|` as the field separator. Tab worked in standalone tools but
-        // Swift's `split(separator:)` overloading on Substring made the
-        // tab-keyed split unreliable in the app build — pipe is unambiguous.
-        // (Session names can't contain `|` because tmux disallows it.)
-        // Format: name | attached | activity_unix_seconds
-        guard let rows = await captureRows(
-            ["list-sessions", "-F", "#{session_name}|#{?session_attached,1,0}|#{session_activity}"]
-        ) else { return [] }
-        var sessions: [TmuxSession] = []
-        for parts in rows {
-            guard parts.count == 3 else { continue }
-            let activity: Date
-            if let ts = Double(parts[2]), ts > 0 {
-                activity = Date(timeIntervalSince1970: ts)
-            } else {
-                activity = .distantPast
-            }
-            sessions.append(TmuxSession(
-                name: LocalTmuxSessionName(onLocalServer: parts[0]),
-                attached: parts[1] == "1",
-                lastActivity: activity
-            ))
+    /// Sessions on this machine's server, most recently active first — "what
+    /// I'm currently working on" sits at the top. Empty when tmux is missing or
+    /// no server is running; the launcher has its own words for both.
+    static func listSessions() async -> [TmuxSessionListing.Session] {
+        guard let tmux = locate(),
+              let result = try? await runCapture(tmux, TmuxSessionListing.arguments),
+              result.code == 0 else { return [] }
+        return TmuxSessionListing.parse(result.out).sorted {
+            ($0.lastActivity ?? .distantPast) > ($1.lastActivity ?? .distantPast)
         }
-        // Most recently active first — matches user intuition that "what I'm
-        // currently working on" sits at the top.
-        return sessions.sorted { $0.lastActivity > $1.lastActivity }
-    }
-
-    /// Attach to a tmux session: open an in-app libghostty window attached
-    /// over a local pty + tmux -CC. Sessions always open in Bento's own
-    /// terminal — the third-party terminal attach paths were removed with
-    /// the "Open tmux sessions in" setting. (Window selection within the
-    /// session is handled inside the native UI; the `window` arg is ignored
-    /// here until per-window tabs land.)
-    static func attach(session localSession: LocalTmuxSessionName, window: Int? = nil) async throws {
-        await MainActor.run { BentoTerminalWindow.focusOrOpen(localSession.id) }
     }
 
     /// Enumerate every window inside `session`. Used to drive the
     /// per-session submenu so users can jump straight to "the claude
     /// window" instead of attaching + typing prefix-n a few times.
-    static func listWindows(session localSession: LocalTmuxSessionName) async -> [TmuxWindow] {
+    static func listWindows(session localSession: LocalTmuxSessionName) async -> [LocalWindowInfo] {
         let session = localSession.rawValue
-        // Format mirrors listSessions: pipe-separated fields, easy to
-        // split unambiguously since tmux disallows `|` in names.
-        // index | name | active | pane_count
+        // Pipe-separated fields: index | name | active | pane_count
         guard let rows = await captureRows([
             "list-windows", "-t", session, "-F",
             "#{window_index}|#{window_name}|#{?window_active,1,0}|#{window_panes}"
         ]) else { return [] }
-        var windows: [TmuxWindow] = []
+        var windows: [LocalWindowInfo] = []
         for parts in rows {
             guard parts.count == 4, let idx = Int(parts[0]), let panes = Int(parts[3]) else {
                 continue
             }
-            windows.append(TmuxWindow(
-                session: localSession,
+            windows.append(LocalWindowInfo(
                 index: idx,
                 name: parts[1],
-                active: parts[2] == "1",
+                isActive: parts[2] == "1",
                 paneCount: panes
             ))
         }
@@ -104,8 +76,7 @@ enum TmuxCLI {
     // MARK: - helpers
 
     /// Run tmux with `args` and split its stdout into rows of `|`-separated
-    /// fields — the query shape shared by list-sessions / list-clients /
-    /// list-windows. Returns nil when tmux is missing, fails to spawn, or
+    /// fields — the query shape list-windows uses. Returns nil when tmux is missing, fails to spawn, or
     /// exits non-zero. Callers validate field counts themselves.
     private static func captureRows(_ args: [String]) async -> [[String]]? {
         guard let tmux = locate() else { return nil }
@@ -149,6 +120,6 @@ enum TmuxCLI {
     }
 }
 
-// AgentPreset / AgentSpec / TmuxLayout live in BentoTerminalCore (AgentSpec.swift)
+// AgentPreset / AgentSpec live in BentoTerminalCore (AgentSpec.swift)
 // — the canonical copies. Duplicates here were removed in the module split;
 // keep edits in core only.

@@ -75,7 +75,7 @@ public struct Host: Identifiable, Codable, Hashable, Sendable {
         // fields — minting `UUID()` here would give a legacy hosts.json entry
         // a brand-new identity on every decode, so the same host would change
         // id across launches (HostStore keys update/delete/markConnected off
-        // id, and ids flow into onSessionUpdate/Live Activity).
+        // id, and ids flow into onSessionUpdate).
         self.id = (try? c.decode(UUID.self, forKey: .id)) ?? Self.stableID(username: username, hostname: hostname, port: port)
         self.authMethod = (try? c.decode(AuthMethod.self, forKey: .authMethod)) ?? .password
         self.transport = (try? c.decode(HostTransport.self, forKey: .transport)) ?? .directTCP

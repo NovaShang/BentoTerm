@@ -299,7 +299,7 @@ final class PaletteViewModel: ObservableObject {
                             matchText: "",
                             action: .run {}))
                     }
-                    let title = "Files · \(abbreviate(root))"
+                    let title = "Files · \(tildeAbbreviated(root))"
                     built.append(PaletteSection(id: "files", title: title, items: rows))
                 }
             }
@@ -439,7 +439,7 @@ final class PaletteViewModel: ObservableObject {
 
     private func parentRow(from root: String) -> PaletteItem {
         let parent = (root as NSString).deletingLastPathComponent
-        return PaletteItem(id: "file:..", title: "..", subtitle: abbreviate(parent),
+        return PaletteItem(id: "file:..", title: "..", subtitle: tildeAbbreviated(parent),
                            systemImage: "arrow.up.left", matchText: "..",
                            action: .drill(dir: parent))
     }
@@ -511,13 +511,6 @@ final class PaletteViewModel: ObservableObject {
         guard query.isEmpty, canPop else { return false }
         escapeOrPop()
         return true
-    }
-
-    private func abbreviate(_ path: String) -> String {
-        let home = NSHomeDirectory()
-        if path == home { return "~" }
-        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
-        return path
     }
 }
 

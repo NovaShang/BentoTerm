@@ -144,6 +144,17 @@ public enum LinkRouter {
     /// visible is the one outcome worse than opening in the wrong place.
     @MainActor public static var inAppHandler: (@MainActor (LinkOpenRequest) -> Bool)?
 
+    /// Launch wiring, the same on both platforms: the port forwarder, where an
+    /// in-app link goes, and the user's saved preference. Called before any
+    /// window exists, so the first clicked link already has somewhere to go.
+    @MainActor public static func install(forwarder: any PortForwarding,
+                                          inApp: @escaping @MainActor (LinkOpenRequest) -> Bool) {
+        PortForwarders.current = forwarder
+        inAppHandler = inApp
+        preference = LinkOpenPreference(
+            rawValue: UserDefaults.standard.string(forKey: "open_links_in") ?? "") ?? .inApp
+    }
+
     /// Open a link. Callable from any isolation (the engine's action dispatch,
     /// a gesture handler, a WebView delegate); the decision and the opening
     /// both happen on the main actor.

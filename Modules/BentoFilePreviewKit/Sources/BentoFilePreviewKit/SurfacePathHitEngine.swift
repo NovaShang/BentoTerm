@@ -63,7 +63,6 @@ public final class SurfacePathHitEngine {
     ///   - readText: whole-scrollback snapshot (`read_text(SCREEN)`).
     public func hit(point: CGPoint, cellSize: CGSize, viewportRows: Int, cols: Int,
                     scrollTop: Int?, readText: () -> String?) -> Hit? {
-        guard PathPreviewSettings.isEnabled else { return nil }
         guard let (tester, top, row, col) = prepare(point: point, cellSize: cellSize,
                                                     viewportRows: viewportRows, cols: cols,
                                                     scrollTop: scrollTop, readText: readText)
@@ -79,7 +78,6 @@ public final class SurfacePathHitEngine {
     /// `SmartPathResolver.resolveFirst` unless `hits[0].fastPath`.
     public func tapHits(point: CGPoint, cellSize: CGSize, viewportRows: Int, cols: Int,
                         scrollTop: Int?, readText: () -> String?) -> TapScan {
-        guard PathPreviewSettings.isEnabled else { return .empty }
         guard let (tester, top, row, col) = prepare(point: point, cellSize: cellSize,
                                                     viewportRows: viewportRows, cols: cols,
                                                     scrollTop: scrollTop, readText: readText)
@@ -97,9 +95,7 @@ public final class SurfacePathHitEngine {
     }
 
     /// The logical line under `point` and the tapped cell within it — the
-    /// text-level view of a click, for link hit-testing. Deliberately NOT gated
-    /// on `PathPreviewSettings.isEnabled`: turning file preview off must not
-    /// also stop URLs from opening.
+    /// text-level view of a click, for link hit-testing.
     public func logicalLine(point: CGPoint, cellSize: CGSize, viewportRows: Int, cols: Int,
                             scrollTop: Int?, readText: () -> String?) -> (line: String, cell: Int)? {
         guard let (tester, top, row, col) = prepare(point: point, cellSize: cellSize,

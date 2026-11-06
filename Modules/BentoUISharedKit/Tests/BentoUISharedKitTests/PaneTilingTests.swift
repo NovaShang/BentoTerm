@@ -92,6 +92,15 @@ struct PaneTilingTests {
         #expect(grid.rows == 36)           // 600 * 2 / 32 = 37.5 → 37, minus the bar
     }
 
+    /// A lone pane with no title strip (iOS Focus) gets every row that fits.
+    @Test func clientGridWithoutATitleRowKeepsEveryRow() {
+        let grid = PaneTiling.clientGrid(viewport: CGSize(width: 800, height: 600),
+                                         cellPixels: CGSize(width: 16, height: 32),
+                                         scale: 2, reserveTitleRow: false)
+        #expect(grid.cols == 100)
+        #expect(grid.rows == 37)           // 37.5 → 37, nothing reserved
+    }
+
     @Test func clientGridNeverGoesDegenerate() {
         let grid = PaneTiling.clientGrid(viewport: .zero,
                                          cellPixels: CGSize(width: 8, height: 16), scale: 2)

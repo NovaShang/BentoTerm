@@ -1,5 +1,6 @@
 import CoreGraphics
 import BentoFoundationKit
+import BentoAgentKit
 
 #if canImport(AppKit)
 import AppKit
@@ -71,6 +72,21 @@ public enum PaneChromeColors {
     /// vs. the iOS view tint).
     public static func idleBorder() -> PaneChromeColor {
         isDark ? PaneChromeColor(white: 1, alpha: 0.06) : PaneChromeColor(white: 0, alpha: 0.09)
+    }
+
+    /// The status wash (`PaneChrome.Status.wash`) as a translucent color to lay
+    /// over the pane body, or nil when the status has nothing to announce.
+    public static func wash(_ status: PaneChrome.Status) -> PaneChromeColor? {
+        status.wash.map { PaneChromeColor(hex: $0.hex, alpha: $0.alpha) }
+    }
+
+    /// `bg` with the status wash already blended in, opaque — what an empty
+    /// washed terminal looks like, for chrome that sits beside the surface (the
+    /// iOS pane surround and the backdrop behind it) and must read as the same
+    /// color rather than a darker cousin.
+    public static func washed(_ bg: PaneChromeColor, status: PaneChrome.Status) -> PaneChromeColor {
+        guard let w = status.wash else { return bg }
+        return bg.paneChromeMixed(with: PaneChromeColor(hex: w.hex), fraction: w.alpha)
     }
 }
 

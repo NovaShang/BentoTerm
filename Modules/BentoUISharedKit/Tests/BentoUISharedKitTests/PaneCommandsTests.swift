@@ -1,0 +1,91 @@
+import Testing
+import BentoSessionKit
+@testable import BentoUISharedKit
+
+/// Every surface's rows, pinned row for row. A change here is a product
+/// change and should read like one in review.
+struct PaneCommandsTests {
+    private let parallel = PaneMenuContext(sessionMode: .tiled, paneCount: 2)
+    private let focus = PaneMenuContext(sessionMode: .list)
+
+    private func titles(_ rows: [PaneMenuEntry], _ surface: PaneCommand.Surface,
+                        zoomed: Bool = false) -> [String] {
+        rows.map {
+            switch $0 {
+            case .command(let c): return c.title(on: surface, zoomed: zoomed)
+            case .separator: return "—"
+            case .recentAgents: return "[recents]"
+            case .layouts: return "[layouts]"
+            case .moveToSession: return "[move]"
+            case .paste: return "[paste]"
+            }
+        }
+    }
+
+    @Test func macPaneMenuInParallel() {
+        #expect(titles(PaneMenuLayout.macPaneMenu(parallel), .macPaneMenu) == [
+            "Split Right (-h)", "Split Down (-v)", "—",
+            "Split — Duplicate Current", "Split — Path & Command…", "[recents]",
+            "—", "[layouts]", "—",
+            "Zoom", "—", "[move]", "—", "Close Pane",
+        ])
+    }
+
+    @Test func macPaneMenuInFocusHasNoSplits() {
+        #expect(titles(PaneMenuLayout.macPaneMenu(focus), .macPaneMenu, zoomed: true) == [
+            "Unzoom", "—", "[move]", "—", "Close Pane",
+        ])
+    }
+
+    @Test func macNewMenuRows() {
+        #expect(PaneMenuLayout.macNewMenuSessionRows(hasSession: false).isEmpty)
+        let rows = PaneMenuLayout.macNewMenuSessionRows(hasSession: true)
+        #expect(titles(rows, .macNewMenu) == [
+            "—", "New tmux Window", "Split Pane", "[recents]",
+        ])
+        let symbols = rows.compactMap { row -> String?? in
+            if case .command(let c) = row { return .some(c.symbol(on: .macNewMenu)) }
+            return nil
+        }
+        #expect(symbols == ["macwindow", "square.split.2x1"])
+    }
+
+    @Test func macPaletteCommands() {
+        #expect(PaneMenuLayout.macPalette.map { $0.title(on: .macPalette) } == [
+            "Split Right (-h)", "Split Down (-v)", "Split Pane",
+            "Close Pane", "Toggle Zoom", "Select Next Pane", "Select Previous Pane",
+            "New tmux Window",
+        ])
+        #expect(PaneMenuLayout.macPalette.map(\.paletteID) == [
+            "splitRight", "splitDown", "duplicate", "closePane", "zoom",
+            "nextPane", "prevPane", "newTmuxWindow",
+        ])
+        #expect(PaneCommand.closePane.symbol(on: .macPalette) == "xmark.square")
+    }
+
+    @Test func iosPaneMenuForATmuxPane() {
+        let rows = PaneMenuLayout.IOSSection.allCases.flatMap {
+            PaneMenuLayout.iosPaneMenu($0, parallel)
+        }
+        #expect(titles(rows, .iosPaneMenu) == [
+            "Find…", "Zoom", "[paste]", "Split Right (-h)", "Split Down (-v)",
+            "Split — Path & Command…", "[move]", "Close Pane",
+        ])
+        #expect(PaneCommand.closePane.role(on: .iosPaneMenu) == .destructive)
+        #expect(PaneCommand.zoom.title(on: .iosPaneMenu, zoomed: true) == "Unzoom")
+    }
+
+    @Test func iosPaneMenuForAPlainShellKeepsFindAndPaste() {
+        let plain = PaneMenuContext(isTmuxPane: false, sessionMode: .tiled, inCopyMode: true)
+        let rows = PaneMenuLayout.IOSSection.allCases.flatMap {
+            PaneMenuLayout.iosPaneMenu($0, plain)
+        }
+        #expect(titles(rows, .iosPaneMenu) == ["Find…", "[paste]", "Exit tmux copy-mode"])
+    }
+
+    @Test func iosOverflowMenuLayouts() {
+        #expect(PaneMenuLayout.iosOverflowShowsLayouts(parallel))
+        #expect(!PaneMenuLayout.iosOverflowShowsLayouts(
+            PaneMenuContext(sessionMode: .tiled, paneCount: 1)))
+    }
+}

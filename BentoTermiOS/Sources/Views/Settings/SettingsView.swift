@@ -1,45 +1,26 @@
 import SwiftUI
 import BentoFoundationKit
+import BentoGhosttyKit
 import BentoUISharedKit
 
-/// iOS settings = the setup pages, as a list you drill into.
-///
-/// Same five panels the setup flow shows, same names, same order — explanation
-/// arrives folded here and open there, and that is the only difference
-/// (`PanelContext`). See `IOSSetupPanel` for where the iOS-only rows hang.
+/// iOS settings: the three shared pages as a list you drill into, with the
+/// iOS-only rows passed in (see `IOSSettingsPage`).
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var hostStore: HostStore
-    @State private var showSetup = false
 
     var body: some View {
         NavigationStack {
             List {
-                ForEach(PanelPage.allCases) { page in
+                ForEach(SettingsPage.allCases) { page in
                     NavigationLink {
-                        IOSSetupPanel(page: page, context: .settings)
+                        IOSSettingsPage(page: page)
                             .bentoForm()
-                            .navigationTitle(page.settingsTitle)
+                            .navigationTitle(page.title)
                             .navigationBarTitleDisplayMode(.inline)
                     } label: {
-                        Label(page.settingsTitle, systemImage: page.symbol)
+                        Label(page.title, systemImage: page.symbol)
                     }
                 }
-
-                // Same five panels as the rows above, read in order with their
-                // explanations open — worth keeping reachable for someone who
-                // tapped "Later", or who wants the tmux page again.
-                Section {
-                    Button {
-                        showSetup = true
-                    } label: {
-                        Label("Run Setup Again", systemImage: "sparkles")
-                    }
-                }
-            }
-            .sheet(isPresented: $showSetup) {
-                SetupFlowView()
-                    .environmentObject(hostStore)
             }
             .tint(Color.bentoEmerald)
             .navigationTitle("Settings")
@@ -80,5 +61,56 @@ struct AcknowledgementsView: View {
             // ~110 KB off the main thread — the view is pushed before it lands.
             text = await Task.detached { try? String(contentsOf: url, encoding: .utf8) }.value
         }
+    }
+}
+
+/// The one place that maps a `SettingsPage` onto its panel plus the iOS-only
+/// rows that belong on it.
+struct IOSSettingsPage: View {
+    let page: SettingsPage
+
+    var body: some View {
+        switch page {
+        case .appearance:
+            AppearancePanel(preview: AnyView(GhosttyThemePreview()))
+        case .voice:
+            VoicePanel()
+        case .general:
+            GeneralPanel {
+                SettingsAboutSection(
+                    icon: BentoAppIcon.image,
+                    tagline: "A tmux-native terminal for iPhone & iPad.")
+
+                Section {
+                    NavigationLink {
+                        AcknowledgementsView()
+                    } label: {
+                        Label("Acknowledgements", systemImage: "doc.text")
+                    }
+                } footer: {
+                    PanelNote("BentoTerm redistributes MIT, Apache and SIL-licensed components — the terminal engine, the SSH stack, the bundled font — and each of those licenses requires its text to travel with the binary.")
+                }
+            }
+        }
+    }
+}
+
+/// The app icon, for the About row.
+///
+/// `UIImage(named: "AppIcon")` alone does NOT work on iOS: the catalogue holds
+/// an *app icon set*, which is not addressable by name at runtime, so it
+/// returns nil and About renders with a hole where the icon goes.
+/// The primary-icon file list in Info.plist is the way in. (The name lookup is
+/// kept first so a plain imageset would still win if one is ever added.)
+enum BentoAppIcon {
+    static var image: Image? {
+        if let ui = UIImage(named: "AppIcon") { return Image(uiImage: ui) }
+        guard let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+              let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+              let files = primary["CFBundleIconFiles"] as? [String],
+              let name = files.last,
+              let ui = UIImage(named: name)
+        else { return nil }
+        return Image(uiImage: ui)
     }
 }

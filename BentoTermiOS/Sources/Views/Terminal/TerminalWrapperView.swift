@@ -45,18 +45,12 @@ struct TerminalWrapperView: View {
     /// macOS shares) and not a size-class change (which would remount the
     /// terminal, see `chrome`).
     @State private var isFullscreen = false
-    @State private var showOnboarding: Bool = GestureOnboardingOverlay.shouldShow
     @State private var sizingResolved = false
     @State private var showMixedFlattenAlert = false
-    /// One-shot notices driven by TipCenter (design doc §6): a transient toast
-    /// plus the anchored teaching cards. Nil / false when nothing to say.
+    /// The one-shot notice for something the app did on the user's behalf
+    /// (see `applyPhoneFocusDefault`). Nil when there is nothing to say.
     @State private var tipToast: String?
-    @State private var showStateLegend = false
-    @State private var showParallelTip = false
-    @State private var showVoiceAdvancedTip = false
-    @State private var parallelTipTask: Task<Void, Never>?
-    @ObservedObject private var tips = TipCenter.shared
-    @State private var showSplitSheet = false
+    private let tips = TipCenter.shared
     @State private var pendingCloseWindow: TmuxWindowID?
     /// Kill Session is destructive AND irreversible (every window/pane dies), so
     /// it goes through a confirmation before it runs.
@@ -84,10 +78,10 @@ struct TerminalWrapperView: View {
 
     // MARK: - Fullscreen
 
-    /// The fullscreen choice is remembered per DEVICE (not per host/session),
-    /// so a phone that works in fullscreen comes back fullscreen and an iPad's
-    /// manual toggle survives re-entry too. Keyed globally, mirroring how the
-    /// choice is a personal UI preference, not a property of any session.
+    /// The iPad's fullscreen choice, remembered per DEVICE (not per
+    /// host/session) so its manual toggle survives re-entry. Keyed globally:
+    /// it is a personal UI preference, not a property of any session. An
+    /// iPhone ignores it — it follows its orientation (`syncFullscreenToOrientation`).
     private var fullscreenPreferenceKey: String { "fullscreenMode" }
 
     private func toggleFullscreen() {
@@ -95,24 +89,23 @@ struct TerminalWrapperView: View {
         UserDefaults.standard.set(isFullscreen, forKey: fullscreenPreferenceKey)
     }
 
-    /// First mount: the saved choice wins on iPhone and iPad alike. A fresh
-    /// mount doesn't fire the size-class onChange, so a phone that mounts in
-    /// landscape still gets the auto-enter default on first run (no choice yet).
+    /// First mount (a fresh mount doesn't fire the size-class onChange).
     private func restoreFullscreenPreference() {
-        if let saved = UserDefaults.standard.object(forKey: fullscreenPreferenceKey) as? Bool {
-            isFullscreen = saved
-        } else if !isRegularWidth, verticalSizeClass == .compact {
-            isFullscreen = true
+        if isRegularWidth {
+            isFullscreen = UserDefaults.standard.bool(forKey: fullscreenPreferenceKey)
+        } else {
+            syncFullscreenToOrientation()
         }
     }
 
-    /// iPhone landscape auto-enters fullscreen. A saved choice always wins —
-    /// rotation never overrides it — and once fullscreen, rotating to portrait
-    /// never auto-exits: leaving fullscreen is a manual choice.
+    /// iPhone: landscape is fullscreen, portrait isn't, both ways. It used to
+    /// auto-enter only and leave the exit to a ⋯ row, plus remember a manual
+    /// choice that then overrode rotation; with the row gone, following the
+    /// orientation is the whole rule, and a choice saved by an older build
+    /// can't strand the phone in fullscreen. iPad is manual (its bar button).
     private func syncFullscreenToOrientation() {
-        guard !isRegularWidth else { return }   // iPad is manual-only
-        guard UserDefaults.standard.object(forKey: fullscreenPreferenceKey) == nil else { return }
-        if verticalSizeClass == .compact { isFullscreen = true }
+        guard !isRegularWidth else { return }
+        isFullscreen = verticalSizeClass == .compact
     }
 
     /// The pane background as a SwiftUI color — the full-screen backdrop of
@@ -130,8 +123,9 @@ struct TerminalWrapperView: View {
         // change.
         let bg = paneBridge.terminalBgColor ?? ThemeStore.shared.current.bgColor
         if let signal = foregroundPaneSignal {
-            return Color(uiColor: STTheme.fusedBackground(bg: bg, state: signal.state,
-                                                          doneUnseen: signal.doneUnseen))
+            return Color(uiColor: PaneChromeColors.washed(
+                bg, status: PaneChrome.Status(state: signal.state,
+                                              agentFinishedUnseen: signal.doneUnseen)))
         }
         return Color(uiColor: bg)
     }
@@ -186,23 +180,25 @@ struct TerminalWrapperView: View {
             } message: {
                 Text(viewModel.errorMessage ?? "Unknown error")
             }
-            .sheet(isPresented: $showSplitSheet) {
-                NewWindowSheet(title: "Split — Path & Command",
+            // Raised from the pane menu's "Split — Path & Command…", which
+            // lives in the UIKit container; the bridge carries the request.
+            .sheet(isPresented: $paneBridge.showsSplitPathCommand) {
+                PathAndCommandSheet(title: "Split — Path & Command",
                                pathContextProvider: { paneBridge.container?.focusedPathPreviewContext() }) { path, command in
                     Task { await viewModel.splitPane(horizontal: true, seed: .custom(path: path, command: command)) }
                 }
             }
-            .alert(closeWindowAlertTitle, isPresented: Binding(
+            .alert(closeWindowPrompt.title, isPresented: Binding(
                 get: { pendingCloseWindow != nil },
                 set: { if !$0 { pendingCloseWindow = nil } }
             )) {
-                Button("Close Window", role: .destructive) {
+                Button(closeWindowPrompt.confirm, role: .destructive) {
                     if let id = pendingCloseWindow { viewModel.closeWindow(id) }
                     pendingCloseWindow = nil
                 }
                 Button("Cancel", role: .cancel) { pendingCloseWindow = nil }
             } message: {
-                Text("The processes running in it will be terminated.")
+                Text(closeWindowPrompt.message ?? "")
             }
             .alert(pendingSizeTakeover?.confirmTitle ?? "", isPresented: Binding(
                 get: { pendingSizeTakeover != nil },
@@ -216,8 +212,8 @@ struct TerminalWrapperView: View {
             } message: {
                 Text(pendingSizeTakeover?.confirmMessage ?? "")
             }
-            .alert("Kill this session?", isPresented: $pendingKillSession) {
-                Button("Kill Session", role: .destructive) {
+            .alert(killSessionPrompt.title, isPresented: $pendingKillSession) {
+                Button(killSessionPrompt.confirm, role: .destructive) {
                     // Leave the screen now; the kill awaits tmux's reply before it
                     // tears the connection down (see `killSession`), and holding
                     // the alert open for that round trip would look like a hang.
@@ -226,7 +222,7 @@ struct TerminalWrapperView: View {
                 }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("Every window and pane in this session is closed and its processes are terminated. This can't be undone.")
+                Text(killSessionPrompt.message ?? "")
             }
             .onChange(of: viewModel.isTmuxReady) { _, ready in
                 if ready {
@@ -236,38 +232,10 @@ struct TerminalWrapperView: View {
                 }
             }
             .onAppear { if viewModel.isTmuxReady { resolveSizing() } }
-            // ---- One-shot teaching moments (design doc §6). Each fires at the
-            // user's FIRST encounter with the concept, once per install. ----
-            .onChange(of: viewModel.agentsWaiting) { _, waiting in
-                // The first amber pane is the first time the app "needs" the user:
-                // the moment the color legend lands (§6.2).
-                if waiting > 0, tips.shouldShow(.stateLegend) {
-                    withAnimation { showStateLegend = true }
-                }
-            }
-            .onChange(of: viewModel.agentsWorking) { _, working in
-                handleWorkingChange(working)
-            }
-            .onChange(of: viewModel.isReconnecting) { was, now in
-                // First successful reconnect → the persistence concept (§6.5).
-                if was, !now, viewModel.isTmuxReady, tips.consume(.persistence) {
-                    showTipToast("Your agents kept working while you were away — the tmux session runs on the host, not here. It stays alive until you close it.")
-                }
-            }
-            .onChange(of: showsWindowTabs) { _, shown in
-                if shown, tips.consume(.windowTabsIntro) {
-                    showTipToast("Each tab is a tmux window holding one pane — switch with the tabs below. Each tab's dot is that window's status.")
-                }
-            }
-            .onChange(of: viewModel.windows.count) { _, _ in maybeShowSidebarIntro() }
-            .onChange(of: viewModel.sessionMode) { _, _ in maybeShowSidebarIntro() }
-            .onChange(of: voiceController.voiceSendTotal) { _, n in
-                handleVoiceSendMilestone(n)
-            }
     }
 
-    /// The terminal plus its floating chrome, kept separate from the modal /
-    /// teaching chain so the compiler can type-check each half on its own.
+    /// The terminal plus its floating chrome, kept separate from the modal
+    /// chain so the compiler can type-check each half on its own.
     private var terminalChrome: some View {
         chrome
             .ignoresSafeArea(.keyboard)
@@ -275,9 +243,10 @@ struct TerminalWrapperView: View {
                 wireVoiceController()
                 restoreFullscreenPreference()
             }
-            // iPhone landscape → auto-fullscreen (unless a choice is saved);
-            // no size-class change ever auto-exits fullscreen.
+            // iPhone: fullscreen follows the orientation. A width change (iPad
+            // split view, Slide Over) re-applies whichever rule now holds.
             .onChange(of: verticalSizeClass) { _, _ in syncFullscreenToOrientation() }
+            .onChange(of: horizontalSizeClass) { _, _ in restoreFullscreenPreference() }
             .overlay(alignment: .top) { reconnectingBanner }
             .overlay { voiceOverlay }
             // The managed input surface: an inline bar riding the keyboard's top
@@ -321,11 +290,7 @@ struct TerminalWrapperView: View {
                     keyboardTopGlobal = nil
                 }
             }
-            .overlay { onboardingOverlay }
             .overlay(alignment: .top) { tipToastView }
-            .overlay { stateLegendOverlay }
-            .overlay(alignment: .top) { parallelTipCard }
-            .overlay(alignment: .bottom) { voiceAdvancedTipCard }
     }
 
     /// Everything sizing-related now comes from the server (the view model
@@ -337,13 +302,6 @@ struct TerminalWrapperView: View {
         guard !sizingResolved, viewModel.isTmuxReady else { return }
         sizingResolved = true
         applyPhoneFocusDefault()
-    }
-
-    private func setSizing(_ mode: TerminalSizingMode) {
-        // The view model owns the write: it puts `window-size` on the server and
-        // records/clears ownership. Nothing is stored here — a per-device copy
-        // of a shared decision is exactly the bug this replaced.
-        viewModel.setSizingMode(mode)
     }
 
     /// Phones open a multi-pane tiling in Focus by default — an act-and-inform
@@ -362,57 +320,17 @@ struct TerminalWrapperView: View {
         Task {
             let ok = await viewModel.setMode(.list)
             if ok, tips.consume(.focusAutoSwitch) {
-                showTipToast("Opened in Focus: each pane was moved into its own tmux window (break-pane), so one fills the screen. Parallel ⇄ Focus up top moves them back — nothing is closed.")
+                showTipToast("Opened in Focus: each pane is now its own tmux window. Switch back to Parallel any time — nothing was closed.")
             }
         }
     }
 
-    /// Show a transient, non-blocking teaching toast (auto-hides).
+    /// Show a transient, non-blocking toast (auto-hides).
     private func showTipToast(_ text: String) {
         withAnimation { tipToast = text }
         Task {
             try? await Task.sleep(for: .seconds(5))
             withAnimation { if tipToast == text { tipToast = nil } }
-        }
-    }
-
-    /// §6.1 — the parallel curriculum, driven by the working-agent count.
-    private func handleWorkingChange(_ working: Int) {
-        // Both boxes busy at once → the payoff line.
-        if working >= 2, tips.consume(.parallelBothWorking) {
-            showTipToast("This is Parallel — every pane in one tmux window, all working at once. Whoever needs you changes color.")
-        }
-        // The first solo agent has been working 10s (the user is idle,
-        // watching) → suggest opening a second one.
-        guard tips.shouldShow(.parallelSecondAgent) else { return }
-        parallelTipTask?.cancel()
-        guard working >= 1, viewModel.paneViewModels.count == 1, viewModel.windows.count <= 1 else { return }
-        parallelTipTask = Task {
-            try? await Task.sleep(for: .seconds(10))
-            guard !Task.isCancelled,
-                  viewModel.agentsWorking >= 1,
-                  tips.consume(.parallelSecondAgent) else { return }
-            withAnimation { showParallelTip = true }
-        }
-    }
-
-    /// §6.1 — iPad/Mac sidebar introduction, first time it appears with real
-    /// content (≥ 2 windows in List mode on a regular-width screen).
-    private func maybeShowSidebarIntro() {
-        guard viewModel.windows.count >= 2,
-              viewModel.sessionMode == .list,
-              isRegularWidth,
-              tips.consume(.sidebarIntro) else { return }
-        showTipToast("One tmux window per row — tap to switch. The number is the window index you'd use with select-window; the icon shows who's working and who needs you.")
-    }
-
-    /// §6.4 — voice-send milestones. The advanced gestures wait for the 3rd
-    /// send (muscle memory first).
-    private func handleVoiceSendMilestone(_ n: Int) {
-        guard n > 0 else { return }
-        if n >= 3, tips.shouldShow(.voiceAdvanced) {
-            tips.markShown(.voiceAdvanced)
-            withAnimation { showVoiceAdvancedTip = true }
         }
     }
 
@@ -433,7 +351,8 @@ struct TerminalWrapperView: View {
     private var chrome: some View {
         if isRegularWidth {
             NavigationSplitView(columnVisibility: $sidebarVisibility) {
-                WindowSidebar(viewModel: viewModel)
+                WindowSidebar(viewModel: viewModel,
+                              pathContextProvider: { paneBridge.container?.focusedPathPreviewContext() })
                     .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
                     // The sidebar is mode-driven, never user-toggled (the same
                     // rule the macOS window follows), so there's nothing for a
@@ -534,7 +453,7 @@ struct TerminalWrapperView: View {
                 }
             }
             // iPad only: the fullscreen toggle lives in the bar next to the
-            // overflow menu (iPhone folds it into the ⋯ menu instead).
+            // overflow menu (an iPhone follows its orientation instead).
             if isRegularWidth {
                 ToolbarItem(placement: .topBarTrailing) {
                     fullscreenToggleButton
@@ -642,14 +561,14 @@ struct TerminalWrapperView: View {
             HStack(spacing: 6) {
                 Image(systemName: TerminalSizingMode.thisDevice.symbol)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(Color.stInkDim)
+                    .foregroundStyle(Color.bentoInkDim)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(mismatch.title)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.stInk)
+                        .foregroundStyle(Color.bentoInk)
                     Text("\(mismatch.actionTitle) · \(mismatch.compactDetail)")
                         .font(.caption2)
-                        .foregroundStyle(Color.stInkDim)
+                        .foregroundStyle(Color.bentoInkDim)
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
@@ -693,54 +612,23 @@ struct TerminalWrapperView: View {
                           trailing: safe.trailing)
     }
 
-    /// Keep the compass on screen when the press starts near an edge — but only
-    /// the COMPASS: the ring is the part that has to stay under the finger, and
-    /// it needs `ringReach` around the anchor, nothing more.
-    ///
-    /// This used to reserve the transcript bubble's footprint too (270pt above,
-    /// 180pt each side), which made a huge band along every edge unable to host a
-    /// compass at the touch point — press there and the whole thing jumped inward,
-    /// away from the finger. The bubble now moves instead: it flips below the
-    /// compass near the top and slides sideways near a side
-    /// (`VoiceCompassView.Placement`), so the anchor itself barely has to move.
+    /// Keep the compass on screen when the press starts near an edge — only
+    /// as far as the ring needs, inside the safe areas and above the quick-keys
+    /// band (`VoiceCompassView.Placement.clampedAnchor`).
     private func compassAnchor(in geo: GeometryProxy) -> CGPoint {
-        typealias M = VoiceCompassView.Metrics
-        let bounds = geo.frame(in: .local)
-        let insets = compassInsets(in: geo)
-        let margin: CGFloat = 8
-
-        let minX = bounds.minX + insets.leading + M.ringReach + margin
-        let maxX = bounds.maxX - insets.trailing - M.ringReach - margin
-        let minY = bounds.minY + insets.top + M.ringReach + margin
-        let maxY = bounds.maxY - insets.bottom - M.ringReach - margin
-
-        let p = voiceController.fingerScreenPosition
-        // A screen too small for the ideal margins: center on that axis instead of
-        // letting an inverted range flip the clamp.
-        return CGPoint(x: minX <= maxX ? min(max(p.x, minX), maxX) : bounds.midX,
-                       y: minY <= maxY ? min(max(p.y, minY), maxY) : bounds.midY)
+        VoiceCompassView.Placement.clampedAnchor(voiceController.fingerScreenPosition,
+                                                 in: geo.frame(in: .local),
+                                                 insets: compassInsets(in: geo))
     }
 
-    @ViewBuilder
-    private var onboardingOverlay: some View {
-        if showOnboarding, case .connected = viewModel.connectionState {
-            GestureOnboardingOverlay {
-                GestureOnboardingOverlay.markDismissed()
-                withAnimation { showOnboarding = false }
-            }
-            .transition(.opacity)
-        }
-    }
+    // MARK: - Notice toast
 
-    // MARK: - Teaching overlays (TipCenter)
-
-    /// Transient top toast for fire-and-forget lessons (Focus default,
-    /// persistence, window tabs, sidebar, "this is parallel").
+    /// Transient top toast (the Focus default's one-time notice).
     @ViewBuilder
     private var tipToastView: some View {
         if let text = tipToast {
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "lightbulb.fill")
+                Image(systemName: "info.circle.fill")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.bentoEmerald)
                     .padding(.top, 1)
@@ -764,98 +652,6 @@ struct TerminalWrapperView: View {
             .padding(.top, 8)
             .transition(.move(edge: .top).combined(with: .opacity))
             .onTapGesture { withAnimation { tipToast = nil } }
-        }
-    }
-
-    /// The 4-color state legend — the product's mental-model key, presented
-    /// the first time any pane turns amber (§6.2). Non-modal: terminal stays
-    /// interactive around it.
-    @ViewBuilder
-    private var stateLegendOverlay: some View {
-        if showStateLegend {
-            StateLegendCard {
-                tips.markShown(.stateLegend)
-                withAnimation { showStateLegend = false }
-            }
-            .padding(.horizontal, 24)
-            .transition(.scale(scale: 0.92).combined(with: .opacity))
-        }
-    }
-
-    /// "Open a second agent" nudge, anchored under the top bar near the menus
-    /// that can actually do it (§6.1).
-    @ViewBuilder
-    private var parallelTipCard: some View {
-        if showParallelTip {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("It's working — you don't have to wait.")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.bentoInk)
-                Text(viewModel.sessionMode == .list
-                     ? "Open a second agent: tap + in the window list — that's a new tmux window."
-                     : "Open a second agent: ⋯ menu → Split Right (-h).")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.bentoInkDim)
-                Button("Got it") { withAnimation { showParallelTip = false } }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.bentoEmerald)
-            }
-            .padding(14)
-            .frame(maxWidth: 320)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.bentoSurface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.bentoBorder, lineWidth: 1)
-            )
-            .padding(.top, 52)
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .transition(.move(edge: .top).combined(with: .opacity))
-        }
-    }
-
-    /// Advanced voice gestures, taught after the 3rd successful send (§6.4).
-    @ViewBuilder
-    private var voiceAdvancedTipCard: some View {
-        if showVoiceAdvancedTip {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Voice, level 2")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.bentoInk)
-                Label {
-                    Text("Slide **right** while holding: review & edit the text before it sends.")
-                        .font(.system(size: 13)).foregroundStyle(Color.bentoInkDim)
-                } icon: {
-                    Image(systemName: "arrow.right").font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.bentoEmerald)
-                }
-                Label {
-                    Text("Slide **left**: turn plain words into a shell command.")
-                        .font(.system(size: 13)).foregroundStyle(Color.bentoInkDim)
-                } icon: {
-                    Image(systemName: "arrow.left").font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.bentoEmerald)
-                }
-                Button("Got it") { withAnimation { showVoiceAdvancedTip = false } }
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.bentoEmerald)
-            }
-            .padding(14)
-            .frame(maxWidth: 360)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.bentoSurface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.bentoBorder, lineWidth: 1)
-            )
-            .padding(.bottom, 90)
-            .padding(.horizontal, 16)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -909,18 +705,8 @@ struct TerminalWrapperView: View {
     /// attached device, not a view preference). The one confirmation:
     /// flattening a mixed external structure into List.
     private func selectMode(_ newMode: TmuxSessionMode) {
-        // First interaction retires the intro dot — the user has found the switch.
-        if tips.shouldShow(.modeToggleIntro) {
-            tips.markShown(.modeToggleIntro)
-        }
-        guard newMode != viewModel.sessionMode else { return }
-        // Leaving a focused (zoomed) pane before transforming keeps the result
-        // visible.
-        if let z = viewModel.zoomedPaneID {
-            viewModel.toggleZoom(z)
-        }
         Task {
-            let ok = await viewModel.setMode(newMode)
+            let ok = await viewModel.requestMode(newMode)
             if !ok { showMixedFlattenAlert = true }
         }
     }
@@ -952,23 +738,13 @@ struct TerminalWrapperView: View {
         }
         .pickerStyle(.segmented)
         .fixedSize()
-        // Intro dot (§6): "two views, switch freely, nothing is lost" — a
-        // quiet affordance marker, not a popover. Cleared on first use.
-        .overlay(alignment: .topTrailing) {
-            if tips.shouldShow(.modeToggleIntro) {
-                Circle()
-                    .fill(Color.bentoEmerald)
-                    .frame(width: 7, height: 7)
-                    .offset(x: 3, y: -3)
-            }
-        }
-        .alert("Switch to Focus mode?", isPresented: $showMixedFlattenAlert) {
-            Button("Flatten", role: .destructive) {
+        .alert(SessionPromptCopy.flatten.title, isPresented: $showMixedFlattenAlert) {
+            Button(SessionPromptCopy.flatten.confirm, role: .destructive) {
                 Task { await viewModel.setMode(.list, force: true) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This session contains a complex layout created outside BentoTerm. Switching will flatten every pane into its own window.")
+            Text(SessionPromptCopy.flatten.message ?? "")
         }
     }
 
@@ -985,13 +761,19 @@ struct TerminalWrapperView: View {
     /// can carry the glass).
     private var sessionMenuContent: some View {
         Group {
-            // Same order as the Mac pane menu: create, then arrange, then the
-            // session-wide policy — so the two platforms can be described with
-            // one sentence instead of two.
-            Button(action: toggleFullscreen) {
-                Label(isFullscreen ? "Exit Fullscreen" : "Fullscreen",
-                      systemImage: isFullscreen ? "arrow.down.right.and.arrow.up.left"
-                                                : "arrow.up.left.and.arrow.down.right")
+            // Arrange, then the session-wide policy, then the session itself.
+            // Creating panes is the pane menu's (it knows which pane to split).
+            //
+            // iPad only: in fullscreen its bar button is gone with the bar, so
+            // this row is the way back. An iPhone follows its orientation
+            // instead — landscape is fullscreen, portrait isn't — so it has no
+            // state to toggle.
+            if isRegularWidth {
+                Button(action: toggleFullscreen) {
+                    Label(isFullscreen ? "Exit Fullscreen" : "Fullscreen",
+                          systemImage: isFullscreen ? "arrow.down.right.and.arrow.up.left"
+                                                    : "arrow.up.left.and.arrow.down.right")
+                }
             }
             if viewModel.isTmuxReady {
                 // The phone has no room for the segmented switch in the bar,
@@ -999,9 +781,8 @@ struct TerminalWrapperView: View {
                 // Fullscreen shows it everywhere (the iPad bar's toggle is
                 // floating then, and there is no bar to host the switch).
                 if !isRegularWidth || isFullscreen { modeSection }
-                splitSection
                 layoutSection
-                sessionSizeSection
+                releaseSizeButton
             }
             Button { showSettings = true } label: {
                 Label("Settings", systemImage: "gear")
@@ -1073,34 +854,16 @@ struct TerminalWrapperView: View {
         .padding(.trailing, 12)
     }
 
-    /// Split section — Tiled only (List mode never shows a split entry: inside
-    /// Bento you cannot build a third shape). The two seeded entries mirror
-    /// List's window creation exactly.
-    @ViewBuilder
-    private var splitSection: some View {
-        if viewModel.sessionMode == .tiled {
-            Section("Split") {
-                Button(action: { viewModel.splitPane(horizontal: true) }) {
-                    Label("Split Right (-h)", systemImage: "rectangle.split.2x1")
-                }
-                Button(action: { viewModel.splitPane(horizontal: false) }) {
-                    Label("Split Down (-v)", systemImage: "rectangle.split.1x2")
-                }
-                Button(action: { Task { await viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) } }) {
-                    Label("Split — Duplicate Current", systemImage: "plus.square.on.square")
-                }
-                Button(action: { showSplitSheet = true }) {
-                    Label("Split — Path & Command…", systemImage: "terminal")
-                }
-            }
-        }
+    private var overflowMenuContext: PaneMenuContext {
+        PaneMenuContext(sessionMode: viewModel.sessionMode,
+                        paneCount: viewModel.paneViewModels.count)
     }
 
     /// tmux's named layouts — parity with the Mac pane menu. They were always
     /// available on the server; only macOS had ever offered them.
     @ViewBuilder
     private var layoutSection: some View {
-        if viewModel.sessionMode == .tiled, viewModel.paneViewModels.count > 1 {
+        if PaneMenuLayout.iosOverflowShowsLayouts(overflowMenuContext) {
             Section("Layout") {
                 ForEach(TmuxNamedLayout.all) { layout in
                     Button {
@@ -1114,39 +877,24 @@ struct TerminalWrapperView: View {
         }
     }
 
-    /// The sticky sizing policy (see `TerminalSizingMode`). Two states, checked
-    /// — not a "fit it now" button, because tmux recomputes a window's size
-    /// from its clients and a one-shot push is undone by the next client.
+    /// Release Size — only when something has fixed the session's size.
+    /// Taking it over is the banner's job; this hands it back to the default
+    /// (the device used last sets the size). The subtitle names who is being
+    /// released, which on a second device is the thing it can't otherwise see.
     @ViewBuilder
-    private var sessionSizeSection: some View {
-        Section {
-            ForEach(TerminalSizingMode.allCases, id: \.rawValue) { mode in
-                Button { setSizing(mode) } label: {
-                    if mode == viewModel.sizingMode {
-                        Label(iosTitle(mode), systemImage: "checkmark")
-                    } else {
-                        Label(iosTitle(mode), systemImage: mode.symbol)
+    private var releaseSizeButton: some View {
+        if viewModel.sizingMode.offersRelease {
+            Button { viewModel.releaseSessionSize() } label: {
+                Label {
+                    Text(TerminalSizingMode.releaseTitle)
+                    if let note = viewModel.sizingMode.releaseNote(
+                        owner: viewModel.sizingOwner, ownerIsMe: viewModel.sizingOwnerIsMe) {
+                        Text(note)
                     }
+                } icon: {
+                    Image(systemName: TerminalSizingMode.releaseSymbol)
                 }
             }
-        } header: {
-            // Naming the owner is the whole point on a second device: without it
-            // the menu shows a checked mode that this device cannot act on.
-            if viewModel.sizingMode == .thisDevice, let owner = viewModel.sizingOwner,
-               !viewModel.sizingOwnerIsMe {
-                Text("Session Size — set by \(owner.displayName)")
-            } else {
-                Text("Session Size")
-            }
-        }
-    }
-
-    /// Same states as the Mac, said in this device's words.
-    private func iosTitle(_ mode: TerminalSizingMode) -> String {
-        switch mode {
-        case .tracking:   return "Follow the Active Device"
-        case .smallest:   return "Fit Every Device"
-        case .thisDevice: return "Size to This Device"
         }
     }
 
@@ -1177,9 +925,12 @@ struct TerminalWrapperView: View {
         }
     }
 
-    private var closeWindowAlertTitle: String {
-        let name = pendingCloseWindow.map { viewModel.windowDisplayName($0) } ?? ""
-        return "Close “\(name)”?"
+    private var closeWindowPrompt: SessionPromptCopy.Prompt {
+        SessionPromptCopy.closeWindow(pendingCloseWindow.map { viewModel.windowDisplayName($0) } ?? "")
+    }
+
+    private var killSessionPrompt: SessionPromptCopy.Prompt {
+        SessionPromptCopy.killSession(viewModel.activeTmuxSessionName)
     }
 
     @ViewBuilder
@@ -1223,6 +974,10 @@ struct TerminalWrapperView: View {
     /// The find bar is up (its field holds the keyboard) — the floating
     /// quick-keys bar must hide so the two don't both sit on the keyboard top.
     @Published var findBarActive = false
+
+    /// The pane menu asked for "Split — Path & Command…"; the SwiftUI chrome
+    /// owns the sheet.
+    @Published var showsSplitPathCommand = false
 
     override init() {
         super.init()
@@ -1439,12 +1194,11 @@ final class PaneContainerVC: UIViewController {
     /// page; kept on top of the pane views after each tile layout.
     private let dividerOverlay = TileDividerOverlay()
 
-    /// Font cell size in device pixels, learned from the first surface that
-    /// reports it; constant for the font.
-    private var cellPx: CGSize?
-    /// Last cols×rows pushed to tmux (dedupe).
-    private var lastClient: (cols: Int, rows: Int)?
-    private var clientResizeWork: DispatchWorkItem?
+    /// Font cell size (re-learned whenever a surface reports a new one), the
+    /// last cols×rows pushed to tmux, and the push debounce.
+    private lazy var sizer = TiledClientSizer { [weak self] grid in
+        self?.viewModel?.resizeTmuxClient(cols: grid.cols, rows: grid.rows)
+    }
 
     // MARK: - Lifecycle
 
@@ -1461,7 +1215,7 @@ final class PaneContainerVC: UIViewController {
         view.addSubview(contentView)
         contentView.addSubview(dividerOverlay)
         dividerOverlay.onResize = { [weak self] paneID, vertical, deltaCells in
-            self?.resizeBoundary(paneID: paneID, vertical: vertical, deltaCells: deltaCells)
+            self?.viewModel?.resizeBoundary(paneID, vertical: vertical, deltaCells: deltaCells)
         }
         setupFloatingToolbar()
         setupFindBar()
@@ -1652,6 +1406,10 @@ final class PaneContainerVC: UIViewController {
             self?.viewModel?.selectPane(paneID)
             self?.viewModel?.splitPane(horizontal: horizontal)
         }
+        vc.onSplitPathCommandRequested = { [weak self] in
+            self?.viewModel?.selectPane(paneID)
+            self?.bridge?.showsSplitPathCommand = true
+        }
         vc.onCloseRequested = { [weak self] in self?.viewModel?.closePane(paneID) }
         vc.onToggleZoom = { [weak self] in self?.viewModel?.toggleZoom(paneID) }
         // tmux copy-mode entered from outside Bento — we don't implement the
@@ -1694,35 +1452,33 @@ final class PaneContainerVC: UIViewController {
     }
 
     /// Pane menu → Move to Session: run the move; an unsettled target (fresh
-    /// 1×1 with no remembered mode, or a mixed external structure) bounces
-    /// back as a landing prompt, then re-runs with the explicit choice.
-    private func movePane(_ paneID: TmuxPaneID, toSessionNamed name: String,
-                          landing: MoveLanding = .auto) {
+    /// 1×1 with no remembered mode, or a mixed external structure) asks where
+    /// to land, then re-runs with the explicit choice.
+    private func movePane(_ paneID: TmuxPaneID, toSessionNamed name: String) {
         Task { [weak self] in
-            guard let self, let vm = self.viewModel else { return }
-            if await vm.movePane(paneID, toSession: name, landing: landing)
-                == .needsLandingChoice {
-                self.promptMoveLanding(session: name) { [weak self] choice in
-                    self?.movePane(paneID, toSessionNamed: name, landing: choice)
-                }
+            guard let vm = self?.viewModel else { return }
+            await vm.movePane(paneID, toSession: name) { [weak self] session in
+                await self?.askMoveLanding(session: session)
             }
         }
     }
 
-    private func promptMoveLanding(session: String,
-                                   _ proceed: @escaping (MoveLanding) -> Void) {
-        let alert = UIAlertController(
-            title: "Move to “\(session)”",
-            message: "That session isn't settled into Parallel or Focus yet. Where should this land?",
-            preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Into Current Window (Parallel)", style: .default) { _ in
-            proceed(.joinCurrentWindow)
-        })
-        alert.addAction(UIAlertAction(title: "As New Window (Focus)", style: .default) { _ in
-            proceed(.newWindow)
-        })
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        present(alert, animated: true)
+    private func askMoveLanding(session: String) async -> MoveLanding? {
+        let copy = SessionPromptCopy.landing(session)
+        return await withCheckedContinuation { continuation in
+            let alert = UIAlertController(title: copy.title, message: copy.message,
+                                          preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: copy.joinCurrentWindow, style: .default) { _ in
+                continuation.resume(returning: .joinCurrentWindow)
+            })
+            alert.addAction(UIAlertAction(title: copy.newWindow, style: .default) { _ in
+                continuation.resume(returning: .newWindow)
+            })
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+                continuation.resume(returning: nil)
+            })
+            present(alert, animated: true)
+        }
     }
 
     /// Every pane on iOS lives on the other end of an ssh connection, so a
@@ -1760,8 +1516,7 @@ final class PaneContainerVC: UIViewController {
     /// from the focused/single pane (which fills the page). Tiled panes are
     /// fixed-size and never push.
     private func handlePaneSize(_ size: TerminalSurfaceSize, paneID: TmuxPaneID) {
-        if cellPx == nil, size.cellWidthPx > 0, size.cellHeightPx > 0 {
-            cellPx = CGSize(width: size.cellWidthPx, height: size.cellHeightPx)
+        if sizer.learn(cellWidthPx: size.cellWidthPx, cellHeightPx: size.cellHeightPx) {
             view.setNeedsLayout()
         }
         // In focus mode, the visible pane fills the page → its reported size is
@@ -1785,31 +1540,21 @@ final class PaneContainerVC: UIViewController {
     /// surfaces are currently sized to. `reserveTitleRow` accounts for the one
     /// cell of height the top pane's title bar takes in Tiles (Focus hides it).
     private func deviceFitGrid(reserveTitleRow: Bool) -> (cols: Int, rows: Int)? {
-        guard let cellPx, cellPx.width > 0, cellPx.height > 0 else { return nil }
+        guard let cellPx = sizer.cellPx else { return nil }
         let rect = pageRect
         guard rect.width > 0, rect.height > 0 else { return nil }
-        let scale = displayScale
-        let cols = max(Int((rect.width * scale) / cellPx.width), 2)
-        let rows = max(Int((rect.height * scale) / cellPx.height) - (reserveTitleRow ? 1 : 0), 1)
-        return (cols, rows)
+        return PaneTiling.clientGrid(viewport: rect.size, cellPixels: cellPx,
+                                     scale: displayScale, reserveTitleRow: reserveTitleRow)
     }
 
     private func pushClientSize(cols: Int, rows: Int) {
         dlog("[pushClientSize] \(cols)x\(rows)")
-        guard cols > 0, rows > 0 else { return }
         // No policy gate here: the view model gates the WIRE (a foreign `manual`
         // owner silences the `refresh-client`) and records the measurement
         // either way. Dropping it here instead left the engine believing this
         // device still fit whatever it measured before the other device took
         // the size — a stale grid to resize the session to on take-over.
-        guard lastClient?.cols != cols || lastClient?.rows != rows else { return }
-        lastClient = (cols, rows)
-        clientResizeWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.viewModel?.resizeTmuxClient(cols: cols, rows: rows)
-        }
-        clientResizeWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+        sizer.request(.init(cols: cols, rows: rows))
     }
 
     // MARK: - Layout
@@ -1904,9 +1649,7 @@ final class PaneContainerVC: UIViewController {
 
     /// Points per tmux cell, or nil until learned. ghostty reports the cell size
     /// in device pixels, so divide by the screen scale to get points.
-    private var pointsPerCell: CGSize? {
-        cellPx.map { CGSize(width: $0.width / displayScale, height: $0.height / displayScale) }
-    }
+    private var pointsPerCell: CGSize? { sizer.pointsPerCell(scale: displayScale) }
 
     // MARK: - Drag a pane's title bar onto another pane (swap / dock)
 
@@ -2120,7 +1863,7 @@ extension PaneContainerVC {
 
         guard let ppc = pointsPerCell else {
             // Cell size not learned yet: proportional bootstrap so the surfaces
-            // lay out and report their metrics (which teaches cellPx). The next
+            // lay out and report their metrics (which teaches the sizer the cell size). The next
             // layout pass re-runs cell-exact once a surface has reported.
             let page = pageRect.size
             setContentFrame(page)
@@ -2192,8 +1935,7 @@ extension PaneContainerVC {
     private func pageSizeForTiles(totalCols: CGFloat, totalRows: CGFloat) -> CGSize {
         let rect = pageRect
         guard windowSizeIsForeign, let ppc = pointsPerCell else { return rect.size }
-        return CGSize(width: totalCols * ppc.width,
-                      height: (totalRows + 1) * ppc.height)
+        return PaneTiling.pageSize(gridCols: totalCols, gridRows: totalRows, pointsPerCell: ppc)
     }
 
     /// Place the content view at the clamped pan offset. Page ≤ viewport → pinned
@@ -2234,17 +1976,9 @@ extension PaneContainerVC {
     }
 }
 
-// MARK: - Divider resize
+// MARK: - Divider hit-testing
 
 extension PaneContainerVC {
-    /// Resize the boundary owned by `paneID` by a signed cell delta (tmux
-    /// `resize-pane`).
-    private func resizeBoundary(paneID: TmuxPaneID, vertical: Bool, deltaCells: Int) {
-        guard let dir = PaneTiling.resizeDirection(vertical: vertical, deltaCells: deltaCells)
-        else { return }
-        viewModel?.resizePaneBy(paneID, direction: dir, amount: abs(deltaCells))
-    }
-
     /// The pane containers currently on screen — the input to divider and drop
     /// hit-testing (both shared with the macOS host).
     var paneFrames: [PaneFrame] {
@@ -2278,7 +2012,7 @@ extension PaneContainerVC {
                          in: paneFrames, excluding: source)
     }
 
-    private func handleTitleSwap(source paneID: TmuxPaneID, phase: TitleDragPhase) {
+    private func handleTitleSwap(source paneID: TmuxPaneID, phase: PaneDrag.Phase) {
         // Rearranging only makes sense between visible tiles. In focus /
         // single-pane layout there's nothing to land on, so ignore the drag.
         guard !isFocusLayout else { return }
@@ -2291,13 +2025,7 @@ extension PaneContainerVC {
             let drop = landing(atWindowPoint: p, excluding: paneID)
             endTitleDrag(paneID)
             guard let drop else { return }
-            switch PaneDrag.action(source: paneID, landing: drop) {
-            case let .dock(source, target, horizontal, before):
-                viewModel?.movePane(source, splitting: target,
-                                    horizontal: horizontal, before: before)
-            case let .swap(source, target):
-                viewModel?.swapPanes(source, with: target)
-            }
+            viewModel?.perform(PaneDrag.action(source: paneID, landing: drop))
         case .cancelled:
             endTitleDrag(paneID)
         }
@@ -2461,7 +2189,7 @@ extension PaneContainerVC {
         // per-layout-pass calls don't churn UIKit's menu plumbing.
         if floatingToolbar.menuButton.menu !== activeVC.paneMenu {
             floatingToolbar.menuButton.menu = activeVC.paneMenu
-            // The menu's Maximize/Restore entry reads this live at open time
+            // The menu's Zoom/Unzoom entry reads this live at open time
             // (deferred element), so wiring it once per pane change is enough.
             activeVC.isZoomed = { [weak self] in self?.viewModel?.zoomedPaneID != nil }
         }
@@ -2595,14 +2323,14 @@ extension PaneContainerVC {
 /// browser-tab style, horizontally scrollable, with a trailing "+" that offers
 /// the two creation seeds. Each tab shows the window's LIVE display name
 /// (derived from what's running — never renamed), its aggregate agent-state
-/// dot (`windowState`), and a pane-count badge when the window holds several
+/// dot (`windowStatus`), and a pane-count badge when the window holds several
 /// panes (external structures). Tapping a tab is select-window ONLY — zero
 /// zoom, zero resize — the terminal above simply starts mirroring that window.
 /// Long-press a tab → Close Window (confirmed: processes die).
 ///
 /// State dots refresh on every state poll without an explicit `.id`: the
 /// @ObservedObject view model bumps `stateVersion` (@Published) each cycle,
-/// which re-runs this body and re-derives `windowState`. (`.id(stateVersion)`
+/// which re-runs this body and re-derives `windowStatus`. (`.id(stateVersion)`
 /// on the scroll content would also reset the user's horizontal scroll
 /// position every poll, so it's deliberately not used here.)
 ///
@@ -2615,11 +2343,7 @@ struct WindowTabBar: View {
     /// Handed to the "New Window" sheet so its working directory can be
     /// browsed; nil = typed-path only.
     var pathContextProvider: (() -> PathPreviewContext?)? = nil
-    @State private var pendingClose: TmuxWindowID?
-    @State private var showCustomSheet = false
-    @State private var pendingMove: TmuxWindowID?
-    @State private var moveSessionName = ""
-    @State private var landingChoice: (window: TmuxWindowID, session: String)?
+    @StateObject private var actions = WindowActionsState()
     /// The tab a dragged tab is currently hovering over — it lifts to show the
     /// slot the drop would take.
     @State private var dropTarget: TmuxWindowID?
@@ -2632,7 +2356,7 @@ struct WindowTabBar: View {
                         // Body name only — the chips are small, the "N:" index
                         // prefix adds noise here (the sidebar keeps it).
                         WindowTab(name: viewModel.windowBodyName(window.id),
-                                  state: viewModel.windowState(window.id),
+                                  status: viewModel.windowStatus(window.id).chrome,
                                   paneCount: viewModel.panes(in: window.id).count,
                                   isActive: window.id == viewModel.activeWindowID)
                             .id(window.id)
@@ -2644,7 +2368,7 @@ struct WindowTabBar: View {
                                 // it reads as a thing in transit rather than as
                                 // a second "current window".
                                 WindowTab(name: viewModel.windowBodyName(window.id),
-                                          state: viewModel.windowState(window.id),
+                                          status: viewModel.windowStatus(window.id).chrome,
                                           paneCount: viewModel.panes(in: window.id).count,
                                           isActive: false)
                             }
@@ -2655,32 +2379,8 @@ struct WindowTabBar: View {
                                 else if dropTarget == window.id { dropTarget = nil }
                             }
                             .contextMenu {
-                                // The drag's one-step equivalent, for when the
-                                // drag isn't practical (VoiceOver, one hand on
-                                // a long strip).
-                                Button {
-                                    shift(window.id, earlier: true)
-                                } label: {
-                                    Label("Move Left", systemImage: "arrow.left")
-                                }
-                                .disabled(position(of: window.id) == 0)
-                                Button {
-                                    shift(window.id, earlier: false)
-                                } label: {
-                                    Label("Move Right", systemImage: "arrow.right")
-                                }
-                                .disabled(position(of: window.id) == viewModel.windows.count - 1)
-                                WindowMoveToSessionMenu(viewModel: viewModel) { session in
-                                    moveWindow(window.id, to: session)
-                                } onNewSession: {
-                                    moveSessionName = ""
-                                    pendingMove = window.id
-                                }
-                                Button(role: .destructive) {
-                                    pendingClose = window.id
-                                } label: {
-                                    Label("Close Window", systemImage: "xmark")
-                                }
+                                WindowContextMenu(viewModel: viewModel, state: actions,
+                                                  window: window.id, axis: .horizontal)
                             }
                     }
                     newWindowButton
@@ -2705,59 +2405,8 @@ struct WindowTabBar: View {
             // (BarItemGlass); the bar itself stays bare.
             Color.clear
         )
-        .alert(closeAlertTitle, isPresented: Binding(
-            get: { pendingClose != nil },
-            set: { if !$0 { pendingClose = nil } }
-        )) {
-            Button("Close Window", role: .destructive) {
-                if let id = pendingClose { viewModel.closeWindow(id) }
-                pendingClose = nil
-            }
-            Button("Cancel", role: .cancel) { pendingClose = nil }
-        } message: {
-            Text("The processes running in it will be terminated.")
-        }
-        .sheet(isPresented: $showCustomSheet) {
-            NewWindowSheet(title: "New Window",
-                           pathContextProvider: pathContextProvider) { path, command in
-                Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
-            }
-        }
-        .alert("Move to New Session", isPresented: Binding(
-            get: { pendingMove != nil },
-            set: { if !$0 { pendingMove = nil } }
-        )) {
-            TextField("Session name", text: $moveSessionName)
-            Button("Move") {
-                // Same landing pipeline as a menu pick: a typed name may
-                // match an EXISTING session, so the prompt can still follow.
-                if let id = pendingMove { moveWindow(id, to: moveSessionName) }
-                pendingMove = nil
-            }
-            Button("Cancel", role: .cancel) { pendingMove = nil }
-        } message: {
-            Text("The window keeps running — it moves to the new session.")
-        }
-        .confirmationDialog(
-            "Move to “\(landingChoice?.session ?? "")”",
-            isPresented: Binding(
-                get: { landingChoice != nil },
-                set: { if !$0 { landingChoice = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Into Current Window (Parallel)") {
-                if let c = landingChoice { moveWindow(c.window, to: c.session, landing: .joinCurrentWindow) }
-                landingChoice = nil
-            }
-            Button("As New Window (Focus)") {
-                if let c = landingChoice { moveWindow(c.window, to: c.session, landing: .newWindow) }
-                landingChoice = nil
-            }
-            Button("Cancel", role: .cancel) { landingChoice = nil }
-        } message: {
-            Text("That session isn't settled into Parallel or Focus yet. Where should this land?")
-        }
+        .windowActionDialogs(viewModel: viewModel, state: actions, close: .alert,
+                             pathContextProvider: pathContextProvider)
     }
 
     /// Landing a dragged tab on `target` gives it that tab's position — drop
@@ -2782,198 +2431,26 @@ struct WindowTabBar: View {
         viewModel.windows.firstIndex { $0.id == id }
     }
 
-    private func shift(_ id: TmuxWindowID, earlier: Bool) {
-        Task { await viewModel.shiftWindow(id, earlier: earlier) }
-    }
-
-    /// Run the move; an unsettled target bounces back as the landing dialog.
-    private func moveWindow(_ id: TmuxWindowID, to session: String,
-                            landing: MoveLanding = .auto) {
-        Task {
-            if await viewModel.moveWindow(id, toSession: session, landing: landing)
-                == .needsLandingChoice {
-                landingChoice = (id, session)
-            }
-        }
-    }
-
-    private var closeAlertTitle: String {
-        let name = pendingClose.map { viewModel.windowDisplayName($0) } ?? ""
-        return "Close “\(name)”?"
-    }
-
     /// The two creation seeds — same pair as the iPad/macOS sidebar.
     private var newWindowButton: some View {
-        Menu {
-            Button {
-                Task { await viewModel.newListWindow(.duplicateCurrent) }
-            } label: {
-                Label("Duplicate Current", systemImage: "plus.square.on.square")
-            }
-            Button {
-                showCustomSheet = true
-            } label: {
-                Label("Path & Command…", systemImage: "terminal")
-            }
-        } label: {
+        NewWindowSeedMenu(viewModel: viewModel,
+                          onPathAndCommand: { actions.showsNewWindowForm = true }) {
             Image(systemName: "plus")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.bentoInkDim)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .modifier(BarItemGlass(isActive: false, state: .idle))
+                .modifier(BarItemGlass(isActive: false))
                 .contentShape(Capsule())
         }
-    }
-}
-
-// MARK: - New window / split "path + command" form
-
-/// The "specify path + command" mini-sheet, shared by List's "+" menu and
-/// Tiled's "Split — Path & Command…". Empty command = plain shell; empty path
-/// = inherit the current pane's directory.
-///
-/// The directory is BROWSED (a pushed `FileTreeBrowserView` over the pane's
-/// own remote file source) whenever there is one to browse — typing a path on
-/// a phone is not a real affordance. The text field survives as the escape
-/// hatch, and is the whole section when no source is reachable.
-struct NewWindowSheet: View {
-    var title: String
-    /// Reaches the focused pane's REMOTE file source, so the directory can be
-    /// browsed instead of typed. nil — or a provider that returns nil (no
-    /// tmux, SSH down) — degrades the section to the plain text field.
-    var pathContextProvider: (() -> PathPreviewContext?)? = nil
-    var onCreate: (String?, String?) -> Void
-
-    @State private var path = ""
-    @State private var agentPreset: AgentPreset = .none
-    @State private var customCommand = ""
-    @State private var showPicker = false
-    /// The tree needs room: browsing pushes the sheet to .large and coming
-    /// back drops it to .medium, so the form stays the compact thing it was.
-    @State private var detent: PresentationDetent = .medium
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Working Directory") {
-                    // Browsable when the pane has a reachable file source —
-                    // on a phone a path is chosen, never typed. The field
-                    // stays as the escape hatch (jump anywhere) and is the
-                    // ONLY control when there's nothing to browse.
-                    if browsableContext != nil {
-                        Button {
-                            showPicker = true
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "folder")
-                                    .foregroundStyle(Color.accentColor)
-                                Text(path.isEmpty ? "Current directory" : path)
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(path.isEmpty ? .secondary : .primary)
-                                    .lineLimit(1)
-                                    .truncationMode(.head)
-                                Spacer(minLength: 4)
-                                Image(systemName: "chevron.right")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        if !path.isEmpty {
-                            Button("Use Current Directory") { path = "" }
-                        }
-                    }
-                    TextField(browsableContext == nil ? "Empty = current directory"
-                                                      : "Or type a path",
-                              text: $path)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-                Section("Command") {
-                    Picker("Agent", selection: $agentPreset) {
-                        ForEach(AgentPreset.allCases) { preset in
-                            Text(preset.rawValue).tag(preset)
-                        }
-                    }
-                    if agentPreset == .custom {
-                        TextField("e.g. cursor-agent", text: $customCommand)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .font(.system(.body, design: .monospaced))
-                    }
-                }
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(isPresented: $showPicker) { directoryPicker }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        onCreate(path.isEmpty ? nil : path, resolvedCommand)
-                        dismiss()
-                    }
-                    .disabled(!canCreate)
-                }
-            }
-        }
-        .presentationDetents([.medium, .large], selection: $detent)
-        .onChange(of: showPicker) { _, browsing in
-            detent = browsing ? .large : .medium
-        }
-    }
-
-    /// The pane's file context right now — re-asked on every body pass because
-    /// the transport reconnects (and the answer flips to nil when it's down).
-    private var browsableContext: PathPreviewContext? {
-        pathContextProvider?()
-    }
-
-    /// Pushed, not a second sheet: a sheet-over-sheet at .medium would have
-    /// left the tree a few rows tall.
-    @ViewBuilder private var directoryPicker: some View {
-        DirectoryPickerView(
-            contextProvider: { pathContextProvider?() },
-            confirmTitle: "Use This Folder",
-            onPick: { picked in
-                path = picked
-                showPicker = false
-            })
-            .navigationTitle("Choose Folder")
-            .navigationBarTitleDisplayMode(.inline)
-    }
-
-    /// nil = plain shell (no agent); otherwise the chosen agent's launch command
-    /// or the user's custom command.
-    private var resolvedCommand: String? {
-        switch agentPreset {
-        case .none:
-            return nil
-        case .custom:
-            let trimmed = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        default:
-            return agentPreset.command
-        }
-    }
-
-    /// Custom needs a non-empty command; every other preset is always valid.
-    private var canCreate: Bool {
-        agentPreset != .custom
-            || !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
 /// Liquid-glass capsule for the window tab bar's chips — each tab and the
 /// "+" button. The bar itself stays transparent so the terminal flows through
 /// it; only the items wear glass. iOS 26: the chip's glass is tinted by its
-/// window's state (`chromeAccentHex` — working blue, awaiting amber, idle
-/// plain); the active chip wears the full color, inactive chips a weakened
+/// window's status (`PaneChrome.Status.accentHex` — working blue, awaiting
+/// amber, done green, idle plain); the active chip wears the full color, inactive chips a weakened
 /// version of the same, so the bar shows every window's state at a glance
 /// while the active tab stays the strongest. Earlier systems: the flat bento
 /// chip with the emerald ring. The chip's content (dot, label, badge) is
@@ -2981,7 +2458,7 @@ struct NewWindowSheet: View {
 /// the material.
 private struct BarItemGlass: ViewModifier {
     var isActive: Bool
-    var state: PaneState = .idle
+    var status: PaneChrome.Status = .idle
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -2999,15 +2476,15 @@ private struct BarItemGlass: ViewModifier {
         }
     }
 
-    /// State accent for the glass, from the canonical palette (working blue /
-    /// awaiting amber) — full strength when active, half when not, so the
-    /// state reads on every chip and the active one is the loudest. Idle has
-    /// no state accent: the active chip wears the theme accent (emerald) so a
-    /// resting window's selected tab still stands out; inactive idle chips
-    /// wear plain glass.
+    /// Status accent for the glass, from the canonical palette (working blue /
+    /// awaiting amber / done green) — full strength when active, half when
+    /// not, so the status reads on every chip and the active one is the
+    /// loudest. Idle has no accent: the active chip wears the theme accent
+    /// (emerald) so a resting window's selected tab still stands out; inactive
+    /// idle chips wear plain glass.
     private var tint: Color? {
-        if let hex = state.chromeAccentHex {
-            let base = Color(PaneState.uiColor(hex: hex))
+        if let hex = status.accentHex {
+            let base = Color(hex: hex)
             return isActive ? base : base.opacity(0.5)
         }
         return isActive ? Color.bentoEmerald : nil
@@ -3016,19 +2493,20 @@ private struct BarItemGlass: ViewModifier {
 
 private struct WindowTab: View {
     var name: String
-    var state: PaneState
+    var status: PaneChrome.Status
     var paneCount: Int
     var isActive: Bool
 
     var body: some View {
         HStack(spacing: 6) {
-            // State icon — same glyph language as the sidebar rows: play =
-            // working, question = awaiting, hollow ring = idle. Active: white,
-            // matching the text (the tinted chip owns the color then);
-            // inactive: the state color.
-            Image(systemName: stateIconName)
+            // Status icon — the sidebar rows' and pane titles' glyph language
+            // (`PaneChrome.Status`): play = working, question = awaiting,
+            // check = done while you were elsewhere, hollow ring = idle.
+            // Active: white, matching the text (the tinted chip owns the color
+            // then); inactive: the status color.
+            Image(systemName: status.symbol)
                 .font(.system(size: 12))
-                .foregroundStyle(isActive ? Color.white : Color(STTheme.dotColor(for: state)))
+                .foregroundStyle(isActive ? Color.white : Color(hex: status.glyphHex))
 
             Text(name.isEmpty ? "window" : name)
                 .font(.system(.footnote, design: .monospaced))
@@ -3055,16 +2533,8 @@ private struct WindowTab: View {
         // Glass chip on iOS 26, tinted by the window's state — active wears
         // the full color, inactive a weakened version of the same. Flat bento
         // chip with the emerald ring on earlier systems (deployment target 17).
-        .modifier(BarItemGlass(isActive: isActive, state: state))
+        .modifier(BarItemGlass(isActive: isActive, status: status))
         .contentShape(Capsule())
-    }
-
-    private var stateIconName: String {
-        switch state {
-        case .working:       return "play.circle.fill"
-        case .awaitingInput: return "questionmark.circle.fill"
-        case .idle:          return "circle"
-        }
     }
 }
 

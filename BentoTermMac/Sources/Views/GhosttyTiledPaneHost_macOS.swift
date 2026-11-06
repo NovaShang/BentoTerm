@@ -39,14 +39,12 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// does NOT remove block observers, so the tokens must be stored and removed
     /// explicitly (mirrors the surface's `renderObservers`).
     nonisolated(unsafe) private var themeObservers: [NSObjectProtocol] = []
-    /// Cell size in pixels (constant for the font); learned from the first surface.
-    private var cellPx: CGSize?
-    private var resizeDebounce: DispatchWorkItem?
-    private var lastClient: (cols: Int, rows: Int)?
-    /// The tmux client size computed during a live window-resize drag, applied
-    /// once the drag ends (so the TUI gets one SIGWINCH on mouse-up, not a burst
-    /// throughout the drag). nil when not mid-drag.
-    private var pendingClient: (cols: Int, rows: Int)?
+    /// Cell size, last pushed client grid, debounce, and the grid held during
+    /// a live window drag (sent once on mouse-up, so the TUI gets one SIGWINCH
+    /// rather than a burst).
+    private lazy var sizer = TiledClientSizer { [weak self] grid in
+        self?.viewModel.resizeTmuxClient(cols: grid.cols, rows: grid.rows)
+    }
     private let dividerOverlay = DividerOverlay()
 
     /// Hold-to-talk voice (right-click-and-hold a pane). One controller per
@@ -77,13 +75,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// is normally one character cell tall — see layoutCells).
     static let fallbackTitleBarHeight: CGFloat = 20
 
-    /// NSColor from a 0xRRGGBB terminal color.
-    static func bgColor(_ rgb: UInt32) -> NSColor {
-        NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255,
-                green: CGFloat((rgb >> 8) & 0xFF) / 255,
-                blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
-    }
-
     public init(viewModel: TerminalViewModel, theme: TerminalTheme) {
         self.viewModel = viewModel
         self.theme = theme
@@ -92,7 +83,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // Paint the host in the terminal background color (not black) so the
         // one-cell divider column between side-by-side panes reads as the pane
         // background bleeding through, not an empty gap. Geometry is unchanged.
-        layer?.backgroundColor = Self.bgColor(theme.background).cgColor
+        layer?.backgroundColor = NSColor(hex: theme.background).cgColor
 
         dividerOverlay.host = self
         dividerOverlay.autoresizingMask = [.width, .height]
@@ -167,15 +158,14 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// to every live surface.
     private func reapplyTheme() {
         theme = ThemeStore.shared.makeTerminalTheme()
-        layer?.backgroundColor = Self.bgColor(theme.background).cgColor
+        layer?.backgroundColor = NSColor(hex: theme.background).cgColor
         // A font change (size OR family) changes the pixel size of one cell, so
         // the cached cell metrics and last-pushed tmux client size are now stale.
-        // Drop them: the next surface size report re-learns cellPx (the `cellPx
-        // == nil` branch in onSizeChanged) and re-pushes the client size, then we
-        // re-tile against the new grid. Without this the surfaces stay sized to
-        // the old font's cells and the layout tears.
-        cellPx = nil
-        lastClient = nil
+        // Drop them: the next surface size report re-learns the cell size and
+        // re-pushes the client size, then we re-tile against the new grid.
+        // Without this the surfaces stay sized to the old font's cells and the
+        // layout tears.
+        sizer.reset()
         for (_, cell) in cells {
             cell.surface.applyTheme(theme)
             // CGColor chrome (border + title-bar band/ink) is a static snapshot —
@@ -329,21 +319,11 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         }
         surface.onSizeChanged = { [weak self] size in
             guard let self else { return }
-            // Track the cell pixel size whenever it CHANGES, not just when nil.
-            // cellPx is in device pixels, so it changes when the window moves to a
-            // display with a different backing scale (e.g. unplug an external
-            // monitor: 2× ↔ 1×) or when the font changes. Learning it only-once
-            // (`== nil`) raced the backing-change handler that nils it: if the
-            // surface re-reported before the nil landed, the new cell size was
-            // dropped and the grid stayed stuck on the old scale (huge/tiny text)
-            // until relaunch.
-            if size.cellWidthPx > 0, size.cellHeightPx > 0 {
-                let newCell = CGSize(width: size.cellWidthPx, height: size.cellHeightPx)
-                if self.cellPx != newCell {
-                    self.cellPx = newCell
-                    self.recomputeClientSize()
-                    self.layoutCells()
-                }
+            // Learned on every change (see `TiledClientSizer.learn`): a
+            // backing-scale move or a font change re-tiles at once.
+            if self.sizer.learn(cellWidthPx: size.cellWidthPx, cellHeightPx: size.cellHeightPx) {
+                self.recomputeClientSize()
+                self.layoutCells()
             }
             // Single / zoomed pane: this surface fills the window, so ghostty's
             // reported grid IS exactly what's rendered — drive the tmux client
@@ -356,8 +336,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             }
         }
 
-        // Path preview (⌘hover / ⌘click): macOS panes run against the local
-        // machine, so files come straight off disk. cwd = the pane's live tmux
+        // Path preview (⌘hover / ⌘click): files come straight off this Mac's
+        // disk, which is only right for a local session (see remoteBlock). cwd = the pane's live tmux
         // path (never stale), falling back to the surface's OSC 7 report.
         surface.pathWrapCols = { [weak paneVM] in paneVM?.pane.width }
         surface.pathPreviewContext = PathPreviewContext(
@@ -371,13 +351,16 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             },
             hostLabel: "This Mac",
             isLocal: true,
-            // Files come off the LOCAL disk; when this pane is an ssh/mosh
-            // session the real files are on another host — refuse honestly
-            // rather than list this Mac's files.
-            remoteBlock: { [weak paneVM] in
-                PathPreviewContext.isRemoteShellCommand(paneVM?.pane.currentCommand)
-                    ? "This pane is a remote (SSH) session — its files aren’t browsable here yet."
-                    : nil
+            // Files come off the LOCAL disk; when this tab's tmux runs on an
+            // ssh host, or this pane is an ssh/mosh session, the real files are
+            // on another machine — refuse honestly rather than resolve a remote
+            // cwd against this Mac's disk (a path that happens to exist here
+            // too would preview the wrong file).
+            remoteBlock: { [weak self, weak paneVM] in
+                let host = self?.linkHost
+                return PathPreviewContext.localSourceBlock(
+                    sessionHost: host?.isLocal == false ? host?.label : nil,
+                    foregroundCommand: paneVM?.pane.currentCommand)
             })
     }
 
@@ -454,33 +437,35 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                          in: cellFrames, excluding: source)
     }
 
-    private func handlePaneDrag(source paneID: TmuxPaneID, phase: PaneDragPhase) {
+    private func handlePaneDrag(source paneID: TmuxPaneID, phase: PaneDrag.Phase) {
         switch phase {
+        case .began:
+            guard dragSourceID == nil else { return }
+            dragSourceID = paneID
+            cells[paneID]?.container.alphaValue = 0.6
+            NSCursor.closedHand.push()
+
         case .moved(let windowPoint):
-            if dragSourceID == nil {
-                dragSourceID = paneID
-                cells[paneID]?.container.alphaValue = 0.6
-                NSCursor.closedHand.push()
-            }
             updateDropOverlay(landing(at: windowPoint, excluding: paneID))
 
         case .ended(let windowPoint):
             let drop = landing(at: windowPoint, excluding: paneID)
-            dropOverlay?.removeFromSuperview()
-            dropOverlay = nil
-            cells[paneID]?.container.alphaValue = 1.0
-            if dragSourceID != nil {
-                dragSourceID = nil
-                NSCursor.pop()
-            }
+            endPaneDrag(paneID)
             guard let drop else { return }
-            switch PaneDrag.action(source: paneID, landing: drop) {
-            case let .dock(source, target, horizontal, before):
-                viewModel.movePane(source, splitting: target,
-                                   horizontal: horizontal, before: before)
-            case let .swap(source, target):
-                viewModel.swapPanes(source, with: target)
-            }
+            viewModel.perform(PaneDrag.action(source: paneID, landing: drop))
+
+        case .cancelled:
+            endPaneDrag(paneID)
+        }
+    }
+
+    private func endPaneDrag(_ paneID: TmuxPaneID) {
+        dropOverlay?.removeFromSuperview()
+        dropOverlay = nil
+        cells[paneID]?.container.alphaValue = 1.0
+        if dragSourceID != nil {
+            dragSourceID = nil
+            NSCursor.pop()
         }
     }
 
@@ -535,13 +520,13 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         } else {
             overlay = MacVoiceOverlay(controller: voiceController,
                                       frame: NSRect(origin: .zero,
-                                                    size: MacVoiceOverlay.preferredSize))
+                                                    size: VoiceCompassView.Metrics.size))
             addSubview(overlay)   // on top of the panes + divider overlay
             voiceOverlay = overlay
         }
 
         // Center the overlay at the press point (screen → host coords).
-        let size = MacVoiceOverlay.preferredSize
+        let size = VoiceCompassView.Metrics.size
         var local = NSPoint(x: bounds.midX, y: bounds.midY)
         if let window {
             local = convert(window.convertPoint(fromScreen: screenPt), from: nil)
@@ -552,16 +537,13 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // anywhere else and it jumped inward, away from the pointer. The bubble
         // handles the edges itself now (flips below near the top, slides
         // sideways near a side), so the anchor barely has to move.
-        let reach = VoiceCompassView.Metrics.ringReach + 8
-        let anchor = NSPoint(
-            x: min(max(local.x, reach), max(bounds.width - reach, reach)),
-            y: min(max(local.y, reach), max(bounds.height - reach, reach)))
+        let area = CGRect(origin: .zero, size: bounds.size)
+        let anchor = VoiceCompassView.Placement.clampedAnchor(local, in: area)
         // No y-flip here: this host is `isFlipped` (see above), so its coords are
         // already the y-down space `Placement` works in. Flipping anyway inverted
         // the rule — a press at the BOTTOM of the window put the bubble below it,
         // off screen.
-        overlay.placement = .resolve(anchor: CGPoint(x: anchor.x, y: anchor.y),
-                                     in: CGRect(origin: .zero, size: bounds.size))
+        overlay.placement = .resolve(anchor: anchor, in: area)
         overlay.frame = NSRect(x: anchor.x - size.width / 2, y: anchor.y - size.height / 2,
                                width: size.width, height: size.height)
         overlay.isHidden = false
@@ -625,57 +607,65 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // that is otherwise entirely about THIS pane. Same reason there are no
         // session-level entries: this menu is about one pane.
         let zoomed = (viewModel.zoomedPaneID == paneID)
-        // Splits are Tiled mode's creation path — List mode (one pane per
-        // window) creates via the sidebar's New Window instead, so no split
-        // entries there (the ⌘D actions below no-op the same way).
-        if viewModel.sessionMode != .list {
-            // Icons make the split direction legible (the words "vertical/horizontal"
-            // are ambiguous): side-by-side panes vs stacked panes. The symbol mirrors
-            // the resulting layout — splitVertically → two columns, splitHorizontally
-            // → two rows (matches splitPane(horizontal:) below).
-            menu.addItem(item("Split Right (-h)", BentoPaneAction.splitVertically, symbol: "rectangle.split.2x1"))
-            menu.addItem(item("Split Down (-v)", BentoPaneAction.splitHorizontally, symbol: "rectangle.split.1x2"))
-            menu.addItem(.separator())
-            // Seeded splits — creation parity with List's New Window menu (the
-            // same two seeds; both split to the right).
-            menu.addItem(item("Split — Duplicate Current", #selector(splitDuplicateCurrent(_:)),
-                              symbol: "plus.square.on.square"))
-            menu.addItem(item("Split — Path & Command…", #selector(splitWithPathCommand(_:)),
-                              symbol: "terminal"))
-            // The agents you've had open lately, ready to split off again.
-            // Nothing remembered yet → no separator either: a "Recent Agents"
-            // header over an empty stretch reads as broken, not as empty.
-            let recents = Self.recentAgentItems(host: viewModel.launchHost, target: self,
-                                                action: #selector(splitRecentLaunch(_:)))
-            if !recents.isEmpty {
+        // Rows, order and words come from the shared catalog (PaneMenuLayout):
+        // splits only in Parallel — Focus creates via the sidebar's New Window,
+        // and the ⌘D actions no-op there the same way.
+        let context = PaneMenuContext(sessionMode: viewModel.sessionMode, zoomed: zoomed)
+        let rows = PaneMenuLayout.macPaneMenu(context)
+        for row in rows {
+            switch row {
+            case .command(let command):
+                guard let action = Self.paneMenuSelector(command) else { continue }
+                menu.addItem(item(command.title(on: .macPaneMenu, zoomed: zoomed), action,
+                                  symbol: command.symbol(on: .macPaneMenu, zoomed: zoomed)))
+            case .separator:
                 menu.addItem(.separator())
-                let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
-                header.isEnabled = false
-                menu.addItem(header)
-                recents.forEach { menu.addItem($0) }
+            case .recentAgents:
+                // The agents you've had open lately, ready to split off again.
+                // Nothing remembered yet → no separator either: a "Recent
+                // Agents" header over an empty stretch reads as broken.
+                let recents = Self.recentAgentItems(host: viewModel.launchHost, target: self,
+                                                    action: #selector(splitRecentLaunch(_:)))
+                if !recents.isEmpty {
+                    menu.addItem(.separator())
+                    let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
+                    header.isEnabled = false
+                    menu.addItem(header)
+                    recents.forEach { menu.addItem($0) }
+                }
+            case .layouts:
+                menu.addItem(layoutMenuItem())
+            case .moveToSession:
+                menu.addItem(makeMoveToSessionItem())
+            case .paste:
+                break   // iOS-only row; the Mac pastes from Edit and right-click.
             }
-            menu.addItem(.separator())
-            menu.addItem(layoutMenuItem())
-            menu.addItem(.separator())
         }
-        menu.addItem(item(zoomed ? "Unzoom" : "Zoom", BentoPaneAction.toggleZoom,
-                          symbol: zoomed ? "arrow.down.right.and.arrow.up.left"
-                                         : "arrow.up.left.and.arrow.down.right"))
-        menu.addItem(.separator())
-        // tmux swap-pane -U/-D (the `{`/`}` bindings). Panes can also be
-        // rearranged by dragging a title bar onto another pane.
-        menu.addItem(item("Swap Up", BentoPaneAction.swapPaneUp, symbol: "arrow.up.square"))
-        menu.addItem(item("Swap Down", BentoPaneAction.swapPaneDown, symbol: "arrow.down.square"))
-        menu.addItem(.separator())
-        menu.addItem(makeMoveToSessionItem())
-        menu.addItem(.separator())
-        menu.addItem(item("Close Pane", BentoPaneAction.closePane, symbol: "xmark"))
         // Detached so the caller can splice them into a menu it owns. An
         // NSMenuItem may belong to only one menu at a time, which is also why
         // this is rebuilt per open rather than cached.
         let items = menu.items
         for it in items { menu.removeItem(it) }
         return items
+    }
+
+    /// How the Mac performs a catalog command: the responder-chain selectors
+    /// the menu bar uses too. nil = not a pane-menu action on this platform.
+    static func paneMenuSelector(_ command: PaneCommand) -> Selector? {
+        switch command {
+        case .splitRight: return BentoPaneAction.splitVertically
+        case .splitDown: return BentoPaneAction.splitHorizontally
+        case .splitDuplicate: return BentoPaneAction.splitDuplicate
+        case .splitPathCommand: return BentoPaneAction.splitPathCommand
+        case .zoom: return BentoPaneAction.toggleZoom
+        case .closePane: return BentoPaneAction.closePane
+        case .nextPane: return BentoPaneAction.nextPane
+        case .previousPane: return BentoPaneAction.previousPane
+        case .newTmuxWindow: return BentoPaneAction.newTmuxWindow
+        case .newTmuxWindowDuplicate: return BentoPaneAction.newWindowDuplicate
+        case .find: return BentoPaneAction.findInPane
+        case .exitCopyMode: return nil
+        }
     }
 
     private func item(_ title: String, _ action: Selector, symbol: String? = nil) -> NSMenuItem {
@@ -754,8 +744,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     // tmux client grid stays correct.
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        cellPx = nil
-        lastClient = nil
+        sizer.reset()
         layoutCells()
     }
 
@@ -778,16 +767,11 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// Push ghostty's authoritative reported grid as the tmux client size
     /// (deduped + debounced). Exact match → no wrap/redraw artifacts.
     private func pushAuthoritativeClientSize(cols: Int, rows: Int) {
-        guard cols > 0, rows > 0 else { return }
-        // Defer the tmux resize until the live drag ends (applied in
-        // viewDidEndLiveResize). ghostty still renders at the live size.
-        if window?.inLiveResize == true { pendingClient = (cols, rows); return }
-        guard lastClient?.cols != cols || lastClient?.rows != rows else { return }
-        lastClient = (cols, rows)
-        resizeDebounce?.cancel()
-        let work = DispatchWorkItem { [weak self] in
+        // Held until the live drag ends (flushed in viewDidEndLiveResize);
+        // ghostty still renders at the live size.
+        sizer.request(.init(cols: cols, rows: rows),
+                      holding: window?.inLiveResize == true) { [weak self] in
             guard let self else { return }
-            self.viewModel.resizeTmuxClient(cols: cols, rows: rows)
             // One-shot after the first (attach) resize: the pty/tmux started at
             // a default size, drew the prompt, then we resized to the window's
             // real grid — leaving a stale pre-resize prompt + blank gap. A single
@@ -800,8 +784,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                 }
             }
         }
-        resizeDebounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
     }
 
     /// Convert the window size → tmux client cols×rows and push it (debounced).
@@ -820,33 +802,23 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 
     private func recomputeClientSize() {
         guard !isSingleOrZoom else { return }
-        guard let cellPx, bounds.width > 0, bounds.height > 0 else { return }
+        guard let cellPx = sizer.cellPx, bounds.width > 0, bounds.height > 0 else { return }
         let (cols, rows) = windowGrid(cellPx: cellPx)
-        if window?.inLiveResize == true { pendingClient = (cols, rows); return }
-        guard lastClient?.cols != cols || lastClient?.rows != rows else { return }
-        lastClient = (cols, rows)
-        resizeDebounce?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.viewModel.resizeTmuxClient(cols: cols, rows: rows)
-        }
-        resizeDebounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+        sizer.request(.init(cols: cols, rows: rows), holding: window?.inLiveResize == true)
     }
 
     /// User-triggered "fit the session to THIS window": push the window's grid
     /// as the tmux client size even when it hasn't changed. The automatic
-    /// pushes dedup against `lastClient`, so after ANOTHER client (an iPad)
+    /// pushes dedup against the last pushed grid, so after ANOTHER client (an iPad)
     /// shrank the shared session, this window's unchanged size is never
     /// re-asserted on its own — this is the manual override for that case.
     public func refitSessionToWindow() {
-        if !isSingleOrZoom, let cellPx, bounds.width > 0, bounds.height > 0 {
+        if !isSingleOrZoom, let cellPx = sizer.cellPx, bounds.width > 0, bounds.height > 0 {
             let (cols, rows) = windowGrid(cellPx: cellPx)
-            lastClient = (cols, rows)
-            viewModel.resizeTmuxClient(cols: cols, rows: rows)
-        } else if let last = lastClient {
+            sizer.pushNow(.init(cols: cols, rows: rows))
+        } else if let last = sizer.lastPushed {
             // Single/zoomed pane: the surface grid last pushed is authoritative.
-            viewModel.resizeTmuxClient(cols: last.cols, rows: last.rows)
+            sizer.pushNow(last)
         }
     }
 
@@ -855,11 +827,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     public override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         layoutCells()
-        guard let p = pendingClient else { return }
-        pendingClient = nil
-        guard lastClient?.cols != p.cols || lastClient?.rows != p.rows else { return }
-        lastClient = (p.cols, p.rows)
-        viewModel.resizeTmuxClient(cols: p.cols, rows: p.rows)
+        sizer.flush()
     }
 
     /// The bounding box of all panes in tmux cell units (used as the tiling grid).
@@ -869,11 +837,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 
     /// Points per tmux cell (font cell size ÷ backing scale), or nil until the
     /// cell size has been learned from a surface.
-    private var pointsPerCell: CGSize? {
-        guard let cellPx else { return nil }
-        let scale = currentScale
-        return CGSize(width: cellPx.width / scale, height: cellPx.height / scale)
-    }
+    private var pointsPerCell: CGSize? { sizer.pointsPerCell(scale: currentScale) }
 
     /// Tile panes proportionally to fill the host, using the bounding box of all
     /// panes as the cell grid. When a pane is zoomed, it alone fills the host and
@@ -995,9 +959,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 
     /// Resize the boundary owned by `paneID` along an axis by a signed cell delta.
     func resizeBoundary(paneID: TmuxPaneID, vertical: Bool, deltaCells: Int) {
-        guard let dir = PaneTiling.resizeDirection(vertical: vertical, deltaCells: deltaCells)
-        else { return }
-        viewModel.resizePaneBy(paneID, direction: dir, amount: abs(deltaCells))
+        viewModel.resizeBoundary(paneID, vertical: vertical, deltaCells: deltaCells)
     }
 
     // MARK: - Menu / keyboard actions (reached via the responder chain)
@@ -1167,7 +1129,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         let recentFiles = PaletteRecents.shared.files.map { entry in
             PaletteItem(id: "recent:" + entry.path,
                         title: (entry.path as NSString).lastPathComponent,
-                        subtitle: paletteAbbrev(entry.path),
+                        subtitle: tildeAbbreviated(entry.path),
                         systemImage: "clock",
                         matchText: (entry.path as NSString).lastPathComponent,
                         action: .preview(path: entry.path, line: nil))
@@ -1180,29 +1142,14 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // Recent (directory + command) launches → open that session again.
         // These used to spawn a pane in whatever window was front; a remembered
         // launch is a place you go back to WORK, so it gets its own session
-        // rather than grafting itself onto an unrelated one.
+        // rather than grafting itself onto an unrelated one. Each record shows
+        // once: splitting one into THIS window is the pane menu's and New ⌄'s
+        // Recent Agents, so the palette doesn't list the same rows again under
+        // a second verb.
         let launches = targets.recentTargets().map(row)
         if !launches.isEmpty {
             specs.append(PaletteSectionSpec(id: "launches", title: "Recent Launches",
                                             items: launches, limit: 6))
-        }
-
-        // The same remembered agents as the split menu, but searchable — which
-        // is the half a menu can't do once there are a dozen repos. Splits
-        // HERE, unlike Recent Launches above: same rows, different verb, so
-        // they say so in their titles rather than relying on the section
-        // header alone.
-        let splitRows = PaletteRecents.shared.agentLaunches(host: viewModel.launchHost).map { record in
-            PaletteItem(id: "split:\(record.command):\(record.dir)",
-                        title: "Split \(record.command)",
-                        subtitle: paletteAbbrev(record.dir),
-                        systemImage: "rectangle.split.2x1",
-                        matchText: "split \(record.command) \(record.dir)",
-                        action: .run { [weak self] in self?.splitRecent(record) })
-        }
-        if !splitRows.isEmpty, viewModel.sessionMode != .list {
-            specs.append(PaletteSectionSpec(id: "splitRecents", title: "Split Here",
-                                            items: splitRows, limit: 6))
         }
 
         // Navigation across all three tmux levels. The palette is the one place
@@ -1287,66 +1234,57 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                             }
                         })
         }
-        return layouts + [
-            cmd("splitRight", "Split Right (-h)", "rectangle.split.2x1") { [weak self] in self?.splitPaneVertically(nil) },
-            cmd("splitDown", "Split Down (-v)", "rectangle.split.1x2") { [weak self] in self?.splitPaneHorizontally(nil) },
-            cmd("duplicate", "Duplicate Pane (dir + command)", "plus.square.on.square") { [weak self] in
-                guard let self else { return }
-                Task { await self.viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) }
+        // Pane commands: words and order from the shared catalog. The palette
+        // calls the host directly rather than through the responder chain —
+        // it is already talking to this host.
+        let paneCommands = PaneMenuLayout.macPalette.map { command in
+            cmd(command.paletteID, command.title(on: .macPalette),
+                command.symbol(on: .macPalette) ?? "command") { [weak self] in
+                self?.runPaletteCommand(command)
+            }
+        }
+        return layouts + paneCommands + [
+            cmd("newWindow", LaunchAction.emptySession.title, LaunchAction.emptySession.systemImage) {
+                BentoTerminalWindow.newWindow()
             },
-            cmd("closePane", "Close Pane", "xmark.square") { [weak self] in self?.closeCurrentPane(nil) },
-            cmd("zoom", "Toggle Zoom", "arrow.up.left.and.arrow.down.right") { [weak self] in self?.toggleCurrentPaneZoom(nil) },
-            cmd("nextPane", "Select Next Pane", "arrow.right.square") { [weak self] in self?.selectNextPane(nil) },
-            cmd("prevPane", "Select Previous Pane", "arrow.left.square") { [weak self] in self?.selectPreviousPane(nil) },
-            cmd("newTmuxWindow", "New tmux Window", "plus.rectangle.on.folder") { [weak self] in self?.newTmuxWindow(nil) },
-            cmd("newWindow", "New Terminal Window", "macwindow.badge.plus") { BentoTerminalWindow.newWindow() },
-            cmd("fit", "Track Session Size to This Window", "arrow.up.left.and.down.right.magnifyingglass") { BentoTerminalWindow.trackActiveSessionSize() },
             cmd("toggleDock", "Toggle Preview Panel", "sidebar.trailing") { BentoTerminalWindow.togglePreviewDock() },
         ]
     }
 
-    private func paletteAbbrev(_ path: String) -> String { tildeAbbreviated(path) }
+
+    private func runPaletteCommand(_ command: PaneCommand) {
+        switch command {
+        case .splitRight: splitPaneVertically(nil)
+        case .splitDown: splitPaneHorizontally(nil)
+        case .splitDuplicate:
+            Task { await viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) }
+        case .closePane: closeCurrentPane(nil)
+        case .zoom: toggleCurrentPaneZoom(nil)
+        case .nextPane: selectNextPane(nil)
+        case .previousPane: selectPreviousPane(nil)
+        case .newTmuxWindow: newTmuxWindow(nil)
+        default:
+            if let action = Self.paneMenuSelector(command) { NSApp.sendAction(action, to: self, from: nil) }
+        }
+    }
+
 
     /// Pane menu → Move to Session → <name>. The menu already selected the
     /// pane, so activePaneID is the one to move (same convention as the other
     /// pane actions). The pane keeps running; where it lands follows the
     /// target's mode (Parallel → its current window, Focus → a new window),
-    /// and an unsettled target asks via `promptMoveLanding`.
+    /// and an unsettled target asks where to land.
     @objc func movePaneToNamedSession(_ sender: Any?) {
         guard let active = activePaneID,
               let name = (sender as? NSMenuItem)?.representedObject as? String else { return }
         moveActivePane(active, to: name)
     }
 
-    private func moveActivePane(_ pane: TmuxPaneID, to name: String,
-                                landing: MoveLanding = .auto) {
+    private func moveActivePane(_ pane: TmuxPaneID, to name: String) {
         Task { [weak self] in
-            guard let self else { return }
-            if await self.viewModel.movePane(pane, toSession: name, landing: landing)
-                == .needsLandingChoice {
-                self.promptMoveLanding(for: name) { [weak self] choice in
-                    self?.moveActivePane(pane, to: name, landing: choice)
-                }
-            }
-        }
-    }
-
-    /// The target is neither clearly Parallel nor Focus (fresh 1×1 with no
-    /// remembered mode, or a mixed external structure) — ask where to land.
-    private func promptMoveLanding(for name: String,
-                                   _ proceed: @escaping (MoveLanding) -> Void) {
-        guard let window else { return }
-        let alert = NSAlert()
-        alert.messageText = "Move to “\(name)”"
-        alert.informativeText = "“\(name)” isn't settled into Parallel or Focus yet. Where should this land?"
-        alert.addButton(withTitle: "Into Current Window (Parallel)")
-        alert.addButton(withTitle: "As New Window (Focus)")
-        alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { response in
-            switch response {
-            case .alertFirstButtonReturn: proceed(.joinCurrentWindow)
-            case .alertSecondButtonReturn: proceed(.newWindow)
-            default: break
+            guard let vm = self?.viewModel else { return }
+            await vm.movePane(pane, toSession: name) { [weak self] session in
+                await self?.window?.askMoveLanding(session: session)
             }
         }
     }
@@ -1355,20 +1293,12 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// the same move path (movePane creates the session when it's missing).
     @objc func movePaneToNewSession(_ sender: Any?) {
         guard let window, let active = activePaneID else { return }
-        let alert = NSAlert()
-        alert.messageText = "Move Pane to New Session"
-        alert.informativeText = "The pane keeps running — it becomes a window of the new session."
-        alert.addButton(withTitle: "Move")
-        alert.addButton(withTitle: "Cancel")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-        field.placeholderString = "Session name"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn, let self else { return }
+        Task { [weak self] in
+            guard let name = await window.askName(SessionPromptCopy.movePaneToNewSession)
+            else { return }
             // Same landing pipeline: a typed name may match an EXISTING
             // session, so the unsettled-target prompt can still follow.
-            self.moveActivePane(active, to: field.stringValue)
+            self?.moveActivePane(active, to: name)
         }
     }
 
@@ -1505,18 +1435,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         Task { [viewModel] in await viewModel.newListWindow(.duplicateCurrent) }
     }
 
-    @objc func newWindowPathCommand(_ sender: Any?) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let cwd = await self.viewModel.activePaneWorkingDirectory()
-            presentNewPaneDirectoryPanel(
-                title: "New Window", prompt: "Create", initialDirectory: cwd
-            ) { [viewModel = self.viewModel] path, command in
-                Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
-            }
-        }
-    }
-
     private func cyclePane(by step: Int) {
         let ids = orderedPaneIDs
         guard !ids.isEmpty else { return }
@@ -1547,7 +1465,6 @@ public enum BentoPaneAction {
     public static let splitPathCommand = #selector(GhosttyTiledPaneHost.splitWithPathCommand(_:))
     public static let splitRecent = #selector(GhosttyTiledPaneHost.splitRecentLaunch(_:))
     public static let newWindowDuplicate = #selector(GhosttyTiledPaneHost.newWindowDuplicate(_:))
-    public static let newWindowPathCommand = #selector(GhosttyTiledPaneHost.newWindowPathCommand(_:))
     public static let findInPane = #selector(GhosttyTiledPaneHost.findInPane(_:))
     public static let findNext = #selector(GhosttyTiledPaneHost.findNextMatch(_:))
     public static let findPrevious = #selector(GhosttyTiledPaneHost.findPreviousMatch(_:))
@@ -1575,13 +1492,6 @@ public enum BentoPaneAction {
 }
 
 // MARK: - Pane container (title bar + terminal surface)
-
-/// Phase of a title-bar drag used for drag-to-dock. Points are in window
-/// coordinates; the host converts and hit-tests against its cells.
-enum PaneDragPhase {
-    case moved(NSPoint)
-    case ended(NSPoint)
-}
 
 /// The translucent landing preview shown while a pane drag hovers a target:
 /// the whole pane for a center/swap drop (with a ⇄ badge — the one zone whose
@@ -1642,7 +1552,7 @@ final class PaneCellView: NSView {
     var onClick: (() -> Void)?
     /// Fired while the title bar is dragged beyond the click slop — the
     /// drag-to-dock gesture. Clicks under the threshold stay clicks.
-    var onPaneDrag: ((PaneDragPhase) -> Void)?
+    var onPaneDrag: ((PaneDrag.Phase) -> Void)?
     var onZoom: (() -> Void)? {
         didSet { titleBar.onZoom = onZoom }
     }
@@ -1692,13 +1602,11 @@ final class PaneCellView: NSView {
         didSet { titleBar.agentFinishedUnseen = agentFinishedUnseen; updateStateTint(); applyBorder() }
     }
 
-    /// Translucent wash over the surface that mirrors the title-bar dot:
-    /// done-unseen → blue, otherwise the per-state color (nil = idle = no wash).
+    /// Translucent wash over the surface that mirrors the title-bar glyph
+    /// (nil = idle = no wash) — the shared `PaneChrome.Status` table.
     private func stateTintColor() -> NSColor? {
-        if agentFinishedUnseen {
-            return PaneTitleBar.doneColor.withAlphaComponent(0.10)
-        }
-        return paneState.tintNSColor
+        PaneChromeColors.wash(PaneChrome.Status(state: paneState,
+                                                agentFinishedUnseen: agentFinishedUnseen))
     }
 
     private func updateStateTint() {
@@ -1758,7 +1666,7 @@ final class PaneCellView: NSView {
         // past the edge.
         layer?.masksToBounds = true
         layer?.borderWidth = 0.5
-        layer?.borderColor = GhosttyPaneColors.neutralHairline().cgColor
+        layer?.borderColor = PaneChromeColors.neutralHairline().cgColor
         addSubview(titleBar)
 
         // State wash sits above the terminal surface (added in `embed`) but below
@@ -1856,6 +1764,7 @@ final class PaneCellView: NSView {
         let p = event.locationInWindow
         if !dragActive, hypot(p.x - dragStart.x, p.y - dragStart.y) > Self.dragSlop {
             dragActive = true
+            onPaneDrag?(.began)
         }
         if dragActive {
             onPaneDrag?(.moved(p))
@@ -1935,7 +1844,7 @@ final class PaneTitleBar: NSView {
     /// "Done, unseen" green (a finished ✓). Also drives the pane's state wash +
     /// band (see PaneCellView.stateTintColor / chromeAccent). Sourced from the
     /// shared palette so the List sidebar's green check matches.
-    static let doneColor = PaneState.nsColor(hex: PaneState.doneUnseenHex)
+    static let doneColor = NSColor(hex: PaneState.doneUnseenHex)
 
     /// What this pane's chrome is announcing — the shared mapping the iOS strip
     /// and the List sidebar rows also render.
@@ -1945,7 +1854,7 @@ final class PaneTitleBar: NSView {
 
     /// The leading glyph + tint for the current state.
     private func stateSymbol() -> (name: String, color: NSColor) {
-        (status.symbol, PaneState.nsColor(hex: status.glyphHex))
+        (status.symbol, NSColor(hex: status.glyphHex))
     }
 
     private func updateStateIcon() {
@@ -1961,7 +1870,7 @@ final class PaneTitleBar: NSView {
     /// Accent for the band/ink: done-unseen wins, otherwise the per-state color
     /// (nil for idle → neutral chrome).
     private func chromeAccent() -> NSColor? {
-        status.accentHex.map { PaneState.nsColor(hex: $0) }
+        status.accentHex.map { NSColor(hex: $0) }
     }
 
     /// Recompute the band background + label/button ink from (state, active).
@@ -1970,8 +1879,8 @@ final class PaneTitleBar: NSView {
         // the window highlight color, so focus reads from the title bar too — not
         // just the border (the border alone is too quiet for an idle gray pane).
         let accent = chromeAccent() ?? (isActive ? GhosttyPaneColors.focusAccent() : nil)
-        layer?.backgroundColor = GhosttyPaneColors.titleBand(accent: accent, active: isActive).cgColor
-        let ink = GhosttyPaneColors.ink(accent: accent, active: isActive)
+        layer?.backgroundColor = PaneChromeColors.titleBand(accent: accent, active: isActive).cgColor
+        let ink = PaneChromeColors.ink(accent: accent, active: isActive)
         label.textColor = ink
         zoomButton.contentTintColor = ink
         menuButton.contentTintColor = ink
@@ -1993,7 +1902,7 @@ final class PaneTitleBar: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = GhosttyPaneColors.titleBand(accent: nil, active: false).cgColor
+        layer?.backgroundColor = PaneChromeColors.titleBand(accent: nil, active: false).cgColor
 
         stateIcon.imageScaling = .scaleProportionallyUpOrDown
         updateStateIcon()
@@ -2088,23 +1997,12 @@ final class PaneTitleBar: NSView {
     }
 }
 
-/// The macOS host's pane colors. The band/ink language itself lives in the
-/// shared `PaneChromeColors` (the iOS strip renders the identical chrome); what
-/// stays here is the one genuinely platform-sourced color — the window
-/// highlight the focused pane wears.
+/// The one genuinely platform-sourced pane color — the window highlight the
+/// focused pane wears. Everything else (band, ink, hairlines) is the shared
+/// `PaneChromeColors`, which the iOS strip renders identically.
 @MainActor
 enum GhosttyPaneColors {
     static let accentNSColor = NSColor(srgbRed: 0.30, green: 0.90, blue: 0.62, alpha: 1.0)
-
-    static var isDark: Bool { PaneChromeColors.isDark }
-
-    static func titleBand(accent: NSColor?, active: Bool) -> NSColor {
-        PaneChromeColors.titleBand(accent: accent, active: active)
-    }
-
-    static func ink(accent: NSColor?, active: Bool) -> NSColor {
-        PaneChromeColors.ink(accent: accent, active: active)
-    }
 
     /// The system/window highlight color (the user's macOS accent) as a concrete
     /// sRGB color — the focus color for the active pane's border + title band.
@@ -2117,11 +2015,6 @@ enum GhosttyPaneColors {
     /// glance regardless of its agent state (which the title bar / dot / wash carry).
     static func focusBorder(active: Bool) -> NSColor {
         active ? focusAccent() : PaneChromeColors.idleBorder()
-    }
-
-    /// Neutral hairline for the title-bar default before chrome is computed.
-    static func neutralHairline() -> NSColor {
-        PaneChromeColors.neutralHairline()
     }
 }
 
@@ -2156,7 +2049,7 @@ final class DividerOverlay: NSView {
     // MARK: - Drawing (visual feedback)
 
     override func draw(_ dirtyRect: NSRect) {
-        let lineColor = GhosttyPaneColors.isDark
+        let lineColor = PaneChromeColors.isDark
             ? NSColor(white: 1, alpha: 0.18) : NSColor(white: 0, alpha: 0.18)
         for d in dividers {
             strokeLine(vertical: d.vertical, at: d.position, span: d.hotRect,

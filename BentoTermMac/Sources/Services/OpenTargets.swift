@@ -142,8 +142,7 @@ public final class OpenTargetProvider {
             // 5s) attaches instead of failing.
             return .agent(AgentSpec(sessionName: name,
                                     workingDir: record.dir,
-                                    agentCommand: record.command,
-                                    layout: .solo))
+                                    agentCommand: record.command))
         }
     }
 

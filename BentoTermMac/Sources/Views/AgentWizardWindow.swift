@@ -6,7 +6,7 @@ import BentoUISharedKit
 
 /// AgentWizardWindow hosts the shared `AgentWizardForm` (see BentoUISharedKit)
 /// in a titled NSWindow with the macOS action bar. The form itself — fields,
-/// validity rules, layout grid — is shared with iOS; only the chrome
+/// validity rules — is shared with iOS; only the chrome
 /// is platform-specific. `Form().formStyle(.grouped)` keeps the visual
 /// hierarchy in line with System Settings panes.
 struct AgentWizardWindow: View {
@@ -26,7 +26,7 @@ struct AgentWizardWindow: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Launch") { Task { await launch() } }
+                Button("Launch") { launch() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canLaunch)
@@ -34,7 +34,7 @@ struct AgentWizardWindow: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
         }
-        .frame(width: 560, height: 620)
+        .frame(width: 560, height: 440)
     }
 
     private func pickDirectory(_ binding: Binding<String>) {
@@ -47,22 +47,12 @@ struct AgentWizardWindow: View {
         }
     }
 
-    private func launch() async {
-        do {
-            model.error = nil
-            // Agent sessions always spin up in Bento's own in-app libghostty
-            // window (tmux -CC over a local pty) — sessions never bounce out
-            // to a third-party terminal anymore.
-            let coreSpec = BentoAgentKit.AgentSpec(
-                sessionName: model.spec.sessionName,
-                workingDir: model.spec.workingDir,
-                agentCommand: model.spec.agentCommand,
-                layout: BentoAgentKit.TmuxLayout(rawValue: model.spec.layout.rawValue) ?? .solo
-            )
-            await MainActor.run { BentoTerminalWindow.newWindow(agent: coreSpec) }
-            dismiss()
-        } catch {
-            model.error = "\(error)"
-        }
+    /// Agent sessions always spin up in Bento's own in-app libghostty window
+    /// (tmux -CC over a local pty) — sessions never bounce out to a
+    /// third-party terminal anymore.
+    private func launch() {
+        model.error = nil
+        BentoTerminalWindow.newWindow(agent: model.spec)
+        dismiss()
     }
 }

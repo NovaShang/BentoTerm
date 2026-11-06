@@ -12,59 +12,35 @@ private let log = Logger(subsystem: "com.novashang.bento", category: "PortForwar
 @MainActor
 final class MacPortForwarder: PortForwarding {
 
-    private var forwards: [String: PortForward] = [:]
-    /// Ports promised to a forward that may not have been bound yet — two
-    /// requests in the same runloop turn must not be handed the same number.
-    private var claimed: Set<Int> = []
+    private let book = PortForwardBook<Void>()
 
-    var active: [PortForward] { Array(forwards.values) }
+    var active: [PortForward] { book.active }
 
     // MARK: PortForwarding
 
     func forward(remotePort: Int, on host: LinkHost) async throws -> PortForward {
-        // A local pane's `localhost` is already this machine. Nothing to tunnel,
-        // and nothing to tear down later.
-        guard let alias = host.remoteID else {
-            return PortForward(host: host, remotePort: remotePort, localPort: remotePort)
-        }
-        let key = PortForward(host: host, remotePort: remotePort, localPort: remotePort).id
-        if let existing = forwards[key] { return existing }
-
-        guard LocalPortProbe.isPlausible(remotePort) else {
-            throw PortForwardError.unsupported("Port \(remotePort) isn’t forwardable")
-        }
-        let candidates = SSHControlSockets.candidates(for: alias)
-        guard !candidates.isEmpty else {
-            throw PortForwardError.unsupported(
-                "No live connection to \(host.label) to tunnel through")
-        }
-        guard let localPort = LocalPortProbe.choose(matching: remotePort, taken: claimed) else {
-            throw PortForwardError.noLocalPort
-        }
-        claimed.insert(localPort)
-        defer { claimed.remove(localPort) }
-
-        // Newest session first. A socket whose session has since died fails
-        // fast, so trying the list in order costs nothing and survives the
-        // case where the pane that printed the link is not the newest one.
-        var lastError = "Couldn’t reach \(host.label)"
-        for controlPath in candidates {
-            let result = await Self.ssh(SSHForwardCommand.forward(
-                localPort: localPort, remotePort: remotePort,
-                alias: alias, controlPath: controlPath))
-            if result.status == 0 {
-                let made = PortForward(host: host, remotePort: remotePort, localPort: localPort)
-                forwards[made.id] = made
-                log.log("""
-                    forward \(host.label, privacy: .public) \
-                    \(remotePort, privacy: .public)→\(localPort, privacy: .public)
-                    """)
-                return made
-            }
-            lastError = Self.readableFailure(result.stderr, host: host)
-            log.error("forward failed: \(result.stderr, privacy: .public)")
-        }
-        throw PortForwardError.hostUnreachable(lastError)
+        try await book.forward(
+            remotePort: remotePort, on: host,
+            connection: { alias in
+                let candidates = SSHControlSockets.candidates(for: alias)
+                return candidates.isEmpty ? nil : (alias: alias, sockets: candidates)
+            },
+            open: { ride, made in
+                // Newest session first. A socket whose session has since died
+                // fails fast, so trying the list in order costs nothing and
+                // survives the case where the pane that printed the link is not
+                // the newest one.
+                var lastError = PortForwardError.couldNotReach(host)
+                for controlPath in ride.sockets {
+                    let result = await Self.ssh(SSHForwardCommand.forward(
+                        localPort: made.localPort, remotePort: made.remotePort,
+                        alias: ride.alias, controlPath: controlPath))
+                    if result.status == 0 { return }
+                    lastError = Self.readableFailure(result.stderr, host: host)
+                    log.error("forward failed: \(result.stderr, privacy: .public)")
+                }
+                throw lastError
+            })
     }
 
     func isAlive(_ forward: PortForward) async -> Bool {
@@ -77,7 +53,7 @@ final class MacPortForwarder: PortForwarding {
     }
 
     func close(_ forward: PortForward) {
-        forwards[forward.id] = nil
+        book.remove(forward)
         guard let alias = forward.host.remoteID else { return }
         let candidates = SSHControlSockets.candidates(for: alias)
         let localPort = forward.localPort, remotePort = forward.remotePort
@@ -92,22 +68,22 @@ final class MacPortForwarder: PortForwarding {
     }
 
     func closeAll(on host: LinkHost) {
-        for f in forwards.values where f.host == host { close(f) }
+        for f in book.forwards(on: host) { close(f) }
     }
 
     // MARK: -
 
     /// ssh's own words are for ssh users; the panel says what to check instead.
-    private static func readableFailure(_ stderr: String, host: LinkHost) -> String {
+    private static func readableFailure(_ stderr: String, host: LinkHost) -> PortForwardError {
         let s = stderr.lowercased()
         if s.contains("address already in use") || s.contains("cannot listen to port") {
-            return "That local port is taken — close whatever is using it and try again"
+            return .hostUnreachable("That local port is taken — close whatever is using it and try again")
         }
         if s.contains("no such file or directory") || s.contains("connection refused")
             || s.contains("control socket") {
-            return "The connection to \(host.label) is gone — reconnect the session"
+            return .hostUnreachable("The connection to \(host.label) is gone — reconnect the session")
         }
-        return "Couldn’t reach \(host.label)"
+        return .couldNotReach(host)
     }
 
     private struct Run { let status: Int32; let stderr: String }

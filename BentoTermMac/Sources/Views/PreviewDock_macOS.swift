@@ -87,15 +87,10 @@ final class PinnedPreview: ObservableObject, Identifiable {
     let context: PathPreviewContext
     let title: String
 
-    enum Phase {
-        case loading
-        case loaded(FilePreviewData)
-        case failed(String)
-    }
-    @Published var phase: Phase
+    /// Load state — the same model the iOS preview sheet uses.
+    let load: FilePreviewLoadModel
 
     nonisolated(unsafe) private var watcher: LocalFileWatcher?
-    private var reloadTask: Task<Void, Never>?
 
     /// `path` is an already-resolved absolute path. `initial` seeds the first
     /// render when the caller already has it (a detach); otherwise the tab loads
@@ -106,34 +101,20 @@ final class PinnedPreview: ObservableObject, Identifiable {
         self.line = line
         self.context = context
         self.title = (path as NSString).lastPathComponent
-        self.phase = initial.map(Phase.loaded) ?? .loading
+        self.load = FilePreviewLoadModel(path: path, line: line, context: context, initial: initial)
         if context.isLocal {
             watcher = LocalFileWatcher(path: path) { [weak self] in
                 Task { @MainActor in self?.reload() }
             }
         }
-        if initial == nil { reload() }
     }
 
-    func reload() {
-        reloadTask?.cancel()
-        let path = path, line = line, context = context
-        reloadTask = Task { @MainActor [weak self] in
-            do {
-                let data = try await FilePreviewLoader.load(path: path, line: line, context: context)
-                guard !Task.isCancelled else { return }
-                self?.phase = .loaded(data)
-            } catch {
-                guard !Task.isCancelled else { return }
-                self?.phase = .failed(error.localizedDescription)
-            }
-        }
-    }
+    func reload() { load.reload() }
 
     func stop() {
         watcher?.cancel()
         watcher = nil
-        reloadTask?.cancel()
+        load.cancel()
     }
 
     /// The whole dock can go away with its window (windowWillClose tears the
@@ -480,7 +461,7 @@ struct PreviewDock: View {
         if let tab = model.selected {
             switch tab {
             case .file(let file):
-                PreviewDockContent(tab: file,
+                PreviewDockContent(load: file.load,
                                    onOpenPath: { model.replace(file.id, with: $0,
                                                                context: file.context) })
                     .id(file.id)   // stable per tab → WebView reuse preserves scroll
@@ -503,12 +484,12 @@ struct PreviewDock: View {
 }
 
 private struct PreviewDockContent: View {
-    @ObservedObject var tab: PinnedPreview
+    @ObservedObject var load: FilePreviewLoadModel
     /// A file picked from the breadcrumb dropdown takes this tab over.
     let onOpenPath: (String) -> Void
 
     var body: some View {
-        switch tab.phase {
+        switch load.phase {
         case .loading:
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loaded(let data):

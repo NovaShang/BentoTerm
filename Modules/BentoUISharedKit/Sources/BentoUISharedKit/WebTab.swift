@@ -193,7 +193,7 @@ public final class WebTab: ObservableObject, Identifiable {
             failure = WebTabFailure(error, host: host, port: port)
             return nil
         } catch {
-            failure = .hostUnreachable("Couldn’t reach \(host.label)")
+            failure = WebTabFailure(.couldNotReach(host), host: host, port: port)
             return nil
         }
     }
