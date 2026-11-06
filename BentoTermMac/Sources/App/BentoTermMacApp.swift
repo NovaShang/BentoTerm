@@ -27,20 +27,26 @@ struct BentoTermMacApp: App {
 }
 
 /// The Shell menu for Bento terminal windows (split / zoom / navigate / close),
-/// plus File → New Window.
+/// plus File → New Pane / New Window.
 struct TerminalCommands: Commands {
     var body: some Commands {
-        // ⌘N is the reflex key for "give me one more of these" in every Mac
-        // app, so it always makes a new one — never a no-op when a window is
-        // already up. What lands in it is the launcher: ⌘N asks, ⌘⇧T (New Empty
-        // Session, below) doesn't. Whether that new one is a window or a tab is
-        // the placement preference's answer, the same as for a session, because
-        // what ⌘N opens is a session window that hasn't chosen its session yet.
-        // Reopen-the-last-session is a RESTORE gesture and lives where restore
-        // gestures belong: the Dock icon and launch (`openMainWindow`).
+        // The app is a single-window terminal by default, so ⌘N — the reflex
+        // key for "one more" — adds to the session you are in instead of
+        // opening another window: a pane split along the active pane's longer
+        // side in Parallel, a tmux window in Focus. Its title follows the
+        // front session's mode ("New Pane" / "New tmux Window"); that is done
+        // on the AppKit item (`BentoTerminalWindow.refreshNewItemTitle`), not
+        // with observed state here — see there for why. With no session
+        // window, ⌘N opens one the way launch does.
+        //
+        // ⇧⌘N is the explicit second window: a new Mac window holding a new
+        // session, `<default>-2`, `-3`…. The launcher ("what do you want to
+        // open?") is no longer behind either key; it is New ⌄ → New Session….
         CommandGroup(replacing: .newItem) {
-            Button("New Window") { BentoTerminalWindow.newSessionWindow() }
+            Button(BentoTerminalWindow.newPaneTitle) { BentoTerminalWindow.newPaneOrWindow() }
                 .keyboardShortcut("n", modifiers: .command)
+            Button("New Window") { BentoTerminalWindow.newSessionWindow() }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
         }
 
         // Where every Mac app keeps it: straight under "About BentoTerm".

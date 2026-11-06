@@ -99,8 +99,9 @@ public final class OpenTargetProvider {
     /// WHAT opening a target means, with no opinion about WHERE it lands.
     ///
     /// Two surfaces open targets into two different places — the palette and
-    /// the Dock menu into a new window, the launcher into the window it is
-    /// already occupying — and the one thing they must never disagree about is
+    /// the Dock menu through `focusOrOpen` (a session switches the front
+    /// window; the rest get a window of their own), the launcher into the
+    /// window it is already occupying — and the one thing they must never disagree about is
     /// what a row does. So the decision is made once, here, and the
     /// destination is chosen by the caller.
     enum Route {

@@ -145,8 +145,8 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
     private var sshRowFrame: CGRect = .zero
 
     static func open() {
-        // Two launcher windows say the same thing twice. A second ⌘N while one
-        // is up and unanswered just brings that question forward.
+        // Two launcher windows say the same thing twice. A second New Session…
+        // while one is up and unanswered just brings that question forward.
         if let existing = controllers.last {
             existing.window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -533,7 +533,7 @@ struct LauncherView: View {
     /// A create row. The first one also answers ⏎.
     ///
     /// There is no selection cursor on this page any more, so ⏎ has nothing to
-    /// follow — but ⌘N ⏎ meaning "give me a shell" is worth keeping and costs
+    /// follow — but ⏎ on this page meaning "give me a shell" is worth keeping and costs
     /// exactly one modifier here: SwiftUI's default-action shortcut, with no
     /// list navigation behind it. The row says `⏎` so the key is not a secret.
     @ViewBuilder

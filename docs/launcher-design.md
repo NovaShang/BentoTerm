@@ -270,6 +270,8 @@ New Remote tmux Session ▸   dev / orb / home / …
 
 ## 9. Mac 的空状态何时出现
 
+> **2026-11-05 已被取代（terminal-first）。** 启动页不再自动出现：启动 / 点 Dock / 没窗口时按 ⌘N，都直接回到**上次在用的那个会话**（服务器上还在的话），否则 `new-session -A -s <默认名>`；`closedEverythingByHand` 已删。⌘N 改为在当前会话里加 pane（Parallel，沿长边分屏）或 tmux window（Focus）；⇧⌘N 才开新 Mac 窗口（会话 `<默认名>-2`…）。启动页只从 New ⌄ → New Session… 进入。下面是旧规则，留作历史。
+
 三条，按 `openMainWindow` 的实际分支写（本节此前把 Dock 那条说宽了）：
 
 - **启动时**：`mac_last_terminal_sessions` 为空（或里面的会话在服务器上都不在了）→ 启动器。有可恢复的就直接恢复，不问。

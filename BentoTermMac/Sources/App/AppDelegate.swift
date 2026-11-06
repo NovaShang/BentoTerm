@@ -48,6 +48,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // SwiftUI has built NSApp.mainMenu by now; take ⌘W back (see below).
         reclaimClosePaneShortcut()
+        // File → ⌘N is titled for the front session's mode ("New Pane" / "New
+        // tmux Window"). It is retitled when that changes; this re-asserts it
+        // as the menu bar opens, in case SwiftUI re-synced the item since.
+        NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification, object: NSApp.mainMenu, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { BentoTerminalWindow.refreshNewItemTitle() }
+        }
 
         // Apply the saved light/dark preference before any window appears, and
         // keep it in sync when the user changes it or (in follow-system mode) the
@@ -101,8 +109,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // set up reliably. Comma-separated; it also keeps a test run from
             // touching whatever the user actually had open.
             if let list = ProcessInfo.processInfo.environment["BENTO_OPEN_SESSIONS"] {
+                // Each in a window of its own: a plain session pick would now
+                // SWITCH the first window instead (`focusOrOpen`), and the
+                // point of the hook is to have them side by side.
                 for key in list.split(separator: ",").map(String.init) where !key.isEmpty {
-                    BentoTerminalWindow.focusOrOpen(sessionKey: key)
+                    if let id = TmuxSessionID(key: key) { BentoTerminalWindow.openInNewWindow(id) }
                 }
                 // Test hook: N seconds later, run Kill Session on whichever
                 // window ended up frontmost (the last one opened above). Only
@@ -136,6 +147,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // don't have — the same reason BENTO_TEST_AGENT_SESSION exists.
                 // DEBUG-only for the company it keeps, not for its blast
                 // radius: it can only reach a session named above.
+                // Test hook: "N|name" — N seconds later, pick session `name`
+                // the way Session ⌄ / ⌘P / the Dock menu do, which switches
+                // the frontmost window onto it (switch-client) rather than
+                // opening another. Like the split hook, it exists because the
+                // menus need synthesized clicks a headless run can't make.
+                if let spec = ProcessInfo.processInfo.environment["BENTO_TEST_SWITCH_AFTER"] {
+                    let parts = spec.split(separator: "|", maxSplits: 1).map(String.init)
+                    if parts.count == 2, let seconds = Double(parts[0]), !parts[1].isEmpty {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(seconds))
+                            BentoTerminalWindow.focusOrOpen(.local(parts[1]))
+                        }
+                    }
+                }
                 if let after = ProcessInfo.processInfo.environment["BENTO_TEST_SPLIT_AFTER"],
                    let seconds = Double(after) {
                     Task { @MainActor in
@@ -173,8 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     /// No confirmation here (see the note further down) — this exists only to
-    /// mark the quit BEFORE any window closes, so the reopen list records the
-    /// set that was open instead of watching it drain one tab at a time.
+    /// mark the quit BEFORE any window closes.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         BentoTerminalWindow.isTerminating = true
         return .terminateNow
@@ -277,7 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Closing the last window does NOT quit — Terminal.app behavior, chosen
     /// deliberately. The app stays in the Dock; clicking its icon or ⌘N brings a
-    /// window back with the last session. Quitting is an explicit ⌘Q, and it is
+    /// window back with the last session in use (or the default session). Quitting is an explicit ⌘Q, and it is
     /// only ever a detach: the tmux sessions outlive it either way.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false

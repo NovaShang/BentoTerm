@@ -28,12 +28,11 @@ public enum BentoTerminalWindow {
     /// One window per session, all joined into a native tab group.
     private static var managers: [TerminalWindowManager] = []
 
-    /// The session created when the window opens with no previous session.
-    /// User-configurable (Settings → Sessions); defaults to the app name.
-    public nonisolated static let defaultSessionNameKey = "default_session_name"
+    /// The session the app opens when there is nothing to go back to.
+    /// User-configurable (Settings → General → Default session name); `bento`
+    /// when unset.
     public nonisolated static var defaultSessionName: String {
-        TmuxSessionNaming.typed(UserDefaults.standard.string(forKey: defaultSessionNameKey) ?? "")
-            ?? TmuxSessionNaming.defaultName
+        TmuxSessionNaming.configuredDefault()
     }
 
     /// App-provided hooks for toolbar actions that live in the app target.
@@ -64,13 +63,47 @@ public enum BentoTerminalWindow {
         focusOrOpen(id)
     }
 
+    /// Go to session `id` — in THIS window.
+    ///
+    /// The app is single-window by default, so picking a session (Session ⌄,
+    /// ⌘P, the Dock menu, the launcher's session rows) moves the window you are
+    /// in onto it with `switch-client`, the way `prefix s` does in a terminal,
+    /// instead of piling up a window per session. Exceptions, all of which
+    /// open a window because there is nothing to switch:
+    ///   - the session is already up in another window → that window comes
+    ///     forward (two windows on one session would be a duplicate);
+    ///   - there is no session window, or the front one is a plain terminal;
+    ///   - the session is on a different machine than the front window — a
+    ///     control client can only switch between sessions on its own server.
+    /// `openInNewWindow` is the explicit "keep this one, open that beside it".
     public static func focusOrOpen(_ id: TmuxSessionID) {
+        if let m = manager(for: id.key) {
+            m.bringToFront()
+        } else if let m = switchableManager(for: id) {
+            m.switchSession(to: id)
+        } else {
+            open(choice: .createOrAttach(name: id.name), server: id.server,
+                 title: titleFor(id))
+        }
+    }
+
+    /// Session ⌄ → Open in New Window (or ⌥-click): the one explicit way to
+    /// get a second window for a session, instead of switching this one.
+    public static func openInNewWindow(_ id: TmuxSessionID) {
         if let m = manager(for: id.key) {
             m.bringToFront()
         } else {
             open(choice: .createOrAttach(name: id.name), server: id.server,
                  title: titleFor(id))
         }
+    }
+
+    /// The window a session pick should switch: the front session window, when
+    /// it is a live tmux session on the same server as `id`.
+    private static func switchableManager(for id: TmuxSessionID) -> TerminalWindowManager? {
+        guard let m = frontmostManager(), !m.tab.isPlain, m.tab.id.server == id.server,
+              m.tab.viewModel.isTmuxReady else { return nil }
+        return m
     }
 
     /// Open/focus `id` and land on the window with tmux INDEX `windowIndex`.
@@ -111,6 +144,7 @@ public enum BentoTerminalWindow {
     /// which server to ask (`TerminalViewModel.sessionListGeneration`).
     public static func setLocalServerSessions(_ names: [LocalTmuxSessionName]) {
         knownServerSessions = names
+        hasHeardFromServer = true
         for m in managers { m.updateLocalServerSessions(names) }
         // An open launcher is showing this list as rows; push, don't poll.
         LauncherWindowController.serverSessionsChanged()
@@ -119,6 +153,9 @@ public enum BentoTerminalWindow {
     /// The last `tmux ls` the app pushed in. Kept here (not only fanned out to
     /// the managers) because the reopen path runs when there are none.
     private static var knownServerSessions: [LocalTmuxSessionName] = []
+    /// Whether `knownServerSessions` is an answer at all. Empty after a poll
+    /// means "no sessions"; empty before one means "don't know yet".
+    private static var hasHeardFromServer = false
 
     /// What else the poll knows about those sessions (window count, last
     /// activity), keyed by name. Pushed separately from the names so the
@@ -149,18 +186,16 @@ public enum BentoTerminalWindow {
             .filter { seen.insert($0).inserted }
     }
 
+    /// The legacy reopen list (every local session that was open). Read once
+    /// as a fallback for `lastSessionKey`, never written any more.
     nonisolated static let lastSessionsKey = "mac_last_terminal_sessions"
+    /// The ONE local session that was in use last — what launch and the Dock
+    /// icon bring back. See `recordSessionInUse`.
+    nonisolated static let lastSessionKey = "mac_last_session"
     /// The strip's stable left-to-right tab order, persisted so it survives
     /// relaunches instead of re-alphabetizing on every cold start.
     nonisolated static let sessionOrderKey = "mac_session_strip_order"
 
-    /// Open (or focus) the terminal window — the behavior when the app icon is
-    /// clicked, and at launch.
-    ///
-    /// With no window yet: reconnect the session(s) that were open when the app
-    /// last quit — unless the user emptied the screen by hand during THIS run,
-    /// in which case the launcher comes up instead (see
-    /// `closedEverythingByHand`). With nothing to reconnect, also the launcher.
     /// Close the terminal window (sessions keep running on the server; the next
     /// open reconnects them). The red traffic-light button does the same.
     public static func closeMainWindow() { frontmostManager()?.requestClose() }
@@ -254,92 +289,57 @@ public enum BentoTerminalWindow {
         ProcessInfo.processInfo.environment["BENTO_OPEN_SESSIONS"] != nil
     }
 
-    /// Set when the user closes the last session window by hand while the app
-    /// stays alive. Cleared the moment a session window exists again, so it
-    /// only ever describes "right now, on purpose, there is nothing open".
-    /// `isTerminating` guards ⌘Q, which also empties `managers`.
-    private static var closedEverythingByHand = false
-
+    /// Launch, a Dock click, and ⌘N with no window: open the terminal.
+    ///
+    /// A window already up just comes forward — a Dock click is "show me the
+    /// app", not "give me another". With none, the session that was in use
+    /// LAST comes back if the server still has it, otherwise the default
+    /// session (`new-session -A -s <default>`, so it attaches when it exists).
+    /// Never the launcher: the app opens straight into something you can type
+    /// in, and "pick what to open" is New ⌄ → New Session….
+    ///
+    /// Only the most recent session is reopened, not every one that was open:
+    /// the app is single-window by default, and one window brought back is
+    /// the expectation; the rest are a Session ⌄ away.
     public static func openMainWindow() {
         if let m = frontmostManager() {
             m.bringToFront()
             return
         }
-        guard !sessionRestoreSuppressed else { return }
-        if closedEverythingByHand {
-            openLauncherWindow()
-            return
-        }
-        var last = (UserDefaults.standard.stringArray(forKey: lastSessionsKey) ?? [])
-            .filter { !$0.isEmpty }
-        // Reopening means RECONNECTING. Every window here goes up via
-        // `new-session -A`, which creates the session when the name is absent —
-        // so a name that outlived its session (killed elsewhere, or a scratch
-        // session from a previous run) came back as a brand-new empty session
-        // every single time the icon was clicked. Drop anything the server no
-        // longer has; only the "nothing to reconnect" fallback below is allowed
-        // to create. An empty poll means we haven't heard from tmux yet — trust
-        // the list rather than throw it away.
-        if !knownServerSessions.isEmpty {
-            let live = Set(knownServerSessions.map(\.rawValue))
-            last = last.filter { live.contains($0) }
-        }
-        if last.isEmpty {
-            // Nothing to reconnect. This used to conjure a session named
-            // `bento` that the user never asked for; it now opens a window that
-            // ASKS — the launcher (docs/launcher-design.md §9). The window is
-            // real either way, because "no windows at all" reads as a broken
-            // app with a Dock icon; what changed is that its content is a
-            // question rather than a guess.
-            openLauncherWindow()
-        } else {
-            for name in last { newWindow(session: name) }
-        }
-        // Only LOCAL sessions are in `last` — see `persistOpenSessions`.
-        // Front the FIRST one reopened, not the last: the list is in creation
-        // order, so the first is the session this window group started as.
-        (managers.first ?? frontmostManager())?.bringToFront()
+        openMainWindowCreating()
     }
 
-    static func persistOpenSessions() {
-        // Only tmux sessions are reconnectable — plain tabs vanish on close, so
-        // they never go into the "reopen last session" list.
-        //
-        // Sessions on an ssh host are deliberately left out as well, and it is
-        // worth saying why, because "reopen what was open" would seem to want
-        // them. Reopening means `new-session -A`, which CREATES when the name
-        // is absent — which is why `openMainWindow` first prunes the list
-        // against the sessions the server actually still has. For a remote host
-        // that check is a network round trip that can hang, or stop on a
-        // password / 2FA prompt, before the app has put a single window on
-        // screen; and skipping the check is how you get a phantom empty session
-        // created on the build box every time the Dock icon is clicked. So a
-        // remote session is scoped to the run that opened it. The key format
-        // already carries the host (`ssh://host/name`), so a later step that
-        // wants to offer "reopen bento on gpu-box" as a deliberate, user-driven
-        // action has everything it needs — it just must not happen unasked at
-        // launch.
-        let names = managers.map(\.tab)
-            .filter { !$0.isPlain && $0.id.isLocal }
-            .map(\.sessionKey)
-        // Never write the list empty. "No reconnectable tab is open right now"
-        // is not the same statement as "there is nothing to reconnect", and
-        // this function cannot tell them apart — it is called from window
-        // creation too, so opening a plain no-tmux terminal as your only window
-        // used to silently wipe the record. That became a common path the
-        // moment New Terminal without tmux was made the launcher's default
-        // action: ⌘N ⏎ would cost you your restore list.
-        //
-        // Refusing to write empty is safe because a stale name cannot survive
-        // being used: `openMainWindow` prunes the list against the sessions the
-        // server actually still has before reopening anything, so the list
-        // shrinks there instead — at the one moment we know the truth.
-        guard !names.isEmpty else { return }
-        UserDefaults.standard.set(names, forKey: lastSessionsKey)
+    /// The remembered session, falling back to the first entry of the list the
+    /// app kept before it was single-window.
+    static var lastSessionInUse: String? {
+        let defaults = UserDefaults.standard
+        if let name = defaults.string(forKey: lastSessionKey), !name.isEmpty { return name }
+        return defaults.stringArray(forKey: lastSessionsKey)?.first { !$0.isEmpty }
     }
 
-    /// Set before any window closes on the way out of ⌘Q, so quitting is
-    /// recorded as "these were open" rather than as N separate tab closures.
+    /// Remember `tab`'s session as the one in use. Called when a session window
+    /// becomes key, opens, or switches session — never when one closes, so
+    /// closing everything (or ⌘Q) leaves the record pointing at what you were
+    /// last looking at, which is exactly what the next launch should bring back.
+    ///
+    /// Local sessions only. Reopening is `new-session -A`, which creates when
+    /// the name is gone, so `openMainWindow` checks the name against the
+    /// server's list first — and for an ssh host that check is a network round
+    /// trip that can hang on a password or 2FA prompt before any window is up.
+    /// Plain terminals have no session to come back to.
+    static func recordSessionInUse(_ tab: SessionTab) {
+        guard !tab.isPlain else { return }
+        recordSessionInUse(tab.id)
+    }
+
+    static func recordSessionInUse(_ id: TmuxSessionID) {
+        guard id.isLocal else { return }
+        UserDefaults.standard.set(id.name, forKey: lastSessionKey)
+    }
+
+    /// Set at the start of ⌘Q, before any window closes. Nothing is recorded
+    /// on close any more (see `recordSessionInUse`), so this is informational:
+    /// a window closing during it is the app leaving, not the user tidying.
     public static var isTerminating = false
 
     /// Open a plain shell as a TAB with NO tmux (raw local pty, single surface).
@@ -371,26 +371,70 @@ public enum BentoTerminalWindow {
         newWindow(session: nextSessionName())
     }
 
-    /// File → New Window (⌘N). Always something NEW — never "front the window
-    /// you already have" — and what lands in it is the launcher.
+    /// File → New Window (⇧⌘N): a new Mac window holding a new tmux session,
+    /// `<default>-2`, `-3`, … — the one gesture that asks for a second window.
+    /// Whether it lands as a window or a tab is the system's "prefer tabs"
+    /// answer (`shouldOpenAsTab`), the same as every other new session.
     ///
-    /// ⌘N used to create the window AND a session called `session-3`: a name
-    /// the user never chose, in a directory nobody picked. Both halves of that
-    /// are real intents, so they get a key each and both are honest — ⌘N opens
-    /// a window and then asks what to put in it; ⌘⇧T says don't ask, give me a
-    /// session now (docs/launcher-design.md §9).
-    ///
-    /// **It is no longer forced standalone.** `4f93e6b` made ⌘N ignore the
-    /// tab-vs-window preference on the grounds that it answers "where does a
-    /// new SESSION land" and pressing ⌘N had already answered it — which was
-    /// true while ⌘N created a session outright. It doesn't now. What ⌘N
-    /// produces is an empty window that is about to BECOME a session, so the
-    /// preference applies to it exactly as it applies to every other route into
-    /// a session; forcing a standalone window meant a tabs user got a stray
-    /// window every time, and then their choice arrived in it rather than in
-    /// the tab bar where they put everything else.
+    /// This used to be ⌘N and open the launcher. ⌘N now adds a pane or tmux
+    /// window to the session you are in (`newPaneOrWindow`) — the app is a
+    /// single-window terminal by default — and the launcher is reached from
+    /// New ⌄ → New Session….
     public static func newSessionWindow() {
-        openLauncherWindow()
+        newWindow(session: nextSessionName())
+    }
+
+    /// ⌘N: one more of what the front session is made of — a pane split along
+    /// the active pane's longer side in Parallel, a tmux window in Focus (see
+    /// `TerminalViewModel.newPaneOrWindow`). With no session window to add to,
+    /// it does what launching does.
+    public static func newPaneOrWindow() {
+        if let m = frontmostManager(), !m.tab.isPlain, m.tab.viewModel.isTmuxReady {
+            m.tab.viewModel.newPaneOrWindow()
+        } else if let m = managers.last(where: { !$0.tab.isPlain }) {
+            // The front window is a plain terminal: it has no panes to add to,
+            // so go to the session window you were last in instead.
+            m.bringToFront()
+        } else {
+            openMainWindowCreating()
+        }
+    }
+
+    /// `openMainWindow`, minus "a window exists, front it": the restore path
+    /// for when every open window is a plain terminal.
+    private static func openMainWindowCreating() {
+        guard !sessionRestoreSuppressed else { return }
+        let live = hasHeardFromServer ? knownServerSessions.map(\.rawValue) : nil
+        newWindow(session: TmuxSessionNaming.reopenTarget(
+            last: lastSessionInUse, live: live, defaultName: defaultSessionName))
+    }
+
+    /// What File → ⌘N says right now: "New Pane" or "New tmux Window",
+    /// following the front session's mode.
+    static var newItemTitle: String {
+        guard let m = frontmostManager(), !m.tab.isPlain,
+              m.tab.viewModel.sessionMode == .list else { return newPaneTitle }
+        return newTmuxWindowTitle
+    }
+    nonisolated static let newPaneTitle = "New Pane"
+    nonisolated static let newTmuxWindowTitle = "New tmux Window"
+
+    /// Retitle File → ⌘N for the front session's mode.
+    ///
+    /// Done on the AppKit item rather than by making `TerminalCommands`
+    /// observe state: a re-evaluated `.commands` body lets SwiftUI rebuild the
+    /// menu, and its rebuild re-synthesizes File → Close with ⌘W — silently
+    /// taking ⌘W back from Close Pane (see `reclaimClosePaneShortcut`). The
+    /// item is found by its key equivalent so the title can't hide it.
+    static func refreshNewItemTitle() {
+        guard let main = NSApp.mainMenu else { return }
+        let title = newItemTitle
+        for top in main.items {
+            for item in top.submenu?.items ?? []
+            where item.keyEquivalent == "n" && item.keyEquivalentModifierMask == .command {
+                if item.title != title { item.title = title }
+            }
+        }
     }
 
     /// The window a new tab would join: the frontmost session window, or nil
@@ -407,15 +451,14 @@ public enum BentoTerminalWindow {
         LauncherWindowController.open()
     }
 
-    /// Lowest unused `session-N`. tmux is the real authority on the namespace,
-    /// but these are the ones we have windows for, which is what avoids
-    /// silently attaching to somebody else's session.
+    /// Lowest unused `<default>-N` (N ≥ 2). Checked against every session the
+    /// local server is known to have, not just the ones with windows — a
+    /// window-only check would quietly attach to a `bento-2` that some other
+    /// terminal made.
     static func nextSessionName() -> String {
-        let open = openSessionKeys
-        var n = max(open.count + 1, 2)
-        var name = "session-\(n)"
-        while open.contains(name) { n += 1; name = "session-\(n)" }
-        return name
+        var taken = Set(serverSessions)
+        for m in managers { taken.formUnion(m.tab.viewModel.availableTmuxSessions) }
+        return TmuxSessionNaming.numbered(defaultSessionName, existing: taken)
     }
 
     public static func newWindow(agent spec: AgentSpec) {
@@ -457,36 +500,23 @@ public enum BentoTerminalWindow {
     @discardableResult
     private static func addWindow(for tab: SessionTab,
                                   adopting shell: TerminalSessionWindow? = nil) -> TerminalWindowManager {
-        closedEverythingByHand = false
         let m = TerminalWindowManager(tab: tab, adopting: shell)
         m.onEmpty = { [weak m] in
             managers.removeAll { $0 === m }
-            // Closing a TAB says "I'm done with that session" and has to drop it
-            // from the reopen list — otherwise names only ever accumulate and
-            // every later click on the icon drags them all back.
+            // Nothing is written here. The reopen record is the session last
+            // IN USE (`recordSessionInUse`, on focus / open / switch), so a
+            // close — one window, the last one, or every one on the way out of
+            // ⌘Q — leaves it naming what you were looking at. Writing on close
+            // is how the old list got emptied by the last window going and the
+            // user's session replaced with a fresh default.
             //
-            // Closing the LAST window says "I'm done for now" and must NOT: that
-            // list is the only record of what to reconnect, and writing it empty
-            // would replace the user's session with a fresh default. Same for
-            // ⌘Q, which closes every window in turn — the set at that moment is
-            // exactly what should come back.
             // NOTE: the activation policy is NOT touched here. BentoTerm is an
             // ordinary app — it stays `.regular` with its Dock icon even with no
             // windows left, which is how you get back in. Dropping to
             // `.accessory` (what the menu-bar build did) would now leave a
             // process with no Dock icon, no menu-bar item and no window: alive,
             // invisible and unquittable.
-            if !managers.isEmpty && !isTerminating { persistOpenSessions() }
-            // Closing your way down to nothing, by hand, while the app keeps
-            // running, is a decision — and it is a different decision from
-            // quitting. Quitting and coming back says "I was in the middle of
-            // something"; clearing the screen and then clicking the Dock icon
-            // says "I tidied up, now show me what there is". So the reopen list
-            // is kept (⌘Q still restores it on the next cold start) but this
-            // run stops replaying it, and the Dock icon brings up the launcher
-            // instead. Nothing is lost by asking: those sessions are still
-            // running and the launcher lists them as its first section.
-            if managers.isEmpty && !isTerminating { closedEverythingByHand = true }
+            refreshNewItemTitle()
         }
         // Join the frontmost window's group only when tabs are what the user
         // wants; otherwise this stands alone. Either way `tabbingIdentifier` is
@@ -505,7 +535,9 @@ public enum BentoTerminalWindow {
     }
 
     private static func frontmostManager() -> TerminalWindowManager? {
-        managers.first { $0.window.isKeyWindow } ?? managers.last
+        managers.first { $0.window.isKeyWindow }
+            ?? managers.first { $0.window.isMainWindow }
+            ?? managers.last
     }
 
     static func manager(for key: String) -> TerminalWindowManager? {
@@ -515,13 +547,16 @@ public enum BentoTerminalWindow {
     private static func open(choice: TmuxStartChoice, server: TmuxServer, title: String,
                              adopting shell: TerminalSessionWindow? = nil) {
         let id = SessionTab.id(for: choice, on: server)
+        let m: TerminalWindowManager
         if let existing = manager(for: id.key) {
-            existing.bringToFront()
+            m = existing
         } else {
-            addWindow(for: SessionTab(choice: choice, server: server, title: title),
-                      adopting: shell).bringToFront()
+            m = addWindow(for: SessionTab(choice: choice, server: server, title: title),
+                          adopting: shell)
         }
-        persistOpenSessions()
+        m.bringToFront()
+        recordSessionInUse(m.tab)
+        refreshNewItemTitle()
     }
 
     /// Turn a launcher window into a session window, in place.
@@ -532,8 +567,8 @@ public enum BentoTerminalWindow {
     /// THAT window, or the act of choosing leaves two windows behind — the
     /// thing you chose, and the question you already answered.
     ///
-    /// The session may nonetheless already be open in another window (you can
-    /// press ⌘N and then pick a session that's up). Then there is nothing to
+    /// The session may nonetheless already be open in another window (New
+    /// Session… and then a session that's up). Then there is nothing to
     /// adopt: `open` fronts the existing window and the caller closes the
     /// launcher, which is why this reports whether the shell was consumed.
     @discardableResult
@@ -550,9 +585,20 @@ public enum BentoTerminalWindow {
 
     /// The launcher's own routes into a session, named so the launcher does not
     /// have to know about `TmuxStartChoice` or `TmuxServer`.
+    ///
+    /// A tmux session picked on the launcher is a session SWITCH like any
+    /// other (`focusOrOpen`): the session window behind the launcher moves onto
+    /// it and the launcher closes (false = shell not consumed). Only with no
+    /// session window to switch does the launcher's own window become the
+    /// session.
     static func fill(_ shell: TerminalSessionWindow, localSession name: String) -> Bool {
-        fill(shell, choice: .createOrAttach(name: name), server: .local,
-             title: titleFor(.local(name)))
+        let id = TmuxSessionID.local(name)
+        if manager(for: id.key) == nil, let m = switchableManager(for: id) {
+            m.switchSession(to: id)
+            return false
+        }
+        return fill(shell, choice: .createOrAttach(name: name), server: .local,
+                    title: titleFor(id))
     }
 
     static func fill(_ shell: TerminalSessionWindow, agent spec: AgentSpec) -> Bool {
@@ -1011,14 +1057,21 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // left. That gives tmux's three levels three fixed places (session /
         // window / pane) instead of leaving the middle one homeless.
         toolbar.onSelectSegment = { [weak self] idx in self?.segmentPicked(idx) }
-        // Open sessions raise their tab; a dormant one opens as a new tab.
+        // Picking a session moves THIS window onto it (switch-client); one
+        // already up in another window comes forward instead. ⌥ / the row's
+        // "Open in New Window" keeps this window and opens that one beside it.
         toolbar.onSelectSession = { key in BentoTerminalWindow.focusOrOpen(sessionKey: key) }
+        toolbar.onOpenSessionInNewWindow = { key in
+            if let id = TmuxSessionID(key: key) { BentoTerminalWindow.openInNewWindow(id) }
+        }
         toolbar.onOpenSearch = { [weak self] in
             guard let self else { return }
             self.tab.paneHost?.presentCommandPalette(from: self.toolbar.searchAnchor)
         }
-        // ⌘N's behaviour: a launcher, which becomes the new session.
-        toolbar.onNewSession = { BentoTerminalWindow.newSessionWindow() }
+        // New ⌄ → New Session…: the launcher, the one place that asks what to
+        // open (agent, empty, plain shell, ssh host). Not ⌘N any more — see
+        // `BentoTerminalWindow.newPaneOrWindow`.
+        toolbar.onNewSession = { BentoTerminalWindow.openLauncherWindow() }
         toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
         toolbar.onReleaseSize = { [weak self] in
             self?.activeTab?.viewModel.releaseSessionSize()
@@ -1066,7 +1119,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         subscribe(tab)
         tab.connect()
         show(tab)
-        BentoTerminalWindow.persistOpenSessions()
+        BentoTerminalWindow.recordSessionInUse(tab)
     }
 
     /// The size a session window opens at when nothing is remembered.
@@ -1248,10 +1301,42 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
                     Task { await vm.setMode(mode, force: true) }
                 } else {
                     // Snap the segmented control back to the real mode.
-                    self?.toolbar.setSessionMode(vm.sessionMode)
+                    if let self { self.toolbar.setSessionMode(self.toolbarMode(for: self.tab)) }
                 }
             }
         }
+    }
+
+    /// Move this window onto session `id` (same server — see
+    /// `BentoTerminalWindow.focusOrOpen`). The view model follows tmux's
+    /// `%session-changed`: name, windows, panes, mode and sizing are re-read,
+    /// and `migrateSessionKey` carries this window's identity across. If the
+    /// switch is refused (the session vanished between the menu and the
+    /// click), the session opens in a window of its own rather than nowhere.
+    func switchSession(to id: TmuxSessionID) {
+        let vm = tab.viewModel
+        Task { [weak self] in
+            let ok = await vm.switchOrCreateSession(id.name)
+            guard let self else { return }
+            if ok {
+                self.bringToFront()
+                BentoTerminalWindow.recordSessionInUse(id)
+                if id.isLocal { BentoTerminalWindow.onLocalServerChanged?() }
+            } else {
+                BentoTerminalWindow.openInNewWindow(id)
+            }
+        }
+    }
+
+    /// The Parallel/Focus switch, unless the session is a single pane — then
+    /// there is nothing to arrange and the window should read as a plain
+    /// terminal (`SessionChrome`). nil hides it.
+    private func toolbarMode(for tab: SessionTab) -> TmuxSessionMode? {
+        guard !tab.isPlain else { return nil }
+        let vm = tab.viewModel
+        guard SessionChrome.showsModeSwitch(paneCount: vm.sessionPanes.count,
+                                            windowCount: vm.windows.count) else { return nil }
+        return vm.sessionMode
     }
 
     /// Close the window (sessions survive on the server). `close()` is direct and
@@ -1335,7 +1420,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         window.makeFirstResponder(content)
         window.title = displayTitle(for: tab)
         rebindActiveToolbar(tab)
-        toolbar.setSessionMode(tab.isPlain ? nil : tab.viewModel.sessionMode)
+        toolbar.setSessionMode(toolbarMode(for: tab))
         updateSidebar()
         rebuildTabBar()
     }
@@ -1416,14 +1501,24 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             }
             .store(in: &activeCancellables)
         // Mode drives the toolbar's Tiled|List switch and the sidebar (List
-        // only). Plain tabs have no mode — the switch hides.
+        // only). Plain tabs have no mode — the switch hides — and neither does
+        // a single-pane session (`SessionChrome`), so the switch also follows
+        // the session's pane and window counts. The values are taken from the
+        // publishers rather than re-read: `@Published` emits BEFORE the
+        // property is assigned.
         tab.viewModel.$sessionMode
+            .combineLatest(tab.viewModel.$sessionPanes.map(\.count),
+                           tab.viewModel.$windows.map(\.count))
+            .map { mode, panes, windows -> TmuxSessionMode? in
+                SessionChrome.showsModeSwitch(paneCount: panes, windowCount: windows) ? mode : nil
+            }
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self, weak tab] mode in
                 guard let self, let tab, tab === self.activeTab else { return }
                 self.toolbar.setSessionMode(tab.isPlain ? nil : mode)
                 self.updateSidebar()
+                BentoTerminalWindow.refreshNewItemTitle()
             }
             .store(in: &activeCancellables)
         // The take-over banner. Its own subscription rather than a ride on the
@@ -1611,7 +1706,15 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // one doesn't read this window's session as gone.
         localServerSessions.removeAll { $0.rawValue == old.name }
         absentPolls = 0
-        BentoTerminalWindow.persistOpenSessions()
+        // A switch (or rename) in the window you are using: that is now the
+        // session in use. One in a background window changes nothing about
+        // what you were looking at.
+        if window.isKeyWindow || window.isMainWindow {
+            BentoTerminalWindow.recordSessionInUse(tab)
+        }
+        // The pane host keys the sidebar by session; a switched session gets a
+        // fresh one bound to the same view model.
+        updateSidebar()
         MacAwaitingNotifier.shared.clear(sessionKey: old.key)
     }
 
@@ -2006,6 +2109,13 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
                 willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions)
         -> NSApplication.PresentationOptions {
         proposedOptions.union(.autoHideToolbar)
+    }
+
+    /// The window you are in is the session in use — the one launch and the
+    /// Dock icon bring back — and its mode decides what ⌘N is called.
+    func windowDidBecomeKey(_ notification: Notification) {
+        BentoTerminalWindow.recordSessionInUse(tab)
+        BentoTerminalWindow.refreshNewItemTitle()
     }
 
     func windowWillClose(_ notification: Notification) {

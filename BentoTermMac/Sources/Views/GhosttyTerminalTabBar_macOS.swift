@@ -179,7 +179,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         let info: LocalSessionInfo?
     }
     var activeSessionKey: String?
+    /// Go to that session in THIS window (or front the window it is open in).
     var onSelectSession: ((String) -> Void)?
+    /// Keep this window, open that session in a new one — the row's "Open in
+    /// New Window", or ⌥ held while picking.
+    var onOpenSessionInNewWindow: ((String) -> Void)?
 
     private let sessionsButton = NSButton()
     /// Tiled|List — the session's structural mode, next to the session button.
@@ -370,10 +374,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     @objc private func searchTapped() { onOpenSearch?() }
 
-    /// Every session on the machine. Open ones just raise their tab; a dormant
-    /// one (running on the server, not loaded here) opens as a NEW native tab,
-    /// which is the only way to reach it — the tab bar can't show a tab that
-    /// doesn't exist yet.
+    /// Every session on the machine. Picking one moves this window onto it
+    /// (`switch-client`); one already open in another window comes forward
+    /// instead. The app is single-window by default, so a session pick is a
+    /// switch, not a new tab — "Open in New Window" (or ⌥) is the explicit
+    /// way to keep both.
     private func sessionSwitchSection(_ menu: NSMenu) {
         guard !sessions.isEmpty else { return }
         let header = NSMenuItem(title: "Sessions", action: nil, keyEquivalent: "")
@@ -402,15 +407,12 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     /// `name  ·  2 windows  ·  5m ago`, via the shared launcher phrasing so this
     /// menu and the launcher describe a session the same way. A remote session
-    /// (no local poll info) keeps the older "— open in a new tab" hint, which is
-    /// all we can honestly say about it.
+    /// (no local poll info) is just its name — all we can honestly say about it.
     private func sessionRowTitle(_ session: SessionRow) -> String {
         if let subtitle = session.info?.subtitle() {
             return "\(session.label)  ·  \(subtitle)"
         }
-        // A hollow dot already says "not open"; the suffix says what clicking
-        // will DO, since it opens rather than switches.
-        return session.isOpen ? session.label : "\(session.label)  —  open in a new tab"
+        return session.label
     }
 
     /// A session's own actions, reachable WITHOUT switching to it first — which
@@ -428,13 +430,22 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         let isActive = session.key == activeSessionKey
 
         let primary = NSMenuItem(
-            title: isActive ? "Switch to This Session"
-                            : (session.isOpen ? "Switch to This Session" : "Open in a New Tab"),
+            title: session.isOpen && !isActive ? "Show Its Window" : "Switch to This Session",
             action: #selector(selectSessionAction(_:)), keyEquivalent: "")
         primary.target = self
         primary.representedObject = session.key
         primary.isEnabled = !isActive
         sub.addItem(primary)
+        // The explicit second window. Not offered where it would only front a
+        // window that is already there.
+        if !session.isOpen {
+            let newWindow = NSMenuItem(title: "Open in New Window",
+                                       action: #selector(openSessionInNewWindowAction(_:)),
+                                       keyEquivalent: "")
+            newWindow.target = self
+            newWindow.representedObject = session.key
+            sub.addItem(newWindow)
+        }
 
         if !isActive, !info.windows.isEmpty {
             sub.addItem(.separator())
@@ -493,7 +504,16 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     @objc private func selectSessionAction(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
-        onSelectSession?(key)
+        if NSEvent.modifierFlags.contains(.option) {
+            onOpenSessionInNewWindow?(key)
+        } else {
+            onSelectSession?(key)
+        }
+    }
+
+    @objc private func openSessionInNewWindowAction(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        onOpenSessionInNewWindow?(key)
     }
 
     /// Whichever search control is currently on screen — the panel hangs off it.
@@ -811,7 +831,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     func sessionActionsMenu() -> NSMenu {
         let menu = NSMenu()
         // The tab bar switches between OPEN sessions; this list covers the rest
-        // — picking one that isn't loaded opens it as a new tab.
+        // — picking one moves this window onto it.
         sessionSwitchSection(menu)
         // A plain (no-tmux) terminal has no session/windows — just close it.
         if activeTabIsPlain {
