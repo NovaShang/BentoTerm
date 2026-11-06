@@ -12,19 +12,20 @@ import AppKit
 /// (borderless ≤14, bordered "glass" on 26+).
 ///
 /// Layout (left → right):
-///   [▢ <session> ⌄] [Parallel│Focus]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋ New ⌄] [⚙] [▤]
+///   [▢ <session> ⌄] [Parallel│Focus]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋ New ⌄] [▤]
 ///
 /// The named left button carries the session (its switcher today, its actions
 /// once sessions become native window tabs); the centre strip is the current
 /// session's tmux WINDOWS, labelled `index:name` the way `list-windows` labels
-/// them; New creates at every level (session / window / pane); ⚙ opens
-/// Settings; ▤ toggles the preview dock.
+/// them; New creates at every level (session / window / pane); ▤ toggles the
+/// preview dock. Settings has no button here: it is opened once in a while,
+/// and ⌘, plus the app menu are where every Mac app keeps it — a permanent
+/// gear spent a toolbar slot on it.
 @MainActor
 final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// New ⌄ → New Session…: the launcher, where every kind of session
     /// (agent, empty, plain shell, ssh host, a remembered launch) is offered.
     var onNewSession: (() -> Void)?
-    var onOpenSettings: (() -> Void)?
     var onRenameSession: (() -> Void)?
     var onDetach: (() -> Void)?
     var onKillSession: (() -> Void)?
@@ -190,7 +191,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// Reflects the active tab's `sessionMode`; hidden for plain (no-tmux) tabs.
     private let modeSwitch = NSSegmentedControl()
     private let newButton = NSButton()
-    private let moreButton = NSButton()
     /// Show/hide the preview dock (always present, like an inspector toggle).
     private let previewButton = NSButton()
     /// The take-over banner: present only while this window's grid differs from
@@ -230,7 +230,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     fileprivate static let sessionsID = NSToolbarItem.Identifier("bento.sessions")
     fileprivate static let modeID = NSToolbarItem.Identifier("bento.mode")
     fileprivate static let newID = NSToolbarItem.Identifier("bento.new")
-    fileprivate static let moreID = NSToolbarItem.Identifier("bento.more")
     fileprivate static let centerID = NSToolbarItem.Identifier("bento.center")
     fileprivate static let previewID = NSToolbarItem.Identifier("bento.preview")
     fileprivate static let sizeID = NSToolbarItem.Identifier("bento.size")
@@ -269,10 +268,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         modeSwitch.setToolTip("One pane per window, listed in the sidebar", forSegment: 1)
         modeSwitch.sizeToFit()
         configureMenu(newButton, symbol: "plus", text: "New", action: #selector(newTapped))
-        // A plain gear that opens Settings directly (session actions moved to the
-        // named session button on the left).
-        configure(moreButton, symbol: "gearshape", title: "", action: #selector(settingsAction))
-        moreButton.toolTip = "Settings"
         // Inspector-style toggle for the preview dock (file tree + previews).
         configure(previewButton, symbol: "sidebar.trailing", title: "",
                   action: #selector(previewTapped))
@@ -776,15 +771,15 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // ◧ | Sessions ⌄ | Tiled|List | ⸺flex⸺ | [session tabs] | ⸺flex⸺ | New ⌄ | ⋯ | ◨
+        // ◧ | Sessions ⌄ | Tiled|List | ⸺flex⸺ | [session tabs] | ⸺flex⸺ | New ⌄ | ◨
         //
-        // Same eight slots with no session — only the centre differs, and only
+        // Same seven slots with no session — only the centre differs, and only
         // because a window strip with no windows in it is not a control that
         // can be disabled. Search takes the centre there, which is where a
         // one-window session puts it too.
         [Self.sessionsID, Self.modeID, .flexibleSpace,
          hasSession ? Self.centerID : Self.searchID,
-         .flexibleSpace, Self.newID, Self.moreID, Self.previewID]
+         .flexibleSpace, Self.newID, Self.previewID]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // The centre swaps between the window strip and the search field, and
@@ -809,7 +804,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         case Self.sessionsID: item.view = sessionsButton; item.label = "Session"
         case Self.modeID:     item.view = modeSwitch;     item.label = "Layout"
         case Self.newID:      item.view = newButton;      item.label = "New"
-        case Self.moreID:     item.view = moreButton;     item.label = "Settings"
         case Self.previewID:  item.view = previewButton;  item.label = "Preview"
         case Self.sizeID:     item.view = sizeButton;     item.label = "Session Size"
         case Self.searchID:   item.view = customSearchView ?? searchField; item.label = "Search"
@@ -1026,7 +1020,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func splitRecentAction(_ sender: Any?) {
         BentoPaneAction.dispatch(BentoPaneAction.splitRecent, from: sender)
     }
-    @objc private func settingsAction() { onOpenSettings?() }
     @objc private func renameAction() { onRenameSession?() }
     @objc private func detachAction() { onDetach?() }
     @objc private func releaseSizeAction() { onReleaseSize?() }

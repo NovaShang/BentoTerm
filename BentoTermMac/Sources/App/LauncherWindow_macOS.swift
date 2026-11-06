@@ -214,7 +214,6 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         // this one sat behind it still asking would be the bug this whole
         // window exists to remove, so it just comes forward.
         toolbar.onNewSession = { [weak self] in self?.window.makeKeyAndOrderFront(nil) }
-        toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
         // No `customSearchView`: the search slot keeps the button a session
         // window has, meaning the same thing it means there. See
         // `presentPalette`.

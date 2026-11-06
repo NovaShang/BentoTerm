@@ -37,7 +37,6 @@ public enum BentoTerminalWindow {
 
     /// App-provided hooks for toolbar actions that live in the app target.
     public static var onNewAgentSession: (() -> Void)?
-    public static var onOpenSettings: (() -> Void)?
     /// The local `tmux ls` poll wants to run as soon as something changed here,
     /// rather than up to 5s later. Wired in the app target.
     public static var onLocalServerChanged: (() -> Void)?
@@ -1072,7 +1071,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // open (agent, empty, plain shell, ssh host). Not ⌘N any more — see
         // `BentoTerminalWindow.newPaneOrWindow`.
         toolbar.onNewSession = { BentoTerminalWindow.openLauncherWindow() }
-        toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
         toolbar.onReleaseSize = { [weak self] in
             self?.activeTab?.viewModel.releaseSessionSize()
             self?.rebuildTabBar()

@@ -68,13 +68,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             MainActor.assumeIsolated { self?.syncSystemAppearance() }
         }
 
-        // Wire the terminal toolbar's app-target actions (the New Agent wizard
-        // and the Settings scene) into the core window code via its hooks.
+        // Wire the terminal toolbar's app-target action (the New Agent wizard)
+        // into the core window code via its hook.
         BentoTerminalWindow.onNewAgentSession = {
             Windows.show(.wizard)
-        }
-        BentoTerminalWindow.onOpenSettings = { [weak self] in
-            self?.openSettings()
         }
         // A window changed something about the local server (killed its
         // session) — re-poll now so the strip reflects it immediately instead
