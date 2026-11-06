@@ -8,7 +8,7 @@ import BentoFoundationKit
 extension TerminalViewModel {
     // MARK: - Session Picker
 
-    /// Run `tmux ls` and parse the output into a list of session names.
+    /// List the server's sessions into `availableTmuxSessions`.
     public func refreshTmuxSessions() async {
         // Concurrent refreshes (e.g. a menu re-resolving on every display)
         // stack rapid-fire list-sessions on the control channel — drop the
@@ -26,17 +26,9 @@ extension TerminalViewModel {
                 dlog("list-sessions (control) error: \(response.output)")
                 return
             }
-            // Format: `$id:name` per line (set by Command.listSessions).
-            availableTmuxSessions = response.output
-                .split(separator: "\n")
-                .compactMap { line -> String? in
-                    // Anything not `$id:…` is channel noise (stray pane
-                    // output has been observed in responses), not a session.
-                    guard line.hasPrefix("$") else { return nil }
-                    let parts = line.split(separator: ":", maxSplits: 1)
-                    guard parts.count == 2 else { return nil }
-                    return String(parts[1])
-                }
+            // Lines that aren't rows (stray pane output has been observed in
+            // responses) fail the parser's numeric tail and are skipped.
+            availableTmuxSessions = TmuxSessionListing.parse(response.output).map(\.name)
             sessionListIsTrustworthy = true
             dlog("Found tmux sessions (control): \(self.availableTmuxSessions)")
             // Answered by the server this connection is attached to — the only
@@ -45,25 +37,11 @@ extension TerminalViewModel {
             return
         }
 
-        // Bracket the tmux output with start + end markers. Each marker is
-        // assembled from two halves so the PTY echo of the command line
-        // (which renders both halves with a quote-and-space between them)
-        // can never match the concatenated form. Only the runtime `printf`
-        // produces a contiguous marker — so we can confidently slice the
-        // output between markers to get a clean list of sessions, no matter
-        // what OSC / CSI / syntax-highlight garbage the shell injected.
-        let token = String(UUID().uuidString.prefix(8))
-        let startA = "__SPK_S_\(token)_"
-        let startB = "_GO__"
-        let startMarker = startA + startB
-        let endA = "__SPK_E_\(token)_"
-        let endB = "_DONE__"
-        let endMarker = endA + endB
-        let cmd =
-            "printf '\\n%s%s\\n' '\(startA)' '\(startB)';" +
-            " tmux ls 2>/dev/null;" +
-            " printf '%s%s\\n' '\(endA)' '\(endB)'\n"
-        guard let output = await captureShellOutput(cmd: cmd, marker: endMarker, timeoutMs: 5000) else {
+        // Typed into the shell, bracketed by markers so the answer can be cut
+        // out of whatever OSC / CSI / syntax-highlight noise the shell injects.
+        let probe = TmuxSessionListing.MarkerProbe()
+        guard let output = await captureShellOutput(cmd: probe.command, marker: probe.endMarker,
+                                                    timeoutMs: 5000) else {
             // Leave `availableTmuxSessions` alone. An empty list here does not
             // mean "this host has no sessions" — and `applyTmuxChoice` reads it
             // to decide whether it is creating a session or joining one, so a
@@ -73,7 +51,15 @@ extension TerminalViewModel {
             dlog("tmux ls timed out — keeping the previous session list")
             return
         }
-        availableTmuxSessions = TmuxParsers.parseTmuxLs(output, startMarker: startMarker, endMarker: endMarker)
+        // The shell answered, so the list speaks for the host even when it is
+        // empty — no server, or no tmux (the launch says so itself).
+        switch probe.result(of: output) {
+        case .success(let sessions):
+            availableTmuxSessions = sessions.map(\.name)
+        case .failure(let failure):
+            availableTmuxSessions = []
+            if failure != .noSessions { dlog("tmux ls: \(failure.message)") }
+        }
         sessionListIsTrustworthy = true
         dlog("Found tmux sessions: \(self.availableTmuxSessions)")
     }

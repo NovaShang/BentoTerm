@@ -328,7 +328,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func refresh() async {
-        let sessions = await TmuxCLI.listSessions()
+        // Typed here: these rows came from THIS machine's server, and every
+        // action reachable from them (kill, rename, attach) acts on it.
+        let sessions = await TmuxCLI.listSessions().map {
+            (name: LocalTmuxSessionName(onLocalServer: $0.name), row: $0)
+        }
         // Fan-out the per-session window queries concurrently. Each call
         // is a single `tmux list-windows` shell-out (a few ms), so even
         // with many sessions this finishes well under the 5s poll period.
@@ -349,8 +353,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return LocalSessionInfo(
                 name: s.name.rawValue,
                 windowCount: wins.count,
-                lastActivity: s.lastActivity,
-                attached: s.attached,
+                lastActivity: s.row.lastActivity ?? .distantPast,
+                attached: s.row.attached,
                 // The window rows travel with the session so the toolbar's
                 // Sessions menu can offer them the moment it opens — an async
                 // fetch would land after the menu is already on screen.

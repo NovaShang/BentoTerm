@@ -380,7 +380,7 @@ final class SessionManager: ObservableObject {
     }
 }
 
-/// Short-lived SSH that runs `tmux ls` and returns the list of session names,
+/// Short-lived SSH that lists the host's tmux sessions by name,
 /// then disconnects. Used by the session picker so discovery is isolated from
 /// all attached tmux -CC channels. Each call opens a brand new SSH.
 @MainActor
@@ -441,23 +441,13 @@ final class TmuxLister: ObservableObject {
         sshService.startShell(cols: 80, rows: 24)
         try? await Task.sleep(for: .milliseconds(500))
 
-        let token = String(UUID().uuidString.prefix(8))
-        let startA = "__SPK_S_\(token)_"
-        let startB = "_GO__"
-        let startMarker = startA + startB
-        let endA = "__SPK_E_\(token)_"
-        let endB = "_DONE__"
-        let endMarker = endA + endB
-        let cmd =
-            "printf '\\n%s%s\\n' '\(startA)' '\(startB)';" +
-            " tmux ls 2>/dev/null;" +
-            " printf '%s%s\\n' '\(endA)' '\(endB)'\n"
+        let probe = TmuxSessionListing.MarkerProbe()
 
         let output = await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
             captureBuffer = Data()
-            captureMarker = endMarker
+            captureMarker = probe.endMarker
             captureContinuation = cont
-            sshService.write(cmd)
+            sshService.write(probe.command)
 
             Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(5000))
@@ -478,7 +468,17 @@ final class TmuxLister: ObservableObject {
             error = "Couldn't list sessions on \(host.displayName) — no answer in 5s."
             return
         }
-        sessions = TmuxParsers.parseTmuxLs(output, startMarker: startMarker, endMarker: endMarker)
+        switch probe.result(of: output) {
+        case .success(let found):
+            sessions = found.map(\.name)
+        case .failure(.noTmux):
+            // Not an empty host: nothing listed here can ever be attached, and
+            // "New Session" would fail the same way. Say what to fix.
+            sessions = []
+            error = TmuxSessionListing.Failure.noTmux.message
+        case .failure:
+            sessions = []
+        }
     }
 
     private func routeData(_ data: Data) {
