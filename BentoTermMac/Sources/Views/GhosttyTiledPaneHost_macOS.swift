@@ -623,8 +623,12 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             switch row {
             case .command(let command):
                 guard let action = Self.paneMenuSelector(command) else { continue }
-                menu.addItem(item(command.title(on: .macPaneMenu, zoomed: zoomed), action,
-                                  symbol: command.symbol(on: .macPaneMenu, zoomed: zoomed)))
+                let row = item(command.title(on: .macPaneMenu, zoomed: zoomed), action,
+                               symbol: command.symbol(on: .macPaneMenu, zoomed: zoomed))
+                // macOS 27 hides menu images by default; the splits and the
+                // destructive row keep theirs (see `keepingImageVisible`).
+                if Self.paneMenuRowsWithImages.contains(command) { row.keepingImageVisible() }
+                menu.addItem(row)
             case .separator:
                 menu.addItem(.separator())
             case .recentAgents:
@@ -655,6 +659,10 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         for it in items { menu.removeItem(it) }
         return items
     }
+
+    static let paneMenuRowsWithImages: Set<PaneCommand> = [
+        .splitRight, .splitDown, .splitDuplicate, .splitPathCommand, .closePane,
+    ]
 
     /// How the Mac performs a catalog command: the responder-chain selectors
     /// the menu bar uses too. nil = not a pane-menu action on this platform.

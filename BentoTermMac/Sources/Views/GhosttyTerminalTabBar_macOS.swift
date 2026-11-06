@@ -368,6 +368,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
             item.target = self
             item.representedObject = session.key
             item.image = session.dot
+            item.keepingImageVisible()
             item.state = (session.key == activeSessionKey) ? .on : .off
             if let sub = sessionRowSubmenu(session) {
                 // An item with a submenu no longer fires its own action in
@@ -452,6 +453,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
                               action: #selector(killNamedSessionAction(_:)), keyEquivalent: "")
         kill.target = self
         kill.representedObject = local
+        kill.image = NSImage(systemSymbolName: "xmark.octagon", accessibilityDescription: nil)
+        kill.keepingImageVisible()
         sub.addItem(kill)
         return sub
     }
@@ -820,6 +823,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         // twin — so a separator keeps them from being adjacent targets.
         menu.addItem(.separator())
         add(menu, "Kill Session", #selector(killAction))
+        menu.items.last?.image = NSImage(systemSymbolName: "xmark.octagon", accessibilityDescription: nil)
+        menu.items.last?.keepingImageVisible()
         // No "Close Window" here: next to ⇧⌘W (which closes the MAC window and
         // leaves the session running) a row that killed the tmux window read
         // as the same thing. Killing a window lives on the strip and the
@@ -846,6 +851,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         settings.keyEquivalentModifierMask = .command
         settings.target = self
         settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        settings.keepingImageVisible()
         menu.addItem(settings)
         let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesAction),
                                  keyEquivalent: "")
@@ -927,11 +933,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
                                  action: #selector(newPaneOrWindowAction))
             item.keyEquivalent = "n"
             item.keyEquivalentModifierMask = .command
-            menu.addItem(item)
+            menu.addItem(item.keepingImageVisible())
         }
         menu.addItem(plainItem(symbol: LaunchAction.agentSession.systemImage, title: "New Agent…",
                                tip: LaunchAction.agentSession.detail,
-                               action: #selector(newAgentAction)))
+                               action: #selector(newAgentAction)).keepingImageVisible())
         if rows.contains(.recentAgents) {
             // The agent you already had open in that repo, split in beside this
             // pane. Dispatched through the responder chain like the other pane
@@ -952,14 +958,14 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
                                 action: #selector(newSessionAction))
         session.keyEquivalent = "n"
         session.keyEquivalentModifierMask = [.command, .shift]
-        menu.addItem(session)
+        menu.addItem(session.keepingImageVisible())
         menu.addItem(plainItem(symbol: LaunchAction.plainTerminal.systemImage,
                                title: "New Plain Terminal",
                                tip: LaunchAction.plainTerminal.detail,
-                               action: #selector(newPlainTerminalAction)))
+                               action: #selector(newPlainTerminalAction)).keepingImageVisible())
         menu.addItem(SSHHostMenu.item(target: self,
                                       remoteTmux: #selector(remoteSessionAction(_:)),
-                                      shell: #selector(sshShellAction(_:))))
+                                      shell: #selector(sshShellAction(_:))).keepingImageVisible())
 
         pop(menu, from: newButton)
     }
@@ -1029,6 +1035,20 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     @objc private func detachAction() { onDetach?() }
     @objc private func releaseSizeAction() { onReleaseSize?() }
     @objc private func killAction() { onKillSession?() }
+}
+
+// MARK: - Menu images
+
+extension NSMenuItem {
+    /// macOS 27 hides SF Symbol images in menus unless a row asks to keep its
+    /// image. Only the rows whose icon carries meaning ask: creation rows,
+    /// status dots, Settings, splits and destructive rows. Everything else is
+    /// text-only, which is the system's default for a reason.
+    @discardableResult
+    func keepingImageVisible() -> NSMenuItem {
+        if #available(macOS 27.0, *) { preferredImageVisibility = .visible }
+        return self
+    }
 }
 
 // MARK: - The ~/.ssh/config menu
