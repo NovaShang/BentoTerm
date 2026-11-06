@@ -219,7 +219,7 @@ final class LauncherWindowController: NSObject, NSWindowDelegate {
         // `presentPalette`.
         toolbar.onOpenSearch = { [weak self] in self?.presentPalette() }
         window.toolbar = toolbar.makeToolbar()
-        window.toolbarStyle = .unified
+        window.toolbarStyle = .unifiedCompact
     }
 
     /// Where the window opens.

@@ -1091,7 +1091,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             toolbar?.handleRightClick(atWindowPoint: point) ?? false
         }
         win.toolbar = toolbar.makeToolbar()
-        win.toolbarStyle = .unified
+        win.toolbarStyle = .unifiedCompact
         // Restore size + position, but only for the window that opens into an
         // empty screen — the rest join its tab group (which shares one frame) or
         // cascade beside it, and AppKit refuses a duplicate autosave name anyway.

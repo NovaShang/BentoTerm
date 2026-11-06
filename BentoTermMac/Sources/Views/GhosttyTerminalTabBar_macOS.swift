@@ -12,7 +12,7 @@ import AppKit
 /// (borderless ≤14, bordered "glass" on 26+).
 ///
 /// Layout (left → right):
-///   [▢ <session> ⌄] [Parallel│Focus]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋ New ⌄] [▤]
+///   [▢ <session> ⌄] [Parallel│Focus]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋│▤]
 ///
 /// The named left button carries the session (its switcher today, its actions
 /// once sessions become native window tabs); the centre strip is the current
@@ -85,7 +85,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     private func applySessionAvailability() {
         syncToolbarItems()
         setMenuText(sessionsButton, sessionsText)
-        setMenuText(newButton, "New")
+        applyActionSegments()
     }
 
     /// Which items belong in the toolbar right now.
@@ -116,8 +116,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         let afterMode = tb.items.firstIndex { $0.itemIdentifier == Self.modeID }
             .map { $0 + 1 } ?? afterSessions
         setItem(Self.sizeID, visible: hasSession && sizeMismatch != nil, insertAt: afterMode)
-        // Preview is the rightmost item, so it re-enters at the end.
-        setItem(Self.previewID, visible: hasSession, insertAt: tb.items.count)
     }
 
     /// Add or remove the toolbar ITEM — not just its view.
@@ -190,9 +188,10 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// Tiled|List — the session's structural mode, next to the session button.
     /// Reflects the active tab's `sessionMode`; hidden for plain (no-tmux) tabs.
     private let modeSwitch = NSSegmentedControl()
-    private let newButton = NSButton()
+    /// New ⌄ and the preview toggle share one capsule — the two everyday
+    /// right-hand actions read as one group rather than two loose buttons.
+    private let actionsControl = NSSegmentedControl()
     /// Show/hide the preview dock (always present, like an inspector toggle).
-    private let previewButton = NSButton()
     /// The take-over banner: present only while this window's grid differs from
     /// the session's (see `sizeMismatch`).
     private let sizeButton = NSButton()
@@ -231,7 +230,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     fileprivate static let modeID = NSToolbarItem.Identifier("bento.mode")
     fileprivate static let newID = NSToolbarItem.Identifier("bento.new")
     fileprivate static let centerID = NSToolbarItem.Identifier("bento.center")
-    fileprivate static let previewID = NSToolbarItem.Identifier("bento.preview")
     fileprivate static let sizeID = NSToolbarItem.Identifier("bento.size")
     fileprivate static let searchID = NSToolbarItem.Identifier("bento.search")
     fileprivate static let searchCompactID = NSToolbarItem.Identifier("bento.searchCompact")
@@ -261,17 +259,18 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         modeSwitch.setLabel("Parallel", forSegment: 0)
         modeSwitch.setLabel("Focus", forSegment: 1)
         modeSwitch.trackingMode = .selectOne
-        modeSwitch.controlSize = .large   // match the neighboring buttons
+        modeSwitch.controlSize = .regular   // the compact toolbar's size
         modeSwitch.target = self
         modeSwitch.action = #selector(modeSwitched)
         modeSwitch.setToolTip("One window, tiled panes", forSegment: 0)
         modeSwitch.setToolTip("One pane per window, listed in the sidebar", forSegment: 1)
         modeSwitch.sizeToFit()
-        configureMenu(newButton, symbol: "plus", text: "New", action: #selector(newTapped))
-        // Inspector-style toggle for the preview dock (file tree + previews).
-        configure(previewButton, symbol: "sidebar.trailing", title: "",
-                  action: #selector(previewTapped))
-        previewButton.toolTip = "Show/hide the file panel (⌥⌘P)"
+        // [＋ | ▤]: New (a menu) and the inspector-style preview dock toggle.
+        actionsControl.trackingMode = .momentary
+        actionsControl.controlSize = .regular
+        actionsControl.target = self
+        actionsControl.action = #selector(actionSegmentTapped)
+        applyActionSegments()
         configure(sizeButton, symbol: TerminalSizingMode.thisDevice.symbol, title: "",
                   action: #selector(sizeBannerTapped))
         configureSearchField()
@@ -296,7 +295,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.setMenuText(self.sessionsButton, self.sessionsText)
-            self.setMenuText(self.newButton, "New")
         }
     }
 
@@ -332,7 +330,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// be a state to keep in sync for no gain.
     private func configureSearchField() {
         searchField.bezelStyle = .roundRect
-        searchField.controlSize = .large
+        searchField.controlSize = .regular
         searchField.imagePosition = .imageLeading
         searchField.image = NSImage(systemSymbolName: "magnifyingglass",
                                     accessibilityDescription: "Search")
@@ -355,7 +353,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
                 // attribute does not reliably inherit the control's, so leaving
                 // it out would resize the text while recoloring it.
                 .font: searchField.font
-                    ?? NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .large)),
+                    ?? NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .regular)),
             ])
         searchField.target = self
         searchField.action = #selector(searchTapped)
@@ -707,7 +705,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// A plain action/icon button (no dropdown chevron).
     private func configure(_ b: NSButton, symbol: String, title: String, action: Selector) {
         b.bezelStyle = .texturedRounded
-        b.controlSize = .large   // match the .large segmented tab strip's height
+        b.controlSize = .regular   // the compact toolbar's size
         b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title.isEmpty ? "More" : title)
         b.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
         b.title = title
@@ -721,7 +719,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// title, so it sits at the trailing edge instead of a misplaced "⌄" glyph).
     private func configureMenu(_ b: NSButton, symbol: String, text: String, action: Selector) {
         b.bezelStyle = .texturedRounded
-        b.controlSize = .large   // match the .large segmented tab strip's height
+        b.controlSize = .regular   // the compact toolbar's size
         b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: text)
         b.imagePosition = .imageLeading
         b.target = self
@@ -771,15 +769,15 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // ◧ | Sessions ⌄ | Tiled|List | ⸺flex⸺ | [session tabs] | ⸺flex⸺ | New ⌄ | ◨
+        // ◧ | Sessions ⌄ | Tiled|List | ⸺flex⸺ | [session tabs] | ⸺flex⸺ | ＋│▤
         //
-        // Same seven slots with no session — only the centre differs, and only
+        // Same slots with no session — only the centre differs, and only
         // because a window strip with no windows in it is not a control that
         // can be disabled. Search takes the centre there, which is where a
         // one-window session puts it too.
         [Self.sessionsID, Self.modeID, .flexibleSpace,
          hasSession ? Self.centerID : Self.searchID,
-         .flexibleSpace, Self.newID, Self.previewID]
+         .flexibleSpace, Self.newID]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // The centre swaps between the window strip and the search field, and
@@ -791,7 +789,30 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         toolbarDefaultItemIdentifiers(toolbar) + [Self.searchID, Self.searchCompactID, Self.sizeID]
     }
 
-    @objc private func previewTapped() { onTogglePreview?() }
+    /// Segment 0 is always New; segment 1 (only with a session — a launcher
+    /// has no panes to preview from) toggles the preview dock.
+    private func applyActionSegments() {
+        let count = hasSession ? 2 : 1
+        if actionsControl.segmentCount != count { actionsControl.segmentCount = count }
+        actionsControl.setImage(NSImage(systemSymbolName: "plus", accessibilityDescription: "New"),
+                                forSegment: 0)
+        actionsControl.setToolTip("New pane, window or session", forSegment: 0)
+        if count > 1 {
+            actionsControl.setImage(NSImage(systemSymbolName: "sidebar.trailing",
+                                            accessibilityDescription: "Preview"),
+                                    forSegment: 1)
+            actionsControl.setToolTip("Show/hide the file panel (⌥⌘P)", forSegment: 1)
+        }
+        actionsControl.sizeToFit()
+    }
+
+    @objc private func actionSegmentTapped() {
+        switch actionsControl.selectedSegment {
+        case 0: newTapped()
+        case 1: onTogglePreview?()
+        default: break
+        }
+    }
 
     func toolbar(_ toolbar: NSToolbar,
                  itemForItemIdentifier id: NSToolbarItem.Identifier,
@@ -803,8 +824,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         switch id {
         case Self.sessionsID: item.view = sessionsButton; item.label = "Session"
         case Self.modeID:     item.view = modeSwitch;     item.label = "Layout"
-        case Self.newID:      item.view = newButton;      item.label = "New"
-        case Self.previewID:  item.view = previewButton;  item.label = "Preview"
+        case Self.newID:      item.view = actionsControl; item.label = "New"
         case Self.sizeID:     item.view = sizeButton;     item.label = "Session Size"
         case Self.searchID:   item.view = customSearchView ?? searchField; item.label = "Search"
         case Self.searchCompactID: item.view = searchCompact; item.label = "Search"
@@ -972,7 +992,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             }
         }
 
-        pop(menu, from: newButton)
+        pop(menu, from: actionsControl)
     }
 
     /// A one-line row: symbol, title, and the explanation on hover.
