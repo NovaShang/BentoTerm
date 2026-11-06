@@ -54,6 +54,8 @@ final class TerminalContainerVC: UIViewController {
 
     /// User asked to split this pane (horizontally or vertically).
     var onSplitRequested: ((_ horizontal: Bool) -> Void)?
+    /// User asked to split this pane, choosing the folder and command first.
+    var onSplitPathCommandRequested: (() -> Void)?
 
     /// Whether the pane menu should offer Split entries — checked when the
     /// menu opens. Split only exists in Tiled mode (in List a split would
@@ -1447,6 +1449,7 @@ extension TerminalContainerVC {
         case .zoom: onToggleZoom?()
         case .splitRight: onSplitRequested?(true)
         case .splitDown: onSplitRequested?(false)
+        case .splitPathCommand: onSplitPathCommandRequested?()
         case .exitCopyMode: onExitCopyMode?()
         case .closePane: onCloseRequested?()
         default: break   // not offered in this menu

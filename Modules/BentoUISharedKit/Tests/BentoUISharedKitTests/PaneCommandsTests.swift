@@ -69,7 +69,7 @@ struct PaneCommandsTests {
         }
         #expect(titles(rows, .iosPaneMenu) == [
             "Find…", "Zoom", "[paste]", "Split Right (-h)", "Split Down (-v)",
-            "[move]", "Close Pane",
+            "Split — Path & Command…", "[move]", "Close Pane",
         ])
         #expect(PaneCommand.closePane.role(on: .iosPaneMenu) == .destructive)
         #expect(PaneCommand.zoom.title(on: .iosPaneMenu, zoomed: true) == "Unzoom")
@@ -83,12 +83,7 @@ struct PaneCommandsTests {
         #expect(titles(rows, .iosPaneMenu) == ["Find…", "[paste]", "Exit tmux copy-mode"])
     }
 
-    @Test func iosOverflowMenu() {
-        #expect(PaneMenuLayout.iosOverflowSplit(parallel).map { $0.title(on: .iosOverflowMenu) } == [
-            "Split Right (-h)", "Split Down (-v)",
-            "Split — Duplicate Current", "Split — Path & Command…",
-        ])
-        #expect(PaneMenuLayout.iosOverflowSplit(focus).isEmpty)
+    @Test func iosOverflowMenuLayouts() {
         #expect(PaneMenuLayout.iosOverflowShowsLayouts(parallel))
         #expect(!PaneMenuLayout.iosOverflowShowsLayouts(
             PaneMenuContext(sessionMode: .tiled, paneCount: 1)))

@@ -51,7 +51,6 @@ struct TerminalWrapperView: View {
     /// (see `applyPhoneFocusDefault`). Nil when there is nothing to say.
     @State private var tipToast: String?
     private let tips = TipCenter.shared
-    @State private var showSplitSheet = false
     @State private var pendingCloseWindow: TmuxWindowID?
     /// Kill Session is destructive AND irreversible (every window/pane dies), so
     /// it goes through a confirmation before it runs.
@@ -79,10 +78,10 @@ struct TerminalWrapperView: View {
 
     // MARK: - Fullscreen
 
-    /// The fullscreen choice is remembered per DEVICE (not per host/session),
-    /// so a phone that works in fullscreen comes back fullscreen and an iPad's
-    /// manual toggle survives re-entry too. Keyed globally, mirroring how the
-    /// choice is a personal UI preference, not a property of any session.
+    /// The iPad's fullscreen choice, remembered per DEVICE (not per
+    /// host/session) so its manual toggle survives re-entry. Keyed globally:
+    /// it is a personal UI preference, not a property of any session. An
+    /// iPhone ignores it — it follows its orientation (`syncFullscreenToOrientation`).
     private var fullscreenPreferenceKey: String { "fullscreenMode" }
 
     private func toggleFullscreen() {
@@ -90,24 +89,23 @@ struct TerminalWrapperView: View {
         UserDefaults.standard.set(isFullscreen, forKey: fullscreenPreferenceKey)
     }
 
-    /// First mount: the saved choice wins on iPhone and iPad alike. A fresh
-    /// mount doesn't fire the size-class onChange, so a phone that mounts in
-    /// landscape still gets the auto-enter default on first run (no choice yet).
+    /// First mount (a fresh mount doesn't fire the size-class onChange).
     private func restoreFullscreenPreference() {
-        if let saved = UserDefaults.standard.object(forKey: fullscreenPreferenceKey) as? Bool {
-            isFullscreen = saved
-        } else if !isRegularWidth, verticalSizeClass == .compact {
-            isFullscreen = true
+        if isRegularWidth {
+            isFullscreen = UserDefaults.standard.bool(forKey: fullscreenPreferenceKey)
+        } else {
+            syncFullscreenToOrientation()
         }
     }
 
-    /// iPhone landscape auto-enters fullscreen. A saved choice always wins —
-    /// rotation never overrides it — and once fullscreen, rotating to portrait
-    /// never auto-exits: leaving fullscreen is a manual choice.
+    /// iPhone: landscape is fullscreen, portrait isn't, both ways. It used to
+    /// auto-enter only and leave the exit to a ⋯ row, plus remember a manual
+    /// choice that then overrode rotation; with the row gone, following the
+    /// orientation is the whole rule, and a choice saved by an older build
+    /// can't strand the phone in fullscreen. iPad is manual (its bar button).
     private func syncFullscreenToOrientation() {
-        guard !isRegularWidth else { return }   // iPad is manual-only
-        guard UserDefaults.standard.object(forKey: fullscreenPreferenceKey) == nil else { return }
-        if verticalSizeClass == .compact { isFullscreen = true }
+        guard !isRegularWidth else { return }
+        isFullscreen = verticalSizeClass == .compact
     }
 
     /// The pane background as a SwiftUI color — the full-screen backdrop of
@@ -182,7 +180,9 @@ struct TerminalWrapperView: View {
             } message: {
                 Text(viewModel.errorMessage ?? "Unknown error")
             }
-            .sheet(isPresented: $showSplitSheet) {
+            // Raised from the pane menu's "Split — Path & Command…", which
+            // lives in the UIKit container; the bridge carries the request.
+            .sheet(isPresented: $paneBridge.showsSplitPathCommand) {
                 PathAndCommandSheet(title: "Split — Path & Command",
                                pathContextProvider: { paneBridge.container?.focusedPathPreviewContext() }) { path, command in
                     Task { await viewModel.splitPane(horizontal: true, seed: .custom(path: path, command: command)) }
@@ -243,9 +243,10 @@ struct TerminalWrapperView: View {
                 wireVoiceController()
                 restoreFullscreenPreference()
             }
-            // iPhone landscape → auto-fullscreen (unless a choice is saved);
-            // no size-class change ever auto-exits fullscreen.
+            // iPhone: fullscreen follows the orientation. A width change (iPad
+            // split view, Slide Over) re-applies whichever rule now holds.
             .onChange(of: verticalSizeClass) { _, _ in syncFullscreenToOrientation() }
+            .onChange(of: horizontalSizeClass) { _, _ in restoreFullscreenPreference() }
             .overlay(alignment: .top) { reconnectingBanner }
             .overlay { voiceOverlay }
             // The managed input surface: an inline bar riding the keyboard's top
@@ -452,7 +453,7 @@ struct TerminalWrapperView: View {
                 }
             }
             // iPad only: the fullscreen toggle lives in the bar next to the
-            // overflow menu (iPhone folds it into the ⋯ menu instead).
+            // overflow menu (an iPhone follows its orientation instead).
             if isRegularWidth {
                 ToolbarItem(placement: .topBarTrailing) {
                     fullscreenToggleButton
@@ -760,13 +761,19 @@ struct TerminalWrapperView: View {
     /// can carry the glass).
     private var sessionMenuContent: some View {
         Group {
-            // Same order as the Mac pane menu: create, then arrange, then the
-            // session-wide policy — so the two platforms can be described with
-            // one sentence instead of two.
-            Button(action: toggleFullscreen) {
-                Label(isFullscreen ? "Exit Fullscreen" : "Fullscreen",
-                      systemImage: isFullscreen ? "arrow.down.right.and.arrow.up.left"
-                                                : "arrow.up.left.and.arrow.down.right")
+            // Arrange, then the session-wide policy, then the session itself.
+            // Creating panes is the pane menu's (it knows which pane to split).
+            //
+            // iPad only: in fullscreen its bar button is gone with the bar, so
+            // this row is the way back. An iPhone follows its orientation
+            // instead — landscape is fullscreen, portrait isn't — so it has no
+            // state to toggle.
+            if isRegularWidth {
+                Button(action: toggleFullscreen) {
+                    Label(isFullscreen ? "Exit Fullscreen" : "Fullscreen",
+                          systemImage: isFullscreen ? "arrow.down.right.and.arrow.up.left"
+                                                    : "arrow.up.left.and.arrow.down.right")
+                }
             }
             if viewModel.isTmuxReady {
                 // The phone has no room for the segmented switch in the bar,
@@ -774,7 +781,6 @@ struct TerminalWrapperView: View {
                 // Fullscreen shows it everywhere (the iPad bar's toggle is
                 // floating then, and there is no bar to host the switch).
                 if !isRegularWidth || isFullscreen { modeSection }
-                splitSection
                 layoutSection
                 releaseSizeButton
             }
@@ -848,38 +854,9 @@ struct TerminalWrapperView: View {
         .padding(.trailing, 12)
     }
 
-    /// Split section — Tiled only (List mode never shows a split entry: inside
-    /// Bento you cannot build a third shape). The two seeded entries mirror
-    /// List's window creation exactly.
-    @ViewBuilder
-    private var splitSection: some View {
-        let commands = PaneMenuLayout.iosOverflowSplit(overflowMenuContext)
-        if !commands.isEmpty {
-            Section("Split") {
-                ForEach(commands, id: \.self) { command in
-                    Button { performOverflow(command) } label: {
-                        Label(command.title(on: .iosOverflowMenu),
-                              systemImage: command.symbol(on: .iosOverflowMenu) ?? "")
-                    }
-                }
-            }
-        }
-    }
-
     private var overflowMenuContext: PaneMenuContext {
         PaneMenuContext(sessionMode: viewModel.sessionMode,
                         paneCount: viewModel.paneViewModels.count)
-    }
-
-    private func performOverflow(_ command: PaneCommand) {
-        switch command {
-        case .splitRight: viewModel.splitPane(horizontal: true)
-        case .splitDown: viewModel.splitPane(horizontal: false)
-        case .splitDuplicate:
-            Task { await viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) }
-        case .splitPathCommand: showSplitSheet = true
-        default: break   // not offered in this menu
-        }
     }
 
     /// tmux's named layouts — parity with the Mac pane menu. They were always
@@ -997,6 +974,10 @@ struct TerminalWrapperView: View {
     /// The find bar is up (its field holds the keyboard) — the floating
     /// quick-keys bar must hide so the two don't both sit on the keyboard top.
     @Published var findBarActive = false
+
+    /// The pane menu asked for "Split — Path & Command…"; the SwiftUI chrome
+    /// owns the sheet.
+    @Published var showsSplitPathCommand = false
 
     override init() {
         super.init()
@@ -1424,6 +1405,10 @@ final class PaneContainerVC: UIViewController {
         vc.onSplitRequested = { [weak self] horizontal in
             self?.viewModel?.selectPane(paneID)
             self?.viewModel?.splitPane(horizontal: horizontal)
+        }
+        vc.onSplitPathCommandRequested = { [weak self] in
+            self?.viewModel?.selectPane(paneID)
+            self?.bridge?.showsSplitPathCommand = true
         }
         vc.onCloseRequested = { [weak self] in self?.viewModel?.closePane(paneID) }
         vc.onToggleZoom = { [weak self] in self?.viewModel?.toggleZoom(paneID) }

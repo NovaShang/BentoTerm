@@ -4,9 +4,9 @@ import BentoSessionKit
 /// Every pane action the two apps offer, with the words and symbols each
 /// surface shows for it, and the rules for when it is offered.
 ///
-/// Five surfaces used to spell these out by hand: the Mac pane menu (title-bar
-/// ⌄ and right-click), the Mac command palette, the Mac toolbar's New ⌄ menu,
-/// the iOS pane menu, and the iOS ⋯ menu. They had drifted (iOS said
+/// Four surfaces render them: the Mac pane menu (title-bar ⌄ and right-click),
+/// the Mac command palette, the Mac toolbar's New ⌄ menu, and the iOS pane
+/// menu. They used to be spelled out by hand and had drifted (iOS said
 /// "Maximize" for Zoom); one table is what keeps them from drifting again.
 /// Where a surface still words a row differently — the palette's verb-first
 /// "Toggle Zoom", a New-menu "Split Pane" — it is chosen here, in the open.
@@ -42,8 +42,6 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case macNewMenu
         /// iOS: a pane's title-bar menu.
         case iosPaneMenu
-        /// iOS: the session's ⋯ menu.
-        case iosOverflowMenu
     }
 
     public enum Role: Sendable { case normal, destructive }
@@ -227,17 +225,10 @@ public enum PaneMenuLayout {
         case .zoom: return c.isTmuxPane ? [.command(.zoom)] : []
         case .split:
             return c.isTmuxPane && c.showsSplitActions
-                ? [.command(.splitRight), .command(.splitDown)] : []
+                ? [.command(.splitRight), .command(.splitDown), .command(.splitPathCommand)] : []
         case .copyMode: return c.inCopyMode ? [.command(.exitCopyMode)] : []
         case .structure: return c.isTmuxPane ? [.moveToSession, .command(.closePane)] : []
         }
-    }
-
-    /// iOS ⋯ menu "Split" section — Parallel only, the two seeded splits
-    /// mirroring Focus's window creation.
-    public static func iosOverflowSplit(_ c: PaneMenuContext) -> [PaneCommand] {
-        c.sessionMode == .tiled
-            ? [.splitRight, .splitDown, .splitDuplicate, .splitPathCommand] : []
     }
 
     /// iOS ⋯ menu "Layout" section: only when there is more than one pane to
