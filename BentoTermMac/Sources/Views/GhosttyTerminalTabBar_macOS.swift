@@ -991,39 +991,37 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // a menu is opened, read and closed, so its width and its rows are not
         // geometry anyone is relying on staying put — unlike the toolbar behind
         // it, where four greyed rows would just be a longer list to read past.
-        if hasSession {
-            menu.addItem(.separator())
-            menu.addItem(plainItem(
-                symbol: "macwindow", title: "New tmux Window",
-                tip: "A tmux window in this session, with the current pane's folder and command.",
-                action: #selector(newWindowDuplicateAction)))
-            menu.addItem(plainItem(
-                symbol: nil, title: "New tmux Window at a Path…",
-                tip: "A tmux window, choosing the folder and what to run in it.",
-                action: #selector(newWindowPathCommandAction)))
-
-            menu.addItem(.separator())
-            menu.addItem(plainItem(
-                symbol: "square.split.2x1", title: "New Pane",
-                tip: "Split the current pane, inheriting its folder and command.",
-                action: #selector(newPaneDuplicateAction)))
-            menu.addItem(plainItem(
-                symbol: nil, title: "New Pane at a Path…",
-                tip: "Split off a pane, choosing the folder and what to run in it.",
-                action: #selector(newPanePathCommandAction)))
-
-            // The middle ground between those two: not "whatever this pane is
-            // running" and not "type it all out", but the agent you already had
-            // open in that repo. Rows carry their record and are dispatched
-            // through the responder chain like every other pane action here.
-            let recents = GhosttyTiledPaneHost.recentAgentItems(
-                host: launchHost, target: self, action: #selector(splitRecentAction(_:)))
-            if !recents.isEmpty {
+        // Rows from the shared catalog (PaneMenuLayout.macNewMenuSessionRows).
+        // Creation goes through the responder chain, the same route the menu
+        // bar and the pane menu use, so it lands on the pane host of whichever
+        // tab is active.
+        for row in PaneMenuLayout.macNewMenuSessionRows(hasSession: hasSession) {
+            switch row {
+            case .command(let command):
+                menu.addItem(plainItem(
+                    symbol: command.symbol(on: .macNewMenu),
+                    title: command.title(on: .macNewMenu),
+                    tip: command.tip(on: .macNewMenu) ?? "",
+                    action: #selector(paneCommandAction(_:))))
+                menu.items.last?.representedObject = command.rawValue
+            case .separator:
                 menu.addItem(.separator())
-                let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
-                header.isEnabled = false
-                menu.addItem(header)
-                recents.forEach { menu.addItem($0) }
+            case .recentAgents:
+                // The middle ground between "whatever this pane is running"
+                // and "type it all out": the agent you already had open in that
+                // repo. Rows carry their record and are dispatched through the
+                // responder chain like every other pane action here.
+                let recents = GhosttyTiledPaneHost.recentAgentItems(
+                    host: launchHost, target: self, action: #selector(splitRecentAction(_:)))
+                if !recents.isEmpty {
+                    menu.addItem(.separator())
+                    let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
+                    header.isEnabled = false
+                    menu.addItem(header)
+                    recents.forEach { menu.addItem($0) }
+                }
+            case .layouts, .moveToSession, .paste:
+                break   // not New-menu rows
             }
         }
 
@@ -1085,13 +1083,14 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func closeWindowAction() { onCloseWindow?() }
     @objc private func closeTabAction() { onCloseTab?() }
     @objc private func newPlainShellAction() { onNewPlainShell?() }
-    // Window / pane creation goes through the responder chain, the same route
-    // the menu bar and the pane menu use, so it always lands on the pane host
-    // of whichever tab is active.
-    @objc private func newWindowDuplicateAction() { BentoPaneAction.dispatch(BentoPaneAction.newWindowDuplicate) }
-    @objc private func newWindowPathCommandAction() { BentoPaneAction.dispatch(BentoPaneAction.newWindowPathCommand) }
-    @objc private func newPaneDuplicateAction() { BentoPaneAction.dispatch(BentoPaneAction.splitDuplicate) }
-    @objc private func newPanePathCommandAction() { BentoPaneAction.dispatch(BentoPaneAction.splitPathCommand) }
+    /// A catalog row from the New menu, dispatched through the responder chain
+    /// to the active tab's pane host.
+    @objc private func paneCommandAction(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let command = PaneCommand(rawValue: raw),
+              let action = GhosttyTiledPaneHost.paneMenuSelector(command) else { return }
+        BentoPaneAction.dispatch(action)
+    }
     /// Forwarded with the menu item as the sender, because the record it
     /// carries IS the argument.
     @objc private func splitRecentAction(_ sender: Any?) {

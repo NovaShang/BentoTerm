@@ -607,57 +607,68 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // that is otherwise entirely about THIS pane. Same reason there are no
         // session-level entries: this menu is about one pane.
         let zoomed = (viewModel.zoomedPaneID == paneID)
-        // Splits are Tiled mode's creation path — List mode (one pane per
-        // window) creates via the sidebar's New Window instead, so no split
-        // entries there (the ⌘D actions below no-op the same way).
-        if viewModel.sessionMode != .list {
-            // Icons make the split direction legible (the words "vertical/horizontal"
-            // are ambiguous): side-by-side panes vs stacked panes. The symbol mirrors
-            // the resulting layout — splitVertically → two columns, splitHorizontally
-            // → two rows (matches splitPane(horizontal:) below).
-            menu.addItem(item("Split Right (-h)", BentoPaneAction.splitVertically, symbol: "rectangle.split.2x1"))
-            menu.addItem(item("Split Down (-v)", BentoPaneAction.splitHorizontally, symbol: "rectangle.split.1x2"))
-            menu.addItem(.separator())
-            // Seeded splits — creation parity with List's New Window menu (the
-            // same two seeds; both split to the right).
-            menu.addItem(item("Split — Duplicate Current", #selector(splitDuplicateCurrent(_:)),
-                              symbol: "plus.square.on.square"))
-            menu.addItem(item("Split — Path & Command…", #selector(splitWithPathCommand(_:)),
-                              symbol: "terminal"))
-            // The agents you've had open lately, ready to split off again.
-            // Nothing remembered yet → no separator either: a "Recent Agents"
-            // header over an empty stretch reads as broken, not as empty.
-            let recents = Self.recentAgentItems(host: viewModel.launchHost, target: self,
-                                                action: #selector(splitRecentLaunch(_:)))
-            if !recents.isEmpty {
+        // Rows, order and words come from the shared catalog (PaneMenuLayout):
+        // splits only in Parallel — Focus creates via the sidebar's New Window,
+        // and the ⌘D actions no-op there the same way.
+        let context = PaneMenuContext(sessionMode: viewModel.sessionMode, zoomed: zoomed)
+        let rows = PaneMenuLayout.macPaneMenu(context)
+        for row in rows {
+            switch row {
+            case .command(let command):
+                guard let action = Self.paneMenuSelector(command) else { continue }
+                menu.addItem(item(command.title(on: .macPaneMenu, zoomed: zoomed), action,
+                                  symbol: command.symbol(on: .macPaneMenu, zoomed: zoomed)))
+            case .separator:
                 menu.addItem(.separator())
-                let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
-                header.isEnabled = false
-                menu.addItem(header)
-                recents.forEach { menu.addItem($0) }
+            case .recentAgents:
+                // The agents you've had open lately, ready to split off again.
+                // Nothing remembered yet → no separator either: a "Recent
+                // Agents" header over an empty stretch reads as broken.
+                let recents = Self.recentAgentItems(host: viewModel.launchHost, target: self,
+                                                    action: #selector(splitRecentLaunch(_:)))
+                if !recents.isEmpty {
+                    menu.addItem(.separator())
+                    let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
+                    header.isEnabled = false
+                    menu.addItem(header)
+                    recents.forEach { menu.addItem($0) }
+                }
+            case .layouts:
+                menu.addItem(layoutMenuItem())
+            case .moveToSession:
+                menu.addItem(makeMoveToSessionItem())
+            case .paste:
+                break   // iOS-only row; the Mac pastes from Edit and right-click.
             }
-            menu.addItem(.separator())
-            menu.addItem(layoutMenuItem())
-            menu.addItem(.separator())
         }
-        menu.addItem(item(zoomed ? "Unzoom" : "Zoom", BentoPaneAction.toggleZoom,
-                          symbol: zoomed ? "arrow.down.right.and.arrow.up.left"
-                                         : "arrow.up.left.and.arrow.down.right"))
-        menu.addItem(.separator())
-        // tmux swap-pane -U/-D (the `{`/`}` bindings). Panes can also be
-        // rearranged by dragging a title bar onto another pane.
-        menu.addItem(item("Swap Up", BentoPaneAction.swapPaneUp, symbol: "arrow.up.square"))
-        menu.addItem(item("Swap Down", BentoPaneAction.swapPaneDown, symbol: "arrow.down.square"))
-        menu.addItem(.separator())
-        menu.addItem(makeMoveToSessionItem())
-        menu.addItem(.separator())
-        menu.addItem(item("Close Pane", BentoPaneAction.closePane, symbol: "xmark"))
         // Detached so the caller can splice them into a menu it owns. An
         // NSMenuItem may belong to only one menu at a time, which is also why
         // this is rebuilt per open rather than cached.
         let items = menu.items
         for it in items { menu.removeItem(it) }
         return items
+    }
+
+    /// How the Mac performs a catalog command: the responder-chain selectors
+    /// the menu bar uses too. nil = not a pane-menu action on this platform.
+    static func paneMenuSelector(_ command: PaneCommand) -> Selector? {
+        switch command {
+        case .splitRight: return BentoPaneAction.splitVertically
+        case .splitDown: return BentoPaneAction.splitHorizontally
+        case .splitDuplicate: return BentoPaneAction.splitDuplicate
+        case .splitPathCommand: return BentoPaneAction.splitPathCommand
+        case .zoom: return BentoPaneAction.toggleZoom
+        case .swapUp: return BentoPaneAction.swapPaneUp
+        case .swapDown: return BentoPaneAction.swapPaneDown
+        case .closePane: return BentoPaneAction.closePane
+        case .nextPane: return BentoPaneAction.nextPane
+        case .previousPane: return BentoPaneAction.previousPane
+        case .newTmuxWindow: return BentoPaneAction.newTmuxWindow
+        case .newTmuxWindowDuplicate: return BentoPaneAction.newWindowDuplicate
+        case .newTmuxWindowAtPath: return BentoPaneAction.newWindowPathCommand
+        case .find: return BentoPaneAction.findInPane
+        case .exitCopyMode: return nil
+        }
     }
 
     private func item(_ title: String, _ action: Selector, symbol: String? = nil) -> NSMenuItem {
@@ -1241,22 +1252,37 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                             }
                         })
         }
-        return layouts + [
-            cmd("splitRight", "Split Right (-h)", "rectangle.split.2x1") { [weak self] in self?.splitPaneVertically(nil) },
-            cmd("splitDown", "Split Down (-v)", "rectangle.split.1x2") { [weak self] in self?.splitPaneHorizontally(nil) },
-            cmd("duplicate", "Duplicate Pane (dir + command)", "plus.square.on.square") { [weak self] in
-                guard let self else { return }
-                Task { await self.viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) }
-            },
-            cmd("closePane", "Close Pane", "xmark.square") { [weak self] in self?.closeCurrentPane(nil) },
-            cmd("zoom", "Toggle Zoom", "arrow.up.left.and.arrow.down.right") { [weak self] in self?.toggleCurrentPaneZoom(nil) },
-            cmd("nextPane", "Select Next Pane", "arrow.right.square") { [weak self] in self?.selectNextPane(nil) },
-            cmd("prevPane", "Select Previous Pane", "arrow.left.square") { [weak self] in self?.selectPreviousPane(nil) },
-            cmd("newTmuxWindow", "New tmux Window", "plus.rectangle.on.folder") { [weak self] in self?.newTmuxWindow(nil) },
+        // Pane commands: words and order from the shared catalog. The palette
+        // calls the host directly rather than through the responder chain —
+        // it is already talking to this host.
+        let paneCommands = PaneMenuLayout.macPalette.map { command in
+            cmd(command.paletteID, command.title(on: .macPalette),
+                command.symbol(on: .macPalette) ?? "command") { [weak self] in
+                self?.runPaletteCommand(command)
+            }
+        }
+        return layouts + paneCommands + [
             cmd("newWindow", "New Terminal Window", "macwindow.badge.plus") { BentoTerminalWindow.newWindow() },
             cmd("fit", "Track Session Size to This Window", "arrow.up.left.and.down.right.magnifyingglass") { BentoTerminalWindow.trackActiveSessionSize() },
             cmd("toggleDock", "Toggle Preview Panel", "sidebar.trailing") { BentoTerminalWindow.togglePreviewDock() },
         ]
+    }
+
+
+    private func runPaletteCommand(_ command: PaneCommand) {
+        switch command {
+        case .splitRight: splitPaneVertically(nil)
+        case .splitDown: splitPaneHorizontally(nil)
+        case .splitDuplicate:
+            Task { await viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) }
+        case .closePane: closeCurrentPane(nil)
+        case .zoom: toggleCurrentPaneZoom(nil)
+        case .nextPane: selectNextPane(nil)
+        case .previousPane: selectPreviousPane(nil)
+        case .newTmuxWindow: newTmuxWindow(nil)
+        default:
+            if let action = Self.paneMenuSelector(command) { NSApp.sendAction(action, to: self, from: nil) }
+        }
     }
 
 

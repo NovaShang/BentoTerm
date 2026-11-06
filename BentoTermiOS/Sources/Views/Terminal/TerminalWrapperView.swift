@@ -1055,21 +1055,32 @@ struct TerminalWrapperView: View {
     /// List's window creation exactly.
     @ViewBuilder
     private var splitSection: some View {
-        if viewModel.sessionMode == .tiled {
+        let commands = PaneMenuLayout.iosOverflowSplit(overflowMenuContext)
+        if !commands.isEmpty {
             Section("Split") {
-                Button(action: { viewModel.splitPane(horizontal: true) }) {
-                    Label("Split Right (-h)", systemImage: "rectangle.split.2x1")
-                }
-                Button(action: { viewModel.splitPane(horizontal: false) }) {
-                    Label("Split Down (-v)", systemImage: "rectangle.split.1x2")
-                }
-                Button(action: { Task { await viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) } }) {
-                    Label("Split — Duplicate Current", systemImage: "plus.square.on.square")
-                }
-                Button(action: { showSplitSheet = true }) {
-                    Label("Split — Path & Command…", systemImage: "terminal")
+                ForEach(commands, id: \.self) { command in
+                    Button { performOverflow(command) } label: {
+                        Label(command.title(on: .iosOverflowMenu),
+                              systemImage: command.symbol(on: .iosOverflowMenu) ?? "")
+                    }
                 }
             }
+        }
+    }
+
+    private var overflowMenuContext: PaneMenuContext {
+        PaneMenuContext(sessionMode: viewModel.sessionMode,
+                        paneCount: viewModel.paneViewModels.count)
+    }
+
+    private func performOverflow(_ command: PaneCommand) {
+        switch command {
+        case .splitRight: viewModel.splitPane(horizontal: true)
+        case .splitDown: viewModel.splitPane(horizontal: false)
+        case .splitDuplicate:
+            Task { await viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) }
+        case .splitPathCommand: showSplitSheet = true
+        default: break   // not offered in this menu
         }
     }
 
@@ -1077,7 +1088,7 @@ struct TerminalWrapperView: View {
     /// available on the server; only macOS had ever offered them.
     @ViewBuilder
     private var layoutSection: some View {
-        if viewModel.sessionMode == .tiled, viewModel.paneViewModels.count > 1 {
+        if PaneMenuLayout.iosOverflowShowsLayouts(overflowMenuContext) {
             Section("Layout") {
                 ForEach(TmuxNamedLayout.all) { layout in
                     Button {

@@ -1378,96 +1378,79 @@ extension TerminalContainerVC {
     private var isTmuxPane: Bool { paneVM != nil }
 
     private func makePaneMenu() -> UIMenu {
-        // Split entries are resolved when the menu OPENS (deferred), so a
-        // mode switch after the menu was attached still hides/shows them
-        // correctly. Tiled only — List mode has no split entry anywhere.
-        let splitSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self, self.isTmuxPane, self.showsSplitActions?() ?? true else {
-                completion([])
-                return
+        // Rows, words and conditions come from the shared catalog
+        // (PaneMenuLayout.iosPaneMenu). Every section that depends on state is
+        // resolved when the menu OPENS (deferred, uncached): the session mode,
+        // the zoom and tmux's copy-mode can all flip under the user — another
+        // client, a mode switch after the menu was attached. Find and paste are
+        // about the TERMINAL, so a plain shell keeps them; the rest is tmux
+        // structure and is empty for a plain session.
+        let children: [UIMenuElement] = PaneMenuLayout.IOSSection.allCases.flatMap {
+            section -> [UIMenuElement] in
+            switch section {
+            case .find, .paste:
+                return self.menuElements(PaneMenuLayout.iosPaneMenu(section, self.paneMenuContext()))
+            default:
+                return [UIDeferredMenuElement.uncached { [weak self] completion in
+                    guard let self else { completion([]); return }
+                    completion(self.menuElements(
+                        PaneMenuLayout.iosPaneMenu(section, self.paneMenuContext())))
+                }]
             }
-            completion([
-                UIAction(title: "Split Right (-h)",
-                         image: UIImage(systemName: "rectangle.split.2x1")) { [weak self] _ in
-                    self?.onSplitRequested?(true)
-                },
-                UIAction(title: "Split Down (-v)",
-                         image: UIImage(systemName: "rectangle.split.1x2")) { [weak self] _ in
-                    self?.onSplitRequested?(false)
-                },
-            ])
         }
-        // Only offered while tmux actually has the pane in a mode. Resolved at
-        // menu-open (deferred) like the split entries, since the mode can be
-        // entered and left by another client at any moment.
-        let copyModeSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self, self.titleBar.modeBadge == .copyMode else {
-                completion([])
-                return
+        return UIMenu(children: children)
+    }
+
+    /// The pane's state as the menu needs it, read at open.
+    private func paneMenuContext() -> PaneMenuContext {
+        // The mode isn't read here: the wrapper's `showsSplitActions` already
+        // answers "does this pane offer splits" (Parallel only).
+        PaneMenuContext(isTmuxPane: isTmuxPane,
+                        sessionMode: .tiled,
+                        zoomed: isZoomed?() ?? false,
+                        inCopyMode: titleBar.modeBadge == .copyMode,
+                        showsSplitActions: showsSplitActions?() ?? true)
+    }
+
+    private func menuElements(_ rows: [PaneMenuEntry]) -> [UIMenuElement] {
+        rows.compactMap { row -> UIMenuElement? in
+            switch row {
+            case .command(let command):
+                let zoomed = isZoomed?() ?? false
+                let symbol = command.symbol(on: .iosPaneMenu, zoomed: zoomed)
+                return UIAction(title: command.title(on: .iosPaneMenu, zoomed: zoomed),
+                                image: symbol.map { UIImage(systemName: $0) } ?? nil,
+                                attributes: command.role(on: .iosPaneMenu) == .destructive
+                                    ? .destructive : []) { [weak self] _ in
+                    self?.perform(command)
+                }
+            case .paste:
+                return UIAction(title: "Paste",
+                                image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
+                    // Same path the bar's paste key used: the pane surface's
+                    // clipboard paste.
+                    self?.handleAccessoryKey(.paste)
+                }
+            case .moveToSession:
+                return makeMoveToSessionMenu()
+            case .separator, .recentAgents, .layouts:
+                return nil   // not iOS pane-menu rows
             }
-            completion([
-                UIAction(title: "Exit tmux copy-mode",
-                         image: UIImage(systemName: "arrow.uturn.backward")) { [weak self] _ in
-                    self?.onExitCopyMode?()
-                },
-            ])
         }
-        // Maximize / Restore — state resolved at menu-open (deferred) like the
-        // split entries, since the zoom can flip under the user at any moment
-        // (another client, or the old title-bar target). Moved off the quick
-        // keys bar (2026-08-02 user decision: the bar was longer than the
-        // screen; the zoom button and paste now live here).
-        let zoomSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self, self.isTmuxPane else {
-                completion([])
-                return
-            }
-            let zoomed = self.isZoomed?() ?? false
-            completion([
-                UIAction(title: zoomed ? "Restore" : "Maximize",
-                         image: UIImage(systemName: zoomed
-                             ? "arrow.down.right.and.arrow.up.left"
-                             : "arrow.up.left.and.arrow.down.right")) { [weak self] _ in
-                    self?.onToggleZoom?()
-                },
-            ])
+    }
+
+    /// How iOS performs a catalog command: the container's callbacks into the
+    /// wrapper, which owns the session.
+    private func perform(_ command: PaneCommand) {
+        switch command {
+        case .find: onFindRequested?(nil)
+        case .zoom: onToggleZoom?()
+        case .splitRight: onSplitRequested?(true)
+        case .splitDown: onSplitRequested?(false)
+        case .exitCopyMode: onExitCopyMode?()
+        case .closePane: onCloseRequested?()
+        default: break   // not offered in this menu
         }
-        // Moving a pane between sessions and closing one are tmux structure;
-        // a plain shell has neither. Deferred like everything else here so the
-        // menu is built once and answers correctly at open time.
-        let structureSection = UIDeferredMenuElement.uncached { [weak self] completion in
-            guard let self, self.isTmuxPane else {
-                completion([])
-                return
-            }
-            completion([
-                self.makeMoveToSessionMenu(),
-                UIAction(title: "Close Pane",
-                         image: UIImage(systemName: "xmark"),
-                         attributes: .destructive) { [weak self] _ in
-                    self?.onCloseRequested?()
-                },
-            ])
-        }
-        // What remains for a plain session is everything about the TERMINAL —
-        // find and paste. It used to get no menu at all (the button was
-        // hidden outright), which took search and paste with it.
-        return UIMenu(children: [
-            UIAction(title: "Find…",
-                     image: UIImage(systemName: "magnifyingglass")) { [weak self] _ in
-                self?.onFindRequested?(nil)
-            },
-            zoomSection,
-            UIAction(title: "Paste",
-                     image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
-                // Same path the bar's paste key used: the pane surface's
-                // clipboard paste.
-                self?.handleAccessoryKey(.paste)
-            },
-            splitSection,
-            copyModeSection,
-            structureSection,
-        ])
     }
 
     /// Pane menu → Move to Session: other sessions (from the parent's cached
