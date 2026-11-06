@@ -29,6 +29,38 @@ public enum TmuxSessionNaming {
     /// What a session is called when nobody named it.
     public static let defaultName = "bento"
 
+    /// Settings → General → Default session name. The same key on both
+    /// platforms; stored as typed, read through `configuredDefault`.
+    public static let defaultNameKey = "default_session_name"
+
+    /// The session Bento opens when it has to pick one for you: the user's
+    /// configured name made addressable, or `bento` when there is none.
+    public static func configuredDefault(_ defaults: UserDefaults = .standard) -> String {
+        typed(defaults.string(forKey: defaultNameKey) ?? "") ?? defaultName
+    }
+
+    /// `base-2`, `base-3`, … — the lowest one not in `existing`. Never `base`
+    /// itself: this names an EXTRA session beside the default one, so the
+    /// plain name is always taken by definition, even before it exists.
+    public static func numbered(_ base: String, existing: Set<String>) -> String {
+        var n = 2
+        while existing.contains("\(base)-\(n)") { n += 1 }
+        return "\(base)-\(n)"
+    }
+
+    /// Which session to put in an app that opens with no window: the one that
+    /// was in use last, if the server still has it; otherwise the default.
+    ///
+    /// `live` nil means "we have not heard from tmux", which is not the same as
+    /// "tmux has nothing" — then the remembered name is trusted, because the
+    /// attach is `new-session -A` and at worst recreates it. An empty `live`
+    /// is a real answer (no server, or no sessions) and the default wins.
+    public static func reopenTarget(last: String?, live: [String]?, defaultName: String) -> String {
+        guard let last, !last.isEmpty else { return defaultName }
+        guard let live else { return last }
+        return live.contains(last) ? last : defaultName
+    }
+
     /// A name the user typed, made addressable: only the two target
     /// separators are replaced — spaces and the rest are the user's to keep,
     /// and tmux takes them. nil when there's nothing left to name it by.
