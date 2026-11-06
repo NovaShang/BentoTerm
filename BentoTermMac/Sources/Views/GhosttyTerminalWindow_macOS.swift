@@ -1553,6 +1553,53 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
                 self.previewDock.refreshTree()
             }
             .store(in: &activeCancellables)
+        // The toolbar's centre title: what runs in the focused pane and where.
+        // Same directory source as the tree above (tmux pushes it on cd); the
+        // command comes off the list-panes poll. A pane the subscription has
+        // not reported yet is asked once — otherwise a fresh window, or any
+        // window on a tmux too old to push, would show no path at all.
+        tab.viewModel.$activePaneID
+            .combineLatest(tab.viewModel.$paneWorkingDirectories,
+                           tab.viewModel.$sessionPanes)
+            .map { pane, dirs, panes in
+                PaneLocationKey(
+                    pane: pane,
+                    directory: pane.flatMap { dirs[$0] },
+                    command: pane.flatMap { id in panes.first { $0.id == id }?.currentCommand })
+            }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self, weak tab] key in
+                guard let self, let tab, tab === self.activeTab else { return }
+                self.applyLocationTitle(key, tab: tab)
+            }
+            .store(in: &activeCancellables)
+    }
+
+    /// Directory answered by the one-shot query, for the pane that was asked
+    /// about — used only until the subscription reports that pane.
+    private var queriedDirectory: (pane: TmuxPaneID, path: String)?
+
+    private func applyLocationTitle(_ key: PaneLocationKey, tab: SessionTab) {
+        var directory = key.directory
+        if directory == nil, let pane = key.pane {
+            if let q = queriedDirectory, q.pane == pane {
+                directory = q.path
+            } else if let paneVM = tab.viewModel.paneViewModels.first(where: { $0.paneID == pane }) {
+                Task { [weak self, weak tab] in
+                    guard let path = await paneVM.currentWorkingDirectory(),
+                          let self, let tab, tab === self.activeTab,
+                          tab.viewModel.activePaneID == pane else { return }
+                    self.queriedDirectory = (pane, path)
+                    self.applyLocationTitle(key, tab: tab)
+                }
+            }
+        }
+        let text = PaneLocationTitle.text(
+            command: key.command, directory: directory,
+            sshHost: tab.id.server.sshHost,
+            home: NSHomeDirectory())
+        toolbar.setLocation(text ?? displayTitle(for: tab))
     }
 
     /// Each tab's agent activity + live session name drive its tab in the strip.
@@ -1795,10 +1842,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         if hasOverflow {
             items.append(("", "more", NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More windows")))
         }
-        // The centre is shared with the search field. A switcher for ONE window
-        // says nothing, and in Focus the sidebar is already the window list — so
-        // in both cases that space goes to search, which always has something to
-        // offer.
+        // The centre is shared with the location title (which opens the
+        // palette). A switcher for ONE window says nothing, and in Focus the
+        // sidebar is already the window list — so in both cases that space says
+        // where the focused pane is instead.
         let isFocus = tab.viewModel.sessionMode == .list
         toolbar.setCenterShowsTabs(!isFocus && tmuxWindows.count > 1)
 
@@ -2334,4 +2381,45 @@ extension NSWindow {
 private struct PaneDirectoryKey: Equatable {
     let pane: TmuxPaneID?
     let directory: String?
+}
+
+private struct PaneLocationKey: Equatable {
+    let pane: TmuxPaneID?
+    let directory: String?
+    let command: String?
+}
+
+/// The toolbar's centre title: `<program> · <path>`, or just `<path>` while the
+/// pane sits at a bare shell prompt (the shell's name says nothing). A remote
+/// session leads with its host — the same path on two machines is two places.
+enum PaneLocationTitle {
+    static func text(command: String?, directory: String?,
+                     sshHost: String?, home: String) -> String? {
+        let program = command.flatMap { cmd -> String? in
+            let trimmed = cmd.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty || AgentHookState.isInteractiveShell(trimmed) ? nil : trimmed
+        }
+        var place: String?
+        if let directory, !directory.isEmpty {
+            // `~` only for this Mac: a remote home is a different directory, and
+            // its path is not ours to guess.
+            place = sshHost == nil ? abbreviate(directory, home: home) : directory
+        }
+        if let sshHost {
+            place = place.map { "\(sshHost): \($0)" } ?? sshHost
+        }
+        switch (program, place) {
+        case let (p?, l?): return "\(p) · \(l)"
+        case let (p?, nil): return p
+        case let (nil, l?): return l
+        default: return nil
+        }
+    }
+
+    static func abbreviate(_ path: String, home: String) -> String {
+        guard !home.isEmpty, home != "/" else { return path }
+        if path == home { return "~" }
+        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        return path
+    }
 }

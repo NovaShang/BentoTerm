@@ -217,7 +217,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// sessions are native tabs, so several windows carry an identical toolbar
     /// at once and a search that could wander into another one would hand this
     /// window's menu that window's tmux windows. Every lookup is fenced by it.
-    weak var hostWindow: NSWindow?
+    weak var hostWindow: NSWindow? {
+        didSet { observeHostWidth(old: oldValue) }
+    }
     /// The toolbar that owns `tabsGroup` — so we can swap the group in place.
     private weak var toolbarRef: NSToolbar?
     /// Signature (title + dot) of the current segments. A group swap is needed
@@ -244,6 +246,21 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// strip takes the centre.
     private let searchField = NSButton()
     private let searchCompact = NSButton()
+    /// A SESSION window's centre at rest: where the focused pane is
+    /// (`claude · ~/proj`), as quiet title text that opens the palette.
+    ///
+    /// It replaced the search-field button there (owner's call): a field-shaped
+    /// control in the middle of every window was the loudest thing on screen
+    /// and said nothing about the window. A title says where you are, and the
+    /// palette is still one click (or ⌘P) away. The launcher keeps the field —
+    /// it has no location to name and its whole job is the search.
+    ///
+    /// Native styling only — a borderless `NSButton`, nothing drawn by us (see
+    /// `configureLocationButton` for why there is no hover affordance).
+    private let locationButton = NSButton()
+    /// ~40% of the window: the location is the one variable-length item, and a
+    /// deep path must truncate rather than shove the side items around.
+    private var locationWidthCap: NSLayoutConstraint?
     private var centerShowsTabs = true
 
     override init() {
@@ -274,6 +291,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         configure(sizeButton, symbol: TerminalSizingMode.thisDevice.symbol, title: "",
                   action: #selector(sizeBannerTapped))
         configureSearchField()
+        configureLocationButton()
         configure(searchCompact, symbol: "magnifyingglass", title: "", action: #selector(searchTapped))
         searchCompact.toolTip = "Search commands, files, sessions, windows, panes (⌘P)"
         configureGroup(tabsGroup)   // placeholder until the first updateTabs
@@ -366,6 +384,71 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     }
 
     @objc private func searchTapped() { onOpenSearch?() }
+
+    private func configureLocationButton() {
+        let b = locationButton
+        // Borderless, and so no hover change at all — tooltip + click. The
+        // hover-only border was tried first and does not survive the toolbar:
+        // on macOS 26 a BORDERED button in a toolbar item is drawn in the
+        // item's glass capsule at rest, whatever `showsBorderOnlyWhileMouseInside`
+        // says (`.recessed` and `.accessoryBarAction` alike; the capsule only
+        // brightens under the pointer), and `NSToolbarItem.isBordered = false`
+        // does not take it off. That capsule is the very prominence this item
+        // replaced. Only a borderless button reads as plain title text.
+        b.isBordered = false
+        b.controlSize = .regular
+        b.imagePosition = .noImage
+        b.target = self
+        b.action = #selector(searchTapped)
+        b.toolTip = "Search commands, files, sessions (⌘P)"
+        b.setAccessibilityLabel("Search commands, files, sessions")
+        (b.cell as? NSButtonCell)?.lineBreakMode = .byTruncatingMiddle
+        (b.cell as? NSButtonCell)?.truncatesLastVisibleLine = true
+        // Size to the text, but give way (truncate) before anything else does.
+        b.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        b.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        b.translatesAutoresizingMaskIntoConstraints = false
+        let cap = b.widthAnchor.constraint(lessThanOrEqualToConstant: 360)
+        cap.isActive = true
+        locationWidthCap = cap
+        setLocation("")
+    }
+
+    /// What the centre title says — `<program> · <path>`, already composed by
+    /// the window (it knows the pane, the host and the shell rule).
+    func setLocation(_ text: String) {
+        let size = NSFont.systemFontSize(for: .small) + 1   // a step under the toolbar's 13
+        let para = NSMutableParagraphStyle()
+        para.lineBreakMode = .byTruncatingMiddle
+        para.alignment = .center
+        locationButton.attributedTitle = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: size),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: para,
+            ])
+        locationButton.invalidateIntrinsicContentSize()
+    }
+
+    private func observeHostWidth(old: NSWindow?) {
+        let center = NotificationCenter.default
+        if let old { center.removeObserver(self, name: NSWindow.didResizeNotification, object: old) }
+        guard let hostWindow else { return }
+        center.addObserver(self, selector: #selector(applyLocationWidthCap),
+                           name: NSWindow.didResizeNotification, object: hostWindow)
+        applyLocationWidthCap()
+    }
+
+    @objc private func applyLocationWidthCap() {
+        guard let width = hostWindow?.frame.width, width > 0 else { return }
+        locationWidthCap?.constant = (width * 0.4).rounded()
+    }
+
+    /// The centre occupant when the window strip isn't showing.
+    private var centerSearchView: NSView {
+        customSearchView ?? (hasSession ? locationButton : searchField)
+    }
 
     /// Every session on the machine. Picking one moves this window onto it
     /// (`switch-client`); one already open in another window comes forward
@@ -511,16 +594,16 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     /// Whichever search control is currently on screen — the panel hangs off it.
     var searchAnchor: NSView {
-        centerShowsTabs ? searchCompact : (customSearchView ?? searchField)
+        centerShowsTabs ? searchCompact : centerSearchView
     }
 
     /// The centre of the toolbar is shared: the window strip when the session
-    /// has more than one window, the search field when it doesn't.
+    /// has more than one window, otherwise the focused pane's location title
+    /// (the search field on a launcher), which opens the palette.
     ///
     /// A single-window session is the common case, and a one-item switcher is
-    /// chrome that says nothing — so that space goes to the thing that always
-    /// has something to offer. When the strip does take over, search shrinks to
-    /// the magnifier beside New rather than disappearing.
+    /// chrome that says nothing. When the strip does take over, the palette
+    /// entry shrinks to the magnifier beside New rather than disappearing.
     func setCenterShowsTabs(_ showTabs: Bool) {
         guard let tb = toolbarRef, showTabs != centerShowsTabs || tb.items.isEmpty else { return }
         centerShowsTabs = showTabs
@@ -826,7 +909,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         case Self.modeID:     item.view = modeSwitch;     item.label = "Layout"
         case Self.newID:      item.view = actionsControl; item.label = "New"
         case Self.sizeID:     item.view = sizeButton;     item.label = "Session Size"
-        case Self.searchID:   item.view = customSearchView ?? searchField; item.label = "Search"
+        case Self.searchID:   item.view = centerSearchView; item.label = "Search"
         case Self.searchCompactID: item.view = searchCompact; item.label = "Search"
         default: return nil
         }

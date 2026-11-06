@@ -42,7 +42,7 @@ public enum AgentHookState {
 
     /// True when `command` names a bare interactive shell — tolerating a login
     /// shell's leading "-" (e.g. "-zsh") and a full path.
-    static func isInteractiveShell(_ command: String) -> Bool {
+    public static func isInteractiveShell(_ command: String) -> Bool {
         let name = (command as NSString).lastPathComponent
         let base = name.hasPrefix("-") ? String(name.dropFirst()) : name
         return interactiveShells.contains(base.lowercased())
