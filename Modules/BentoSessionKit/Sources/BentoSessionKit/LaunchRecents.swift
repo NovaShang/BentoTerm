@@ -1,7 +1,7 @@
 import Foundation
 
 /// A launch the recents list remembers. This file owns it so the shared engine
-/// (TerminalViewModel records launches) and the Mac's menus and launcher can
+/// (TerminalViewModel records launches) and the Mac's menus can
 /// share the same store.
 ///
 /// `host` is nil for a launch on this Mac and the ssh alias for one on a
@@ -114,7 +114,7 @@ public enum RecentLaunchPolicy {
 }
 
 /// MRU store of (directory + command) launches — behind Recent Agents in the
-/// New and pane menus, the launcher's recent launches and the Dock menu.
+/// New and pane menus and the Dock menu's recent launches.
 /// UserDefaults JSON — small, per-user, survives relaunch. Lives in the core so
 /// the shared engine can record launches from every creation path.
 ///

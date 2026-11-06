@@ -40,8 +40,8 @@ struct TerminalCommands: Commands {
         // window, ⌘N opens one the way launch does.
         //
         // ⇧⌘N is the explicit second window: a new Mac window holding a new
-        // session, `<default>-2`, `-3`…. The launcher ("what do you want to
-        // open?") is no longer behind either key; it is New ⌄ → New Session….
+        // session, `<default>-2`, `-3`…. Every other kind of new thing is in
+        // the toolbar's ＋ menu.
         CommandGroup(replacing: .newItem) {
             Button(BentoTerminalWindow.newPaneTitle) { BentoTerminalWindow.newPaneOrWindow() }
                 .keyboardShortcut("n", modifiers: .command)
@@ -78,7 +78,7 @@ struct TerminalCommands: Commands {
             // new-window sat on ⌃⌘T. Frequency and resistance were inverted.
             Button("New tmux Window") { BentoPaneAction.dispatch(BentoPaneAction.newTmuxWindow) }
                 .keyboardShortcut("t", modifiers: .command)
-            // Same two names the toolbar's `+`, the launcher page and the Dock
+            // Same two names the toolbar's `+` and the Dock
             // menu use (`LaunchAction`). This menu used to say "New Session"
             // for the blank one — which stopped being unambiguous the moment an
             // agent session sat beside it — and "New Window (no tmux)" for a

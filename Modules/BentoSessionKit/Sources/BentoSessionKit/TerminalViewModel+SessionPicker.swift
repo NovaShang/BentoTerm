@@ -139,8 +139,7 @@ extension TerminalViewModel {
                 resizeToScreen: !isAttachToExisting
             )
             // Attaching IS a launch, and it's the most common one there is —
-            // far more common than any of the three "new …" verbs the launcher
-            // offers. Recorded here rather than where the user clicked, because
+            // far more common than any of the "new …" verbs. Recorded here rather than where the user clicked, because
             // at click time there is nothing to ask: the directory and the
             // program belong to the session, and only the established control
             // -mode connection can name them. `launchTmux` has by now seen the

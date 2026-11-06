@@ -356,8 +356,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
         }
         // Describe the sessions before announcing them: pushing the names is
-        // what wakes the launcher up, and it should redraw with the counts
-        // already in hand rather than a frame later.
+        // what wakes the menus up, and they should have the counts already in
+        // hand rather than a frame later.
         BentoTerminalWindow.setLocalServerSessionInfo(sessions.map { s in
             let wins = fresh[s.name] ?? []
             return LocalSessionInfo(

@@ -160,7 +160,7 @@ public enum PaneMenuLayout {
     }
 
     /// Mac `New ⌄` rows that need a session to create inside; dropped on a
-    /// launcher (no session) rather than disabled. Picking a folder and command
+    /// plain terminal rather than disabled. Picking a folder and command
     /// is the pane menu's (splits) and the Focus sidebar's (windows) — New ⌄
     /// is the quick path.
     public static func macNewMenuSessionRows(hasSession: Bool) -> [PaneMenuEntry] {

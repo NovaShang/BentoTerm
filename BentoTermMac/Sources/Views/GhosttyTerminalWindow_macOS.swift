@@ -65,7 +65,7 @@ public enum BentoTerminalWindow {
     /// Go to session `id` — in THIS window.
     ///
     /// The app is single-window by default, so picking a session (Session ⌄,
-    /// the Dock menu, the launcher's session rows) moves the window you are
+    /// the Dock menu) moves the window you are
     /// in onto it with `switch-client`, the way `prefix s` does in a terminal,
     /// instead of piling up a window per session. Exceptions, all of which
     /// open a window because there is nothing to switch:
@@ -145,8 +145,6 @@ public enum BentoTerminalWindow {
         knownServerSessions = names
         hasHeardFromServer = true
         for m in managers { m.updateLocalServerSessions(names) }
-        // An open launcher is showing this list as rows; push, don't poll.
-        LauncherWindowController.serverSessionsChanged()
     }
 
     /// The last `tmux ls` the app pushed in. Kept here (not only fanned out to
@@ -169,14 +167,14 @@ public enum BentoTerminalWindow {
     /// Every session on the local server, as far as this process knows: the
     /// last `tmux ls` the app pushed in, plus anything we have open (the poll
     /// runs every 5s, so a just-created session isn't in it yet). Read by
-    /// `OpenTargetProvider` — which is how the launcher reaches the session
+    /// `OpenTargetProvider` — which is how the Dock menu reaches the session
     /// list without core having to know the Mac app exists.
     public static var serverSessions: [String] {
         var seen = Set<String>()
         // Plain (no-tmux) tabs keep a sessionKey too, but there's no session
         // behind it — attaching to one would create an empty session by that
         // name, so they stay out. So do sessions on an ssh host, for the same
-        // reason: the launcher attaches on the LOCAL server, and a remote name
+        // reason: these rows attach on the LOCAL server, and a remote name
         // offered here would create an empty local session under it.
         let open = managers.map(\.tab)
             .filter { !$0.isPlain && $0.id.isLocal }
@@ -274,8 +272,8 @@ public enum BentoTerminalWindow {
     /// app", not "give me another". With none, the session that was in use
     /// LAST comes back if the server still has it, otherwise the default
     /// session (`new-session -A -s <default>`, so it attaches when it exists).
-    /// Never the launcher: the app opens straight into something you can type
-    /// in, and "pick what to open" is New ⌄ → New Session….
+    /// The app opens straight into something you can type in; "pick what to
+    /// open" is the ＋ menu.
     ///
     /// Only the most recent session is reopened, not every one that was open:
     /// the app is single-window by default, and one window brought back is
@@ -355,10 +353,8 @@ public enum BentoTerminalWindow {
     /// Whether it lands as a window or a tab is the system's "prefer tabs"
     /// answer (`shouldOpenAsTab`), the same as every other new session.
     ///
-    /// This used to be ⌘N and open the launcher. ⌘N now adds a pane or tmux
-    /// window to the session you are in (`newPaneOrWindow`) — the app is a
-    /// single-window terminal by default — and the launcher is reached from
-    /// New ⌄ → New Session….
+    /// ⌘N adds a pane or tmux window to the session you are in
+    /// (`newPaneOrWindow`) — the app is a single-window terminal by default.
     public static func newSessionWindow() {
         newWindow(session: nextSessionName())
     }
@@ -416,20 +412,6 @@ public enum BentoTerminalWindow {
         }
     }
 
-    /// The window a new tab would join: the frontmost session window, or nil
-    /// when none is open. The launcher needs it for the same reason `addWindow`
-    /// does — a launcher that will become a session has to appear where a
-    /// session would.
-    static var tabGroupHost: NSWindow? { frontmostManager()?.window }
-
-    /// Open a window that has no session yet and shows the launcher. Picking
-    /// something in it turns THAT window into the session (see
-    /// `LauncherWindowController`) — no second window appears, which is the
-    /// whole point of asking before creating.
-    public static func openLauncherWindow() {
-        LauncherWindowController.open()
-    }
-
     /// Lowest unused `<default>-N` (N ≥ 2). Checked against every session the
     /// local server is known to have, not just the ones with windows — a
     /// window-only check would quietly attach to a `bento-2` that some other
@@ -456,12 +438,6 @@ public enum BentoTerminalWindow {
 
     /// Whether the NEXT session should join the current tab group.
     ///
-    /// A launcher window asks this too, and must: it is a session window whose
-    /// session hasn't been chosen yet, so if sessions open as tabs then the
-    /// question "what should I open?" belongs in a tab as well — otherwise
-    /// answering it moves the answer from a window into the tab bar, or leaves
-    /// a stray window behind.
-    ///
     /// macOS already asks this question globally (System Settings → Desktop &
     /// Dock → "Prefer tabs when opening documents"), so Bento follows that
     /// answer instead of keeping a second one.
@@ -477,9 +453,8 @@ public enum BentoTerminalWindow {
     /// itself (which hides itself at one tab) to AppKit — all of which the
     /// self-managed version either lacked or had to reimplement.
     @discardableResult
-    private static func addWindow(for tab: SessionTab,
-                                  adopting shell: TerminalSessionWindow? = nil) -> TerminalWindowManager {
-        let m = TerminalWindowManager(tab: tab, adopting: shell)
+    private static func addWindow(for tab: SessionTab) -> TerminalWindowManager {
+        let m = TerminalWindowManager(tab: tab)
         m.onEmpty = { [weak m] in
             managers.removeAll { $0 === m }
             // Nothing is written here. The reopen record is the session last
@@ -501,12 +476,7 @@ public enum BentoTerminalWindow {
         // wants; otherwise this stands alone. Either way `tabbingIdentifier` is
         // set, so Merge All Windows and dragging a tab out both keep working —
         // the preference decides the DEFAULT, not what's possible.
-        //
-        // An ADOPTED window is already on screen where the user put it, so it
-        // never moves into somebody else's tab group: the gesture was "fill
-        // this window", and a window that jumps into a tab bar as it fills has
-        // not been filled, it has been replaced.
-        if shell == nil, shouldOpenAsTab, let host = frontmostManager()?.window {
+        if shouldOpenAsTab, let host = frontmostManager()?.window {
             host.addTabbedWindow(m.window, ordered: .above)
         }
         managers.append(m)
@@ -523,87 +493,17 @@ public enum BentoTerminalWindow {
         managers.first { $0.tab.sessionKey == key }
     }
 
-    private static func open(choice: TmuxStartChoice, server: TmuxServer, title: String,
-                             adopting shell: TerminalSessionWindow? = nil) {
+    private static func open(choice: TmuxStartChoice, server: TmuxServer, title: String) {
         let id = SessionTab.id(for: choice, on: server)
         let m: TerminalWindowManager
         if let existing = manager(for: id.key) {
             m = existing
         } else {
-            m = addWindow(for: SessionTab(choice: choice, server: server, title: title),
-                          adopting: shell)
+            m = addWindow(for: SessionTab(choice: choice, server: server, title: title))
         }
         m.bringToFront()
         recordSessionInUse(m.tab)
         refreshNewItemTitle()
-    }
-
-    /// Turn a launcher window into a session window, in place.
-    ///
-    /// This is the one entry point that takes an existing window shell and
-    /// gives it a session, and it exists because the launcher must not spawn:
-    /// picking a session in a window that is asking you to pick one has to fill
-    /// THAT window, or the act of choosing leaves two windows behind — the
-    /// thing you chose, and the question you already answered.
-    ///
-    /// The session may nonetheless already be open in another window (New
-    /// Session… and then a session that's up). Then there is nothing to
-    /// adopt: `open` fronts the existing window and the caller closes the
-    /// launcher, which is why this reports whether the shell was consumed.
-    @discardableResult
-    static func fill(_ shell: TerminalSessionWindow,
-                     choice: TmuxStartChoice, server: TmuxServer, title: String) -> Bool {
-        let id = SessionTab.id(for: choice, on: server)
-        guard manager(for: id.key) == nil else {
-            manager(for: id.key)?.bringToFront()
-            return false
-        }
-        open(choice: choice, server: server, title: title, adopting: shell)
-        return true
-    }
-
-    /// The launcher's own routes into a session, named so the launcher does not
-    /// have to know about `TmuxStartChoice` or `TmuxServer`.
-    ///
-    /// A tmux session picked on the launcher is a session SWITCH like any
-    /// other (`focusOrOpen`): the session window behind the launcher moves onto
-    /// it and the launcher closes (false = shell not consumed). Only with no
-    /// session window to switch does the launcher's own window become the
-    /// session.
-    static func fill(_ shell: TerminalSessionWindow, localSession name: String) -> Bool {
-        let id = TmuxSessionID.local(name)
-        if manager(for: id.key) == nil, let m = switchableManager(for: id) {
-            m.switchSession(to: id)
-            return false
-        }
-        return fill(shell, choice: .createOrAttach(name: name), server: .local,
-                    title: titleFor(id))
-    }
-
-    static func fill(_ shell: TerminalSessionWindow, agent spec: AgentSpec) -> Bool {
-        fill(shell, choice: .createAgent(spec: spec), server: .local,
-             title: titleFor(.local(spec.sessionName)))
-    }
-
-    static func fill(_ shell: TerminalSessionWindow, tmuxHost host: String,
-                     session: String = defaultSessionName) -> Bool {
-        let id = TmuxSessionID.ssh(host: host, name: session)
-        return fill(shell, choice: .createOrAttach(name: session), server: id.server,
-                    title: titleFor(id))
-    }
-
-    /// A plain (no-tmux) shell — `ssh <alias>`, or a bare login shell — in the
-    /// launcher's own window. Plain tabs are never deduped, so unlike the tmux
-    /// routes this always consumes the shell.
-    static func fill(_ shell: TerminalSessionWindow, plainTitle title: String,
-                     command: [String]? = nil) {
-        var n = 1
-        var key = title
-        while manager(for: key) != nil { n += 1; key = "\(title) \(n)" }
-        addWindow(for: SessionTab(choice: .noTmux, server: .local, title: key,
-                                  key: key, command: command),
-                  adopting: shell)
-            .bringToFront()
     }
 
     /// A plain (no-tmux) tab: never deduped — each is a new terminal — and never
@@ -914,20 +814,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     var onEmpty: (() -> Void)?
 
-    /// `shell` is an existing, already-visible window to take over — the
-    /// launcher's. Everything below then configures that window instead of a
-    /// fresh one, so the window the user was looking at becomes the session
-    /// rather than being replaced by a second window beside it.
-    init(tab: SessionTab, adopting shell: TerminalSessionWindow? = nil) {
+    init(tab: SessionTab) {
         self.tab = tab
         super.init()
-        // A session window and a launcher window are ONE kind of window, built
-        // and dressed by one function (`TerminalSessionWindow.makeShell`). When
-        // `shell` is non-nil it has already been through that function as a
-        // launcher, so there is nothing here to redo — which is the point: the
-        // two must not be able to drift, and they drifted for as long as each
-        // configured its own window inline.
-        let win = shell ?? TerminalSessionWindow.makeShell()
+        let win = TerminalSessionWindow.makeShell()
         win.delegate = self
 
         // Content = the system sidebar arrangement. The sidebar split item
@@ -998,18 +888,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // from here on save into the new key.
         splitVC.splitView.autosaveName = "BentoSidebarSplitWide"
         // Assigning a `contentViewController` RESIZES the window to that
-        // controller's fitting size — measured, and for this split view that is
-        // 500 × 500. On a fresh window nobody sees it (the real size is set on
-        // the next line); on an adopted one it is the fill visibly shrinking a
-        // window the user is looking at, which is exactly the jump this path
-        // exists to avoid. So the adopted frame is captured and put back.
-        let adoptedFrame = shell?.frame
+        // controller's fitting size (500 × 500 for this split view), so the
+        // real size is set right after.
         win.contentViewController = splitVC
-        if let adoptedFrame {
-            win.setFrame(adoptedFrame, display: true)
-        } else {
-            win.setContentSize(Self.defaultContentSize)
-        }
+        win.setContentSize(Self.defaultContentSize)
         // The splitView autosave (kept for the sidebar width) also remembers
         // the dock's expanded state across window incarnations — a fresh
         // window would restore yesterday's EXPANDED dock with a brand-new,
@@ -1043,10 +925,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onOpenSessionInNewWindow = { key in
             if let id = TmuxSessionID(key: key) { BentoTerminalWindow.openInNewWindow(id) }
         }
-        // New ⌄ → New Session…: the launcher, the one place that asks what to
-        // open (agent, empty, plain shell, ssh host). Not ⌘N any more — see
-        // `BentoTerminalWindow.newPaneOrWindow`.
-        toolbar.onNewSession = { BentoTerminalWindow.openLauncherWindow() }
         toolbar.onReleaseSize = { [weak self] in
             self?.activeTab?.viewModel.releaseSessionSize()
             self?.rebuildTabBar()
@@ -1071,17 +949,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // Restore size + position, but only for the window that opens into an
         // empty screen — the rest join its tab group (which shares one frame) or
         // cascade beside it, and AppKit refuses a duplicate autosave name anyway.
-        //
-        // An ADOPTED launcher already claimed the name and is already at the
-        // restored frame; the claim rides along with the window because it IS
-        // the same window, so there is no handover and therefore no window in
-        // which the name is unowned and a resize goes unrecorded. Moving it now
-        // would be wrong twice over: it is on screen and being looked at, and
-        // the frame it is at is the one the user just settled on.
-        if BentoWindowFrame.owns(win) {
-            // Nothing to do — the launcher brought the name with it.
-        } else if !BentoTerminalWindow.hasOpenWindows, BentoWindowFrame.claim(win) {
-            if shell == nil, !win.setFrameUsingName(BentoWindowFrame.name) { win.center() }
+        if !BentoTerminalWindow.hasOpenWindows, BentoWindowFrame.claim(win) {
+            if !win.setFrameUsingName(BentoWindowFrame.name) { win.center() }
         }
         self.window = win
         installContentConstraints(in: win)
@@ -2164,14 +2033,7 @@ final class TerminalSessionWindow: NSWindow {
         super.sendEvent(event)
     }
 
-    /// **Every** Bento window is built here — with a session or without one.
-    ///
-    /// The launcher used to build its own `NSWindow` with its own style mask and
-    /// nothing else, which made it a different kind of window that merely looked
-    /// adjacent: no toolbar, no tab group, no frame autosave. Every one of those
-    /// was a separate visible bug, and they were one bug. A window with no
-    /// session is not a different window; it is this window with nothing in it
-    /// yet, so it is dressed by the same function and only its CONTENT differs.
+    /// **Every** Bento window is built here.
     @MainActor
     static func makeShell() -> TerminalSessionWindow {
         let win = TerminalSessionWindow(
@@ -2204,8 +2066,7 @@ final class TerminalSessionWindow: NSWindow {
 
 /// The one saved frame every Bento window shares, and who currently holds it.
 ///
-/// Frame autosave is per WINDOW NAME, and every Bento window — session or
-/// launcher — wants the same remembered geometry, so they would all fight over
+/// Frame autosave is per WINDOW NAME, and every Bento window wants the same remembered geometry, so they would all fight over
 /// one name. AppKit settles it by refusing: a second live window claiming a
 /// held name silently gets nothing. Whichever window opens into an empty screen
 /// therefore holds the name, and the others ride its tab group's frame.
@@ -2215,20 +2076,11 @@ final class TerminalSessionWindow: NSWindow {
 /// got no name at all — it neither restored the size you left nor recorded the
 /// one you set. Ownership is released on close now, so the next window into an
 /// empty screen picks it up again.
-///
-/// It lives outside `TerminalWindowManager` because the manager is not the only
-/// thing that opens a Bento window: the launcher does too, and the launcher
-/// having no way to RECORD a frame is exactly why resizing it used to be
-/// thrown away. Claiming is idempotent for the current owner, which is what
-/// makes filling a launcher in place a no-op here rather than a handover — the
-/// name never passes through an unowned moment.
 @MainActor
 enum BentoWindowFrame {
     nonisolated static let name = "BentoMainTerminalWindow"
 
     private static weak var owner: NSWindow?
-
-    static func owns(_ win: NSWindow) -> Bool { owner === win }
 
     /// Give `win` the autosave name if nobody holds it. Returns whether `win`
     /// holds it afterwards.

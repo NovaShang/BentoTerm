@@ -24,7 +24,7 @@ enum TmuxCLI {
 
     /// Sessions on this machine's server, most recently active first — "what
     /// I'm currently working on" sits at the top. Empty when tmux is missing or
-    /// no server is running; the launcher has its own words for both.
+    /// no server is running.
     static func listSessions() async -> [TmuxSessionListing.Session] {
         guard let tmux = locate(),
               let result = try? await runCapture(tmux, TmuxSessionListing.arguments),

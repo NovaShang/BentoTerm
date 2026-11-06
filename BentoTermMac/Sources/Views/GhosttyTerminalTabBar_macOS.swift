@@ -23,9 +23,6 @@ import AppKit
 /// gear spent a toolbar slot on it.
 @MainActor
 final class TerminalToolbarController: NSObject, NSToolbarDelegate {
-    /// New ⌄ → New Session…: the launcher, where every kind of session
-    /// (agent, empty, plain shell, ssh host, a remembered launch) is offered.
-    var onNewSession: (() -> Void)?
     var onRenameSession: (() -> Void)?
     var onDetach: (() -> Void)?
     var onKillSession: (() -> Void)?
@@ -59,41 +56,17 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// The active tab is a plain (no-tmux) terminal — its menu is just "Close".
     var activeTabIsPlain = false
 
-    /// False on a launcher window: this toolbar's window has no session YET.
-    ///
-    /// These items used to be DISABLED rather than removed, to keep every slot
-    /// filled so that answering the launcher's question didn't shift the
-    /// remaining controls sideways. That was reversed deliberately (user
-    /// decision): the toolbar now shows only what the window can actually do, so
-    /// the launcher does move its controls when a session arrives. A greyed
-    /// control still has to be read and dismissed, and there were three of them
-    /// on a screen whose whole job is to ask one question.
-    var hasSession = true {
-        didSet {
-            guard hasSession != oldValue else { return }
-            centerShowsTabs = hasSession
-            applySessionAvailability()
-        }
-    }
-
     /// Where the active tab's session runs (`TerminalViewModel.launchHost`):
     /// nil = this Mac. The "+" menu's Recent Agents rows come from here, so a
     /// tab on a remote tmux offers what was launched THERE. Set by the window
     /// whenever it rebinds the toolbar to a tab.
     var launchHost: String?
 
-    private func applySessionAvailability() {
-        syncToolbarItems()
-        setMenuText(sessionsButton, sessionsText)
-        applyActionSegments()
-    }
-
     /// Which items belong in the toolbar right now.
     ///
-    /// - **Sessions** names the active session and lists the others: nothing to
-    ///   name without one, and the launcher page below already IS that list.
-    /// - **Parallel|Focus** reshapes a tmux session — meaningless on a launcher,
-    ///   and on a plain terminal there are no panes to arrange.
+    /// - **Sessions** names the active session and lists the others.
+    /// - **Parallel|Focus** reshapes a tmux session — on a plain terminal there
+    ///   are no panes to arrange.
     /// - **Preview** shows the focused pane's folder, so it needs a pane. A
     ///   PLAIN terminal keeps it: it has a real working directory (the shell's
     ///   OSC 7 report), which is exactly what the dock browses.
@@ -104,10 +77,10 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// is already shared with the location by `setCenterShowsTabs`.
     private func syncToolbarItems() {
         guard let tb = toolbarRef else { return }
-        setItem(Self.sessionsID, visible: hasSession, insertAt: 0)
+        setItem(Self.sessionsID, visible: true, insertAt: 0)
         let afterSessions = tb.items.firstIndex { $0.itemIdentifier == Self.sessionsID }
             .map { $0 + 1 } ?? 0
-        setItem(Self.modeID, visible: hasSession && wantsModeItem, insertAt: afterSessions)
+        setItem(Self.modeID, visible: wantsModeItem, insertAt: afterSessions)
         // The take-over banner rides in the toolbar rather than in a strip above
         // the panes, and that is deliberate: a strip would shrink the terminal,
         // which is the very grid the banner is comparing — it would keep
@@ -115,7 +88,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // already there, so it perturbs nothing.
         let afterMode = tb.items.firstIndex { $0.itemIdentifier == Self.modeID }
             .map { $0 + 1 } ?? afterSessions
-        setItem(Self.sizeID, visible: hasSession && sizeMismatch != nil, insertAt: afterMode)
+        setItem(Self.sizeID, visible: sizeMismatch != nil, insertAt: afterMode)
     }
 
     /// Add or remove the toolbar ITEM — not just its view.
@@ -228,7 +201,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     /// The centre at rest: where the focused pane is (`claude · ~/proj`), as
     /// quiet status text. Not a control — it says where you are and does
-    /// nothing when clicked. Empty on a launcher, which has no pane to name.
+    /// nothing when clicked.
     ///
     /// A borderless button with no action, because that is what renders as
     /// plain text in a macOS 26 toolbar: a BORDERED button there is drawn in
@@ -683,7 +656,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // Pin the session strip to the WINDOW's center, independent of the side
         // items' widths — so the session-name button can size to its text without
         // ever nudging the tabs (the native alternative to hardcoding widths).
-        tb.centeredItemIdentifiers = [hasSession ? Self.centerID : Self.locationID]
+        tb.centeredItemIdentifiers = [Self.centerID]
         toolbarRef = tb
         // State decided before the toolbar existed still has to land.
         syncToolbarItems()
@@ -758,13 +731,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // ◧ | Sessions ⌄ | Tiled|List | ⸺flex⸺ | [session tabs] | ⸺flex⸺ | ＋│▤
-        //
-        // Same slots with no session — only the centre differs, and only
-        // because a window strip with no windows in it is not a control that
-        // can be disabled. The (empty) location takes the centre there, which
-        // is where a one-window session puts it too.
-        [Self.sessionsID, Self.modeID, .flexibleSpace,
-         hasSession ? Self.centerID : Self.locationID,
+        [Self.sessionsID, Self.modeID, .flexibleSpace, Self.centerID,
          .flexibleSpace, Self.newID]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -776,10 +743,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         toolbarDefaultItemIdentifiers(toolbar) + [Self.locationID, Self.sizeID]
     }
 
-    /// Segment 0 is always New; segment 1 (only with a session — a launcher
-    /// has no panes to preview from) toggles the preview dock.
+    /// Segment 0 is New; segment 1 toggles the preview dock.
     private func applyActionSegments() {
-        let count = hasSession ? 2 : 1
+        let count = 2
         if actionsControl.segmentCount != count { actionsControl.segmentCount = count }
         actionsControl.setImage(NSImage(systemSymbolName: "plus", accessibilityDescription: "New"),
                                 forSegment: 0)
@@ -917,38 +883,24 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         }
     }
 
-    /// The quick creates, by tmux level: a session (via the launcher), a
-    /// window, a pane, and the agents you already had open.
-    ///
-    /// The kinds of SESSION — agent, empty, a shell without tmux, an ssh host —
-    /// live on the launcher page and nowhere else. This menu used to repeat all
-    /// of them plus two "…at a Path…" rows, which made it the longest menu in
-    /// the app for the rarest choices. Picking a folder and command stays where
-    /// it's in context: the pane menu (splits) and the Focus sidebar (windows).
+    /// The quick creates, by tmux level: a session, a window, a pane, and the
+    /// agents you already had open.
     ///
     /// The level is spelled out in each title ("New tmux Window", "Split
     /// Pane"): a bare "Window" reads as a Mac window everywhere else in the OS.
     @objc private func newTapped() {
         let menu = NSMenu()
 
-        // One row for every kind of session: the launcher already lists them
-        // (agent, empty, plain shell, ssh hosts, remembered launches), so
-        // repeating them here was a second, longer copy of that page.
         menu.addItem(plainItem(
-            symbol: "plus.rectangle", title: "New Session…",
-            tip: "Choose what to open: an agent, an empty session, a shell or an ssh host.",
+            symbol: "plus.rectangle", title: "New Session",
+            tip: "A new tmux session in a window of its own.",
             action: #selector(newSessionAction)))
 
-        // The window and pane levels need a session to create INSIDE. On a
-        // launcher there isn't one, and these are dropped rather than disabled:
-        // a menu is opened, read and closed, so its width and its rows are not
-        // geometry anyone is relying on staying put — unlike the toolbar behind
-        // it, where four greyed rows would just be a longer list to read past.
         // Rows from the shared catalog (PaneMenuLayout.macNewMenuSessionRows).
         // Creation goes through the responder chain, the same route the menu
         // bar and the pane menu use, so it lands on the pane host of whichever
         // tab is active.
-        for row in PaneMenuLayout.macNewMenuSessionRows(hasSession: hasSession) {
+        for row in PaneMenuLayout.macNewMenuSessionRows(hasSession: !activeTabIsPlain) {
             switch row {
             case .command(let command):
                 menu.addItem(plainItem(
@@ -1011,7 +963,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     // MARK: - Actions
 
-    @objc private func newSessionAction() { onNewSession?() }
+    @objc private func newSessionAction() { BentoTerminalWindow.newSessionWindow() }
     @objc private func closeTabAction() { onCloseTab?() }
     /// A catalog row from the New menu, dispatched through the responder chain
     /// to the active tab's pane host.

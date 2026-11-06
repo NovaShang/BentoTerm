@@ -1,14 +1,14 @@
 import Foundation
 import BentoSessionKit
 
-/// "Things you can open" — the vocabulary behind every launcher surface.
+/// "Things you can open" — the vocabulary behind the open/create surfaces.
 ///
 /// Several surfaces want the same answer to "what can I open right now?": the
-/// launcher page, the Dock icon's menu, and App Intents / Shortcuts. They can't
+/// Dock icon's menu, and App Intents / Shortcuts. They can't
 /// share a SwiftUI row, an `NSMenu`, or an `AppEntity` — so what they share is
 /// this: plain data with a stable identity. `OpenTarget` carries no SwiftUI and
 /// no closures, so an `NSMenuItem` or an `AppEntity` can be built from it just
-/// as easily as a launcher row. The provider that composes these targets and
+/// as easily as a SwiftUI row. The provider that composes these targets and
 /// performs them stays app-side (`OpenTargetProvider` on Mac) because acting on
 /// a target means calling the app's own window API.
 ///
@@ -131,7 +131,7 @@ public struct LocalWindowInfo: Equatable, Sendable, Identifiable {
 /// What the local `tmux ls` poll knows about a session beyond its name.
 ///
 /// A bare session name answers "what is it called" and nothing else, and the
-/// launcher's whole job is to help you pick between several of them — "2
+/// session menus help you pick between several of them — "2
 /// windows · 5 minutes ago" is what turns a name into a place. The poll that
 /// feeds the session list already runs `list-windows` per session for the
 /// toolbar, so this costs no extra tmux round trips; it is only the numbers
@@ -159,7 +159,7 @@ public struct LocalSessionInfo: Equatable, Sendable {
         self.windows = windows
     }
 
-    /// "2 windows · 5 minutes ago" — the one phrasing every launcher surface
+    /// "2 windows · 5 minutes ago" — the one phrasing every menu
     /// uses. tmux's own noun ("window"), and a relative time because the
     /// question is always "how stale is this", never "what o'clock was it".
     public func subtitle(now: Date = Date()) -> String? {
@@ -175,7 +175,7 @@ public struct LocalSessionInfo: Equatable, Sendable {
 
     /// Deliberately hand-rolled and coarse. `RelativeDateTimeFormatter` would
     /// say "in 0 seconds" for a session touched a moment ago (the poll's clock
-    /// and tmux's can disagree by a hair), and the launcher is read at a
+    /// and tmux's can disagree by a hair), and a menu is read at a
     /// glance: minute buckets are all the precision the decision needs.
     public static func relative(_ date: Date, now: Date) -> String {
         let seconds = Int(now.timeIntervalSince(date))
@@ -190,7 +190,7 @@ public struct LocalSessionInfo: Equatable, Sendable {
 
 // MARK: - The target model
 
-/// One openable thing. `id` is stable across rebuilds so a menu, a launcher row,
+/// One openable thing. `id` is stable across rebuilds so a menu, a row,
 /// and an App Intent entity can all key off the same string.
 public struct OpenTarget: Identifiable, Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
@@ -234,8 +234,8 @@ public struct OpenTarget: Identifiable, Equatable, Sendable {
 ///
 /// There are exactly three ways to get a terminal that did not exist a moment
 /// ago, and several places offer them. Until now each place spelled them its
-/// own way — the toolbar said "New Session with Agent…" while the launcher's
-/// footer said "New Agent Session…", and the Shell menu called a blank tmux
+/// own way — the toolbar said "New Session with Agent…" while another
+/// surface said "New Agent Session…", and the Shell menu called a blank tmux
 /// session plain "New Session" while the toolbar called it "New Empty Session".
 /// One concept with two names is two concepts to the reader. So the words live
 /// here, once, and the surfaces render them. (iOS's host-sessions sheet was
@@ -268,9 +268,8 @@ public enum LaunchAction: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// The one-line explanation. It is the toolbar menu's tooltip text and the
-    /// launcher row's subtitle — the same sentence, because the difference
-    /// between these three is exactly what a new user needs told.
+    /// The one-line explanation, used as tooltip text — the difference between
+    /// these three is exactly what a new user needs told.
     public var detail: String {
         switch self {
         case .plainTerminal:
@@ -289,17 +288,9 @@ public enum LaunchAction: String, CaseIterable, Identifiable, Sendable {
         case .emptySession:  return "plus.rectangle"
         }
     }
-
-    /// Whether performing this INTO a launcher window uses that window up.
-    ///
-    /// False for the agent path only, and not as an implementation detail: the
-    /// wizard is a separate window that can be cancelled, so the question the
-    /// launcher is asking has not been answered yet and its window must still
-    /// be there if you back out.
-    public var consumesShell: Bool { self != .agentSession }
 }
 
-/// `~`-abbreviate a path for display. Shared so every launcher surface shortens
+/// `~`-abbreviate a path for display. Shared so every menu shortens
 /// the same way.
 public func tildeAbbreviated(_ path: String) -> String {
     let home = NSHomeDirectory()

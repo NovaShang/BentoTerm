@@ -1,10 +1,10 @@
 import Foundation
 import BentoUISharedKit
 
-/// "Things you can open" — the one list behind every launcher surface.
+/// "Things you can open" — the list behind the Dock menu.
 ///
 /// Several surfaces want the same answer to "what can I open right now?": the
-/// launcher page, the Dock icon's menu, and App Intents / Shortcuts. They
+/// Dock icon's menu and App Intents / Shortcuts. They
 /// can't share a SwiftUI row, an `NSMenu`, or an `AppEntity` — so what
 /// they share is this: plain data with a stable identity, plus one place that
 /// knows how to act on it. The data types (`OpenTarget`, `LaunchAction`,
@@ -97,12 +97,9 @@ public final class OpenTargetProvider {
 
     /// WHAT opening a target means, with no opinion about WHERE it lands.
     ///
-    /// Two surfaces open targets into two different places — the Dock menu
-    /// through `focusOrOpen` (a session switches the front
-    /// window; the rest get a window of their own), the launcher into the
-    /// window it is already occupying — and the one thing they must never disagree about is
-    /// what a row does. So the decision is made once, here, and the
-    /// destination is chosen by the caller.
+    /// The decision is made once, here; `open` picks the destination
+    /// (`focusOrOpen`: a session switches the front window, the rest get a
+    /// window of their own).
     enum Route {
         /// Attach (or create) a session on the LOCAL server.
         case localSession(String)
@@ -126,8 +123,8 @@ public final class OpenTargetProvider {
             // and every `TmuxCLI` call site ran against the local server — no
             // longer holds: keys are `TmuxSessionID`s now and the local-only
             // operations take a `LocalTmuxSessionName` that a remote session
-            // cannot produce. The launcher's host row now carries the second
-            // action (`tmux`) beside this one; see `LauncherView`.
+            // cannot produce. The remote-tmux route lives in the ＋ menu's SSH
+            // submenu beside the plain shell.
             return .sshShell(alias: alias)
 
         case .recentLaunch(let record):
@@ -158,9 +155,7 @@ public final class OpenTargetProvider {
 
     /// Perform a creation verb in a window of its own (Dock menu, Shortcuts).
     ///
-    /// Here rather than in each surface for the same reason `open` is here: the
-    /// Dock menu and the launcher must not be able to disagree about what "New
-    /// Empty Session" builds, only about where it lands.
+    /// Here rather than in each surface for the same reason `open` is here.
     public func perform(_ action: LaunchAction) {
         switch action {
         case .plainTerminal:
@@ -172,39 +167,5 @@ public final class OpenTargetProvider {
         }
     }
 
-    /// The same verb, into the launcher's own window. Returns false when the
-    /// shell was not consumed — see `LaunchAction.consumesShell`.
-    @discardableResult
-    func perform(_ action: LaunchAction, into shell: TerminalSessionWindow) -> Bool {
-        switch action {
-        case .plainTerminal:
-            BentoTerminalWindow.fill(shell, plainTitle: "Terminal")
-            return true
-        case .agentSession:
-            BentoTerminalWindow.onNewAgentSession?()
-            return false
-        case .emptySession:
-            return BentoTerminalWindow.fill(shell, localSession: BentoTerminalWindow.nextSessionName())
-        }
-    }
-
-    /// Do the same thing, but INTO `shell` — a window that is currently showing
-    /// the launcher and has no session yet. Returns false when the shell was
-    /// not consumed (the session was already open elsewhere and got fronted
-    /// instead), which is the caller's cue to close the launcher window itself.
-    @discardableResult
-    func open(_ target: OpenTarget, into shell: TerminalSessionWindow) -> Bool {
-        switch route(for: target) {
-        case .localSession(let name):
-            return BentoTerminalWindow.fill(shell, localSession: name)
-        case .sshShell(let alias):
-            BentoTerminalWindow.fill(shell, plainTitle: alias, command: ["ssh", alias])
-            return true
-        case .agent(let spec):
-            return BentoTerminalWindow.fill(shell, agent: spec)
-        case nil:
-            return false
-        }
-    }
 }
 #endif
