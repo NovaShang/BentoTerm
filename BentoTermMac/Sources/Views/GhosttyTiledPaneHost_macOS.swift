@@ -101,6 +101,16 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateActiveBorders() }
             .store(in: &cancellables)
+        // A second pane or window brings the title bars back; closing down to
+        // one takes them away. The pane list alone can't say that — Focus has
+        // one pane per window — so re-tile when the session's shape changes.
+        viewModel.$sessionPanes.map(\.count)
+            .combineLatest(viewModel.$windows.map(\.count))
+            .map { SessionChrome.isSinglePane(paneCount: $0, windowCount: $1) }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.needsLayout = true }
+            .store(in: &cancellables)
         viewModel.$zoomedPaneID
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -862,9 +872,13 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // the only extra height; all the others reuse divider rows.
         // Focus mode: the sidebar already carries the name + state — a title
         // bar on the single pane would be the same chrome twice, so the
-        // terminal owns the full area.
-        let focusMode = viewModel.sessionMode == .list
-        let titleBar = focusMode ? 0 : (ppc?.height ?? Self.fallbackTitleBarHeight)
+        // terminal owns the full area. Likewise a session that is ONE pane in
+        // total (`SessionChrome`): there is nothing to tell apart, so it looks
+        // like a plain terminal; its agent state stays on the pane's wash.
+        // Either way the one visible pane drives tmux from its own surface grid
+        // (`isSingleOrZoom`), so dropping the row reaches tmux as a resize.
+        let showsTitles = viewModel.sessionMode != .list && !viewModel.isSinglePaneSession
+        let titleBar = showsTitles ? (ppc?.height ?? Self.fallbackTitleBarHeight) : 0
 
         // Push each pane's tmux mouse-reporting mode + the title-bar height onto its
         // surface/cell. (tmux -CC never streams the mouse-enable, so the flag is the

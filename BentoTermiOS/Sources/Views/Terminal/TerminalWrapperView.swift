@@ -430,7 +430,7 @@ struct TerminalWrapperView: View {
                     }
                 }
                 ToolbarItem(placement: .principal) {
-                    if viewModel.isTmuxReady { modeToggle }
+                    if showsModeSwitch { modeToggle }
                 }
             } else {
                 // A phone's bar has one usable slot. While the canvas is
@@ -701,6 +701,14 @@ struct TerminalWrapperView: View {
         }
     }
 
+    /// Parallel/Focus is offered once there is something to arrange: a second
+    /// pane or a second window (`SessionChrome`). A one-pane session is a plain
+    /// terminal, and a switch that changes nothing on screen is only noise.
+    private var showsModeSwitch: Bool {
+        viewModel.isTmuxReady && SessionChrome.showsModeSwitch(
+            paneCount: viewModel.sessionPanes.count, windowCount: viewModel.windows.count)
+    }
+
     /// The mode switch itself (a structure transformation shared by every
     /// attached device, not a view preference). The one confirmation:
     /// flattening a mixed external structure into List.
@@ -780,7 +788,7 @@ struct TerminalWrapperView: View {
                 // so the layout choice lives here instead (see modeSection).
                 // Fullscreen shows it everywhere (the iPad bar's toggle is
                 // floating then, and there is no bar to host the switch).
-                if !isRegularWidth || isFullscreen { modeSection }
+                if showsModeSwitch, !isRegularWidth || isFullscreen { modeSection }
                 layoutSection
                 releaseSizeButton
             }

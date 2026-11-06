@@ -55,10 +55,19 @@ extension TerminalViewModel {
             // top-bar session switcher). Adopt the new name and re-sync windows
             // and panes — the new session has different pane IDs, so the surfaces
             // must be rebuilt from the fresh list.
+            let switched = name != activeTmuxSessionName
             activeTmuxSessionName = name
             // Sizing is a per-session policy on the server — re-adopt it, or
             // sizingMode/owner still describe the previous session.
             restoreSizingMode(for: name)
+            // So is the remembered Parallel/Focus choice (`@bento_mode`). The
+            // read is a one-shot latch, so without this the session switched
+            // to inherits the previous one's answer — a fresh 1×1 session
+            // would come up in Focus because the last one was.
+            if switched {
+                modePreferenceLoaded = false
+                savedModePreference = nil
+            }
             Task {
                 await refreshWindows()
                 await refreshPanes()
