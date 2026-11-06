@@ -168,8 +168,8 @@ private struct CloseConfirmation: ViewModifier {
     }
 }
 
-/// A window's context menu, for a sidebar row (`.vertical`: Rename, Move
-/// Up/Down) or a phone tab (`.horizontal`: Move Left/Right with arrows).
+/// A window's context menu, for a sidebar row (`.vertical`: Rename) or a
+/// phone tab (`.horizontal`: Move Left/Right with arrows).
 /// Every follow-up dialog goes through `state`.
 @MainActor
 public struct WindowContextMenu: View {
@@ -196,11 +196,13 @@ public struct WindowContextMenu: View {
                 state.requestRename(window, current: viewModel.windowBodyName(window))
             }
         }
-        // The drag's one-step equivalent — the reachable-without-a-drag path
-        // (VoiceOver, Switch Control, one hand on a long strip, a trackpad the
-        // user would rather not fight), and on macOS the same pair ⌥⌘↑/↓ fires.
-        shiftButton(earlier: true)
-        shiftButton(earlier: false)
+        // The drag's one-step equivalent on a phone tab strip, where a long
+        // drag along a scrolling row is the hard way. A sidebar row reorders
+        // by drag (and ⌥⌘↑/↓ on the Mac), so it doesn't spend two rows on it.
+        if axis == .horizontal {
+            shiftButton(earlier: true)
+            shiftButton(earlier: false)
+        }
         WindowMoveToSessionMenu(viewModel: viewModel) { session in
             state.moveWindow(window, to: session, in: viewModel)
         } onNewSession: {
@@ -224,13 +226,8 @@ public struct WindowContextMenu: View {
         Button {
             Task { await viewModel.shiftWindow(window, earlier: earlier) }
         } label: {
-            switch axis {
-            case .vertical:
-                Text(earlier ? "Move Up" : "Move Down")
-            case .horizontal:
-                Label(earlier ? "Move Left" : "Move Right",
-                      systemImage: earlier ? "arrow.left" : "arrow.right")
-            }
+            Label(earlier ? "Move Left" : "Move Right",
+                  systemImage: earlier ? "arrow.left" : "arrow.right")
         }
         .disabled(!enabled)
     }

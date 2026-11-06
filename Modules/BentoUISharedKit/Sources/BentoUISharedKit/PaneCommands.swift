@@ -24,8 +24,6 @@ public enum PaneCommand: String, CaseIterable, Sendable {
     case splitDuplicate
     case splitPathCommand
     case zoom
-    case swapUp
-    case swapDown
     case exitCopyMode
     case closePane
     case nextPane
@@ -70,8 +68,6 @@ public enum PaneCommand: String, CaseIterable, Sendable {
             case .iosPaneMenu, .iosOverflowMenu: return zoomed ? "Restore" : "Maximize"
             default: return zoomed ? "Unzoom" : "Zoom"
             }
-        case .swapUp: return "Swap Up"
-        case .swapDown: return "Swap Down"
         case .exitCopyMode: return "Exit tmux copy-mode"
         case .closePane: return "Close Pane"
         case .nextPane: return "Select Next Pane"
@@ -92,8 +88,6 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case .zoom:
             if surface == .macPalette { return "arrow.up.left.and.arrow.down.right" }
             return zoomed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
-        case .swapUp: return "arrow.up.square"
-        case .swapDown: return "arrow.down.square"
         case .exitCopyMode: return "arrow.uturn.backward"
         case .closePane: return surface == .macPalette ? "xmark.square" : "xmark"
         case .nextPane: return "arrow.right.square"
@@ -195,8 +189,10 @@ public enum PaneMenuLayout {
                      .recentAgents,
                      .separator, .layouts, .separator]
         }
+        // No Swap Up/Down rows: ⌥⌘↑/↓ and dragging the title bar reorder
+        // panes, and two rows for a one-step nudge was the menu's longest
+        // stretch of things nobody reached for.
         rows += [.command(.zoom), .separator,
-                 .command(.swapUp), .command(.swapDown), .separator,
                  .moveToSession, .separator,
                  .command(.closePane)]
         return rows

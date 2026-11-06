@@ -28,13 +28,13 @@ struct PaneCommandsTests {
             "Split Right (-h)", "Split Down (-v)", "—",
             "Split — Duplicate Current", "Split — Path & Command…", "[recents]",
             "—", "[layouts]", "—",
-            "Zoom", "—", "Swap Up", "Swap Down", "—", "[move]", "—", "Close Pane",
+            "Zoom", "—", "[move]", "—", "Close Pane",
         ])
     }
 
     @Test func macPaneMenuInFocusHasNoSplits() {
         #expect(titles(PaneMenuLayout.macPaneMenu(focus), .macPaneMenu, zoomed: true) == [
-            "Unzoom", "—", "Swap Up", "Swap Down", "—", "[move]", "—", "Close Pane",
+            "Unzoom", "—", "[move]", "—", "Close Pane",
         ])
     }
 

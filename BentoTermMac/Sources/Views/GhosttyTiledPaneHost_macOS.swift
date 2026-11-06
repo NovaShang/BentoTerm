@@ -658,8 +658,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         case .splitDuplicate: return BentoPaneAction.splitDuplicate
         case .splitPathCommand: return BentoPaneAction.splitPathCommand
         case .zoom: return BentoPaneAction.toggleZoom
-        case .swapUp: return BentoPaneAction.swapPaneUp
-        case .swapDown: return BentoPaneAction.swapPaneDown
         case .closePane: return BentoPaneAction.closePane
         case .nextPane: return BentoPaneAction.nextPane
         case .previousPane: return BentoPaneAction.previousPane
