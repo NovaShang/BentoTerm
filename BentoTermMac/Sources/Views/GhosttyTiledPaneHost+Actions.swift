@@ -42,29 +42,8 @@ extension GhosttyTiledPaneHost {
         Task { [viewModel] in await viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) }
     }
 
-    /// Split seeded from a remembered agent launch — the menu item carries the
-    /// record. This is the middle ground the split menu was missing: inheriting
-    /// the current pane is one extreme, typing a folder and a command into a
-    /// dialog is the other, and "the claude I had open in that repo yesterday"
-    /// is what you actually want most mornings.
-    @objc func splitRecentLaunch(_ sender: Any?) {
-        guard splitsAllowed,
-              let record = (sender as? NSMenuItem)?.representedObject as? LaunchRecord
-        else { return }
-        splitRecent(record)
-    }
-
-    /// Same split, without a menu item in hand.
-    func splitRecent(_ record: LaunchRecord) {
-        guard splitsAllowed else { return }
-        Task { [viewModel] in
-            await viewModel.splitPane(horizontal: true,
-                                      seed: .custom(path: record.dir, command: record.command))
-        }
-    }
-
     /// Split seeded with an explicit directory and command — the dialog itself
-    /// is a native directory chooser (with a command popup baked in), seeded at
+    /// is a native directory chooser (with a command field baked in), seeded at
     /// the active pane's cwd. Same picker as List's New Window.
     @objc func splitWithPathCommand(_ sender: Any?) {
         guard splitsAllowed else { return }
@@ -253,7 +232,6 @@ public enum BentoPaneAction {
     public static let newTmuxWindow = #selector(GhosttyTiledPaneHost.newTmuxWindow(_:))
     public static let splitDuplicate = #selector(GhosttyTiledPaneHost.splitDuplicateCurrent(_:))
     public static let splitPathCommand = #selector(GhosttyTiledPaneHost.splitWithPathCommand(_:))
-    public static let splitRecent = #selector(GhosttyTiledPaneHost.splitRecentLaunch(_:))
     public static let findInPane = #selector(GhosttyTiledPaneHost.findInPane(_:))
     public static let findNext = #selector(GhosttyTiledPaneHost.findNextMatch(_:))
     public static let findPrevious = #selector(GhosttyTiledPaneHost.findPreviousMatch(_:))

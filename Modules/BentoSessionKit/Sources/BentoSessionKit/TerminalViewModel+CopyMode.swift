@@ -34,11 +34,7 @@ extension TerminalViewModel {
     ///
     /// Note it does NOT go through `resolveSeed`: tmux's own `split-window`
     /// default (`-c '#{pane_current_path}'`, no command) is already what this
-    /// wants, so there is nothing to resolve before sending it. That is also
-    /// why recents stayed empty on the split path even though `resolveSeed`
-    /// records — `.duplicateCurrent` is only reached from the *Duplicate*
-    /// menu item, not from the split every user actually presses. So ask for
-    /// the directory here, purely to remember it.
+    /// wants, so there is nothing to resolve before sending it.
     ///
     /// Fire-and-forget, no seed — the seeded variant (`splitPane(horizontal:seed:)`,
     /// in Structure.swift) awaits and resolves a seed; pick by whether you need one.
@@ -49,9 +45,6 @@ extension TerminalViewModel {
         }
         tmuxService.sendFireAndForget(.splitWindow(target: activePaneID, horizontal: horizontal))
         Task {
-            // Before the sleep: the source pane's directory is what we mean,
-            // and after a split the active pane is the NEW one.
-            await recordActivePaneLaunch()
             try? await Task.sleep(for: .milliseconds(500))
             await refreshPanes()
         }

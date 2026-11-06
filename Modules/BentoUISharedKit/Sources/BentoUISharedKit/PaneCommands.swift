@@ -119,13 +119,10 @@ public struct PaneMenuContext: Equatable, Sendable {
 
 /// One row of a pane menu. Commands come from `PaneCommand`; the others are
 /// rows each platform builds itself because what they hold is platform state
-/// (remembered launches, the session list, the clipboard) or a submenu.
+/// (the session list, the clipboard) or a submenu.
 public enum PaneMenuEntry: Equatable, Sendable {
     case command(PaneCommand)
     case separator
-    /// "Recent Agents" header + rows; omitted entirely (with its separator)
-    /// when nothing is remembered — the platform drops it.
-    case recentAgents
     /// tmux's named layouts (a submenu on the Mac).
     case layouts
     /// "Move to Session" submenu, filled lazily at open.
@@ -146,7 +143,6 @@ public enum PaneMenuLayout {
         if c.offersSplits {
             rows += [.command(.splitRight), .command(.splitDown), .separator,
                      .command(.splitDuplicate), .command(.splitPathCommand),
-                     .recentAgents,
                      .separator, .layouts, .separator]
         }
         // No Swap Up/Down rows: ⌥⌘↑/↓ and dragging the title bar reorder
@@ -160,12 +156,12 @@ public enum PaneMenuLayout {
 
     /// Mac ＋ menu rows that need a tmux session to create inside: one more of
     /// what the session is made of (a pane in Parallel, a tmux window in
-    /// Focus — what ⌘N does), then the remembered agents. Dropped on a plain
-    /// terminal rather than disabled. The session-level rows (agent, session,
-    /// plain terminal, SSH) are the Mac's own and follow these.
+    /// Focus — what ⌘N does). Dropped on a plain terminal rather than
+    /// disabled. The session-level rows (session, plain terminal, SSH) are
+    /// the Mac's own and follow these.
     public static func macNewMenuSessionRows(_ c: PaneMenuContext) -> [PaneMenuEntry] {
         guard c.isTmuxPane else { return [] }
-        return [.command(c.sessionMode == .list ? .newTmuxWindow : .newPane), .recentAgents]
+        return [.command(c.sessionMode == .list ? .newTmuxWindow : .newPane)]
     }
 
     /// iOS pane menu, as its five sections. `find` and `paste` are always

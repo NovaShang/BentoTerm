@@ -1,5 +1,4 @@
 import SwiftUI
-import BentoAgentKit
 
 /// What the app resolved about tmux, for the panel to state as fact.
 ///
@@ -35,24 +34,16 @@ public enum TmuxLearnMore {
     public static let url = URL(string: "https://github.com/tmux/tmux/wiki")!
 }
 
-/// General — which tmux, which agents, and about.
+/// General — which tmux, the default session name, agent hooks, and about.
 ///
 /// Facts, not knobs. There is deliberately no "which tmux" picker: it would be
 /// a knob over a decision with one right answer (`TmuxResolver`: a good enough
 /// system tmux wins, otherwise the bundled copy) — anyone who wants a
-/// different tmux changes their tmux. Nor a default agent: the command box on
-/// the new-session sheet remembers the last one, which covers everything a
-/// default would.
-///
-/// **We don't install agents.** Finding none is not an error state and gets no
-/// warning colour — the user types whatever command they like when they start
-/// a session.
+/// different tmux changes their tmux.
 public struct GeneralPanel<Extra: View>: View {
     private let facts: TmuxFacts?
     private let extra: Extra
 
-    @State private var agents: [DetectedAgent] = []
-    @State private var scanning = true
     /// What the field shows while being edited. Stored only once it is made
     /// addressable (`commitDefaultName`), so a half-typed `foo.` never becomes
     /// the name a launch reaches for.
@@ -107,26 +98,6 @@ public struct GeneralPanel<Extra: View>: View {
             }
 
             Section {
-                if scanning {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text("Looking…").foregroundStyle(.secondary)
-                    }
-                } else if agents.isEmpty {
-                    PanelNote(Self.emptyCopy)
-                } else {
-                    ForEach(agents) { agent in
-                        HStack {
-                            Text(agent.preset.rawValue)
-                            Spacer()
-                            Text(agent.path)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                }
                 // The hooks are config on whichever machine runs the agent, so
                 // the app can't install them; this is where to find them.
                 Link("Hook Setup for Claude Code and Codex", destination: Self.hooksURL)
@@ -137,14 +108,8 @@ public struct GeneralPanel<Extra: View>: View {
             extra
         }
         .bentoPanelForm()
-        // Scanned each time the page opens, which is what a Re-scan button
-        // used to be for.
         .onAppear { defaultNameDraft = Self.storedDefaultName }
         .onDisappear(perform: commitDefaultName)
-        .task {
-            agents = await InstalledAgents.scan()
-            scanning = false
-        }
     }
 
     /// The stored name, as typed (empty = none set, so the prompt shows).
@@ -174,14 +139,6 @@ public struct GeneralPanel<Extra: View>: View {
     }
 
     private static var hooksURL: URL { URL(string: "https://github.com/NovaShang/BentoTerm#agent-hooks")! }
-
-    private static var emptyCopy: LocalizedStringKey {
-        #if os(macOS)
-        return "No known agents found on this Mac. You can still type any command when you start a session."
-        #else
-        return "Agents live on the host you connect to. Whatever you can run there, you can start in a pane."
-        #endif
-    }
 
     private func factsLine(_ facts: TmuxFacts) -> String {
         switch facts.source {

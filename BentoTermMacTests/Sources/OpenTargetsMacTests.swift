@@ -1,7 +1,6 @@
 import Foundation
 import Testing
 import BentoTerm
-import BentoSessionKit
 import BentoUISharedKit
 
 // MARK: - Session naming
@@ -42,19 +41,16 @@ import BentoUISharedKit
     @MainActor private func provider() -> OpenTargetProvider {
         OpenTargetProvider(
             sessions: { ["bento", "session-2"] },
-            sshHosts: { ["box", "gpu"] },
-            launches: { [LaunchRecord(dir: "/Users/x/code/bento", command: "claude"),
-                         LaunchRecord(dir: "/Users/x/notes", command: "")] })
+            sshHosts: { ["box", "gpu"] })
     }
 
-    @Test func composesAllThreeKinds() {
+    @Test func composesBothKinds() {
         let all = provider().allTargets()
-        #expect(all.count == 6)
+        #expect(all.count == 4)
         // Order is what a flat consumer (Dock menu, Shortcuts) should show:
-        // what's running, what you ran recently, where you can reach.
+        // what's running, then where you can reach.
         #expect(all[0].kind == .tmuxSession(name: "bento"))
-        #expect(all[2].kind == .recentLaunch(LaunchRecord(dir: "/Users/x/code/bento", command: "claude")))
-        #expect(all[4].kind == .sshHost(alias: "box"))
+        #expect(all[2].kind == .sshHost(alias: "box"))
     }
 
     @Test func identitiesAreStableAndDistinctAcrossKinds() {
@@ -62,30 +58,8 @@ import BentoUISharedKit
         #expect(Set(ids).count == ids.count)
         #expect(ids.contains("session:bento"))
         #expect(ids.contains("ssh:gpu"))
-        #expect(ids.contains("launch:|/Users/x/code/bento|claude"))
         // Same inputs → same ids, so a menu/entity can key off them.
         #expect(provider().allTargets().map(\.id) == ids)
-    }
-
-    @Test func recentRowsNameTheProgramAndAbbreviateTheDirectory() {
-        let recents = OpenTargetProvider(
-            sessions: { [] }, sshHosts: { [] },
-            launches: { [LaunchRecord(dir: NSHomeDirectory() + "/code/x", command: "claude"),
-                         LaunchRecord(dir: "/tmp", command: "")] }
-        ).recentTargets()
-        #expect(recents[0].title == "claude  ·  ~/code/x")
-        #expect(recents[1].title == "shell  ·  /tmp")
-    }
-
-    /// A target opens a session on the local server, so a row remembered on an
-    /// ssh host is not offered at all — not as a dead row either.
-    @Test func remoteLaunchesAreNotTargets() {
-        let recents = OpenTargetProvider(
-            sessions: { [] }, sshHosts: { [] },
-            launches: { [LaunchRecord(dir: "/srv/repo", command: "claude", host: "build-box"),
-                         LaunchRecord(dir: "/tmp", command: "claude")] }
-        ).recentTargets()
-        #expect(recents.map(\.title) == ["claude  ·  /tmp"])
     }
 
     @Test func targetsCarryNoClosuresOrSwiftUITypes() {

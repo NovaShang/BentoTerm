@@ -336,7 +336,7 @@ public extension TerminalViewModel {
     ///
     /// Program resolution:
     ///  1. `#{pane_start_command}` — the command tmux itself launched the pane
-    ///     with (an Agent-wizard pane, or List's "Path & Command…"). Comes back
+    ///     with (a "Path & Command…" pane). Comes back
     ///     in tmux's own quoting → spliced VERBATIM (`.tmuxSyntax`); re-escaping
     ///     it nests the quotes and the new pane exits at once (see `SpawnCommand`).
     ///  2. Empty — the program was TYPED into a shell, which is the common case
@@ -361,53 +361,17 @@ public extension TerminalViewModel {
     func resolveSeed(_ seed: WindowSeed) async -> (String?, SpawnCommand?) {
         switch seed {
         case .custom(let path, let command):
-            // A creation the user spelled out. Remember it (the policy drops
-            // the uninteresting ones) — this is a chokepoint for BOTH splits
-            // and new windows, on the Mac panel and on iPad's typed form.
-            LaunchRecents.shared.recordLaunchIfUseful(dir: path, command: command, host: launchHost)
             return (blankToNil(path), blankToNil(command).map(SpawnCommand.shell))
         case .duplicateCurrent:
             guard let pane = activePaneID else { return (nil, nil) }
             let path = await displayValue("#{pane_current_path}", pane: pane)
             if let start = await displayValue("#{pane_start_command}", pane: pane) {
                 DIAG("[DUP] resolveSeed src=\(pane) start_command=[\(start)] path=[\(path ?? "nil")]")
-                // Deliberately NOT recorded: `start_command` comes back in
-                // tmux's own quoting and is only safe spliced verbatim, while a
-                // recents row is replayed through shell quoting — round-tripping
-                // it would nest the quotes. Nothing is lost: a pane that HAS a
-                // start command was created by a path that already recorded it.
                 return (path, .tmuxSyntax(start))
             }
             DIAG("[DUP] resolveSeed src=\(pane) start=nil → plain shell path=[\(path ?? "nil")]")
-            // The directory is worth remembering — it is a place the user works.
-            // The foreground program is not: see above, there is no truthful
-            // command to be had from tmux here.
-            LaunchRecents.shared.recordLaunchIfUseful(dir: path, command: nil, host: launchHost)
             return (path, nil)
         }
-    }
-
-    /// Remember where the active pane is working, if it says anything the
-    /// default doesn't (`RecentLaunchPolicy` drops a plain shell in `$HOME`).
-    ///
-    /// Called at the two moments the user COMMITS to working somewhere:
-    /// attaching to a session, and splitting a pane. Deliberately not polled
-    /// off live panes — the list is "places I have worked", and a timer would
-    /// turn it into "where I happen to be sitting", which the Sessions list
-    /// already says.
-    ///
-    /// The DIRECTORY is all it records. It used to store
-    /// `#{pane_current_command}` as the row's program too, which is where
-    /// `palette_recent_launches` got rows like `2.1.234` and `grep`: that value
-    /// is the kernel's accounting name for whatever sat in the foreground at
-    /// that instant (see `resolveSeed`), not a command anyone asked to run, and
-    /// replaying such a row opens a pane that exits at once. A row's program now
-    /// comes only from a launch the user spelled out — the Agent wizard, "Path &
-    /// Command…", the directory panel — and those replay truthfully.
-    internal func recordActivePaneLaunch() async {
-        guard usingTmux, let pane = activePaneID else { return }
-        let dir = await displayValue("#{pane_current_path}", pane: pane)
-        LaunchRecents.shared.recordLaunchIfUseful(dir: dir, command: nil, host: launchHost)
     }
 
     func displayValue(_ format: String, pane: TmuxPaneID) async -> String? {

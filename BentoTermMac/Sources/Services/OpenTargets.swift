@@ -8,7 +8,7 @@ import BentoUISharedKit
 /// can't share a SwiftUI row, an `NSMenu`, or an `AppEntity` — so what
 /// they share is this: plain data with a stable identity, plus one place that
 /// knows how to act on it. The data types (`OpenTarget`, `LaunchAction`,
-/// `LocalSessionInfo`, `TmuxSessionNaming`, `tildeAbbreviated`) now live in
+/// `LocalSessionInfo`, `TmuxSessionNaming`) now live in
 /// BentoUISharedKit so iOS renders the same vocabulary; this file is the
 /// Mac-only half: composing the sources and performing targets through
 /// `BentoTerminalWindow`.
@@ -17,11 +17,10 @@ import BentoUISharedKit
 
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
-import BentoAgentKit
 import BentoSessionKit
 import BentoFoundationKit
 
-/// Composes the three sources into `[OpenTarget]` and performs them.
+/// Composes the two sources into `[OpenTarget]` and performs them.
 ///
 /// **Where the session list comes from.** The live `tmux ls` result is polled
 /// every 5s by the Mac app and pushed *into* core via
@@ -40,16 +39,13 @@ public final class OpenTargetProvider {
 
     private let sessionSource: @MainActor () -> [String]
     private let sshHostSource: @MainActor () -> [String]
-    private let launchSource: @MainActor () -> [LaunchRecord]
     private let sessionInfoSource: @MainActor () -> [String: LocalSessionInfo]
 
     public init(sessions: @escaping @MainActor () -> [String] = { BentoTerminalWindow.serverSessions },
                 sshHosts: @escaping @MainActor () -> [String] = { SSHConfigHosts.hosts() },
-                launches: @escaping @MainActor () -> [LaunchRecord] = { LaunchRecents.shared.launches },
                 sessionInfo: @escaping @MainActor () -> [String: LocalSessionInfo] = { BentoTerminalWindow.serverSessionInfo }) {
         self.sessionSource = sessions
         self.sshHostSource = sshHosts
-        self.launchSource = launches
         self.sessionInfoSource = sessionInfo
     }
 
@@ -73,26 +69,10 @@ public final class OpenTargetProvider {
         }
     }
 
-    public func recentTargets() -> [OpenTarget] {
-        // Local rows only: a target opens a session on the LOCAL server (see
-        // `route`), and a directory remembered on an ssh host names nothing
-        // here. Remote rows are offered by the split menus of a window
-        // attached to that host instead.
-        launchSource().filter { $0.host == nil }.map { record in
-            let program = record.command.isEmpty ? "shell" : record.command
-            let where_ = tildeAbbreviated(record.dir)
-            return OpenTarget(kind: .recentLaunch(record),
-                              title: "\(program)  ·  \(where_)",
-                              subtitle: nil,
-                              systemImage: "clock.arrow.circlepath")
-        }
-    }
-
     /// Everything, in the order a flat consumer (Dock menu, Shortcuts) should
-    /// show it: what's running, then what you ran recently, then where you can
-    /// reach.
+    /// show it: what's running, then where you can reach.
     public func allTargets() -> [OpenTarget] {
-        sessionTargets() + recentTargets() + sshTargets()
+        sessionTargets() + sshTargets()
     }
 
     /// WHAT opening a target means, with no opinion about WHERE it lands.
@@ -105,11 +85,9 @@ public final class OpenTargetProvider {
         case localSession(String)
         /// A plain no-tmux shell running `ssh <alias>`.
         case sshShell(alias: String)
-        /// Build a session for a remembered launch.
-        case agent(AgentSpec)
     }
 
-    func route(for target: OpenTarget) -> Route? {
+    func route(for target: OpenTarget) -> Route {
         switch target.kind {
         case .tmuxSession(let name):
             // `.local` explicitly: every source behind `sessionTargets` is the
@@ -126,20 +104,6 @@ public final class OpenTargetProvider {
             // cannot produce. The remote-tmux route lives in the ＋ menu's SSH
             // submenu beside the plain shell.
             return .sshShell(alias: alias)
-
-        case .recentLaunch(let record):
-            // `recentTargets` never offers a remote row; this is the backstop.
-            guard record.host == nil else { return nil }
-            let name = TmuxSessionNaming.sessionName(
-                forDirectory: record.dir, existing: Set(sessionSource()))
-            // A new tmux SESSION, not a pane in whatever window happens to be
-            // front: a remembered launch is a place you go back to work, and it
-            // shouldn't graft itself onto an unrelated session. The launch line
-            // is `new-session -A`, so a stale session list (the poll runs every
-            // 5s) attaches instead of failing.
-            return .agent(AgentSpec(sessionName: name,
-                                    workingDir: record.dir,
-                                    agentCommand: record.command))
         }
     }
 
@@ -148,8 +112,6 @@ public final class OpenTargetProvider {
         switch route(for: target) {
         case .localSession(let name): BentoTerminalWindow.focusOrOpen(.local(name))
         case .sshShell(let alias):    BentoTerminalWindow.newSSHWindow(host: alias)
-        case .agent(let spec):        BentoTerminalWindow.newWindow(agent: spec)
-        case nil:                     break
         }
     }
 
@@ -160,8 +122,6 @@ public final class OpenTargetProvider {
         switch action {
         case .plainTerminal:
             BentoTerminalWindow.newWindowNoTmux()
-        case .agentSession:
-            BentoTerminalWindow.onNewAgentSession?()
         case .emptySession:
             BentoTerminalWindow.newWindow(session: BentoTerminalWindow.nextSessionName())
         }

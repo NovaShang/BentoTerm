@@ -39,6 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Register the bundled Maple Mono NF CN into CoreText before any
         // surface exists, so libghostty can resolve it by family name.
         registerBundledFonts()
+        // Stores of removed features: recent launches, and the ⌘P palette's
+        // recent files.
+        ["palette_recent_launches", "palette_recent_files"].forEach(UserDefaults.standard.removeObject)
 
         // Links and the ports behind them. Installed before any window exists,
         // so the first clicked link already has somewhere to go.
@@ -68,11 +71,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             MainActor.assumeIsolated { self?.syncSystemAppearance() }
         }
 
-        // Wire the terminal toolbar's app-target action (the New Agent wizard)
-        // into the core window code via its hook.
-        BentoTerminalWindow.onNewAgentSession = {
-            Windows.show(.wizard)
-        }
         // A window changed something about the local server (killed its
         // session) — re-poll now so the strip reflects it immediately instead
         // of up to 5s later. The kill itself happens over that window's own
@@ -85,13 +83,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             await self.refresh()
             self.startPolling()
             // Test hook: open a specific secondary window directly
-            // (BENTO_OPEN_WINDOW=wizard|plain|settings), for
+            // (BENTO_OPEN_WINDOW=plain|settings), for
             // screenshot-driven verification without UI scripting. This one
             // DOES suppress the terminal window — the point of the hook is to
             // get a clean screenshot of exactly one window.
             if let name = ProcessInfo.processInfo.environment["BENTO_OPEN_WINDOW"] {
                 switch name {
-                case "wizard": Windows.show(.wizard)
                 case "plain": BentoTerminalWindow.newWindowNoTmux()
                 case "settings": Self.openSettings()
                 default: break
@@ -136,12 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 }
                 // Test hook: N seconds later, split the frontmost window's
                 // active pane — the ⌘D path, into the same `splitPane` the
-                // menu item calls. Splitting is one of the two moments that
-                // records a recent launch, and the other one (attach) is
-                // already reachable by opening a session; without this the
-                // split half can only be driven by a synthesized ⌘D, which
-                // needs the Accessibility privileges CI and a sandboxed agent
-                // don't have — the same reason BENTO_TEST_AGENT_SESSION exists.
+                // menu item calls. Without this a split can only be driven by
+                // a synthesized ⌘D, which needs the Accessibility privileges CI
+                // and a sandboxed agent don't have.
                 // DEBUG-only for the company it keeps, not for its blast
                 // radius: it can only reach a session named above.
                 // Test hook: "N|name" — N seconds later, pick session `name`
@@ -166,25 +160,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     }
                 }
                 #endif
-                return
-            }
-            // Test hook: create a session exactly the way the Agent wizard does
-            // (BENTO_TEST_AGENT_SESSION="name|dir|command", command optional),
-            // so a CREATION path — and what it records into the recent-launches
-            // list — can be checked end to end. The wizard's own Launch button
-            // needs synthesized keystrokes, which require Accessibility
-            // privileges that CI and a sandboxed agent don't have. Like the hook
-            // above it suppresses the normal restore, so a test run can't attach
-            // to, resize, or otherwise disturb the user's real sessions.
-            if let spec = ProcessInfo.processInfo.environment["BENTO_TEST_AGENT_SESSION"] {
-                let parts = spec.split(separator: "|", omittingEmptySubsequences: false)
-                    .map(String.init)
-                if parts.count >= 2, !parts[0].isEmpty, !parts[1].isEmpty {
-                    BentoTerminalWindow.newWindow(agent: BentoAgentKit.AgentSpec(
-                        sessionName: parts[0],
-                        workingDir: parts[1],
-                        agentCommand: parts.count > 2 ? parts[2] : ""))
-                }
                 return
             }
             // Always open the terminal window on launch — including a launch at

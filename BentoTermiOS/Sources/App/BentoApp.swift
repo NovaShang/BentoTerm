@@ -45,6 +45,9 @@ struct BentoApp: App {
         MailboxWedgeProbe.start()
 #endif
         Self.purgePairingLeftovers()
+        // Stores of removed features: recent launches, and the ⌘P palette's
+        // recent files.
+        ["palette_recent_launches", "palette_recent_files"].forEach(UserDefaults.standard.removeObject)
     }
 
     /// One-shot cleanup for installs that predate the removal of the paired-host

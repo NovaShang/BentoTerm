@@ -11,22 +11,22 @@ import BentoUISharedKit
 /// WindowClosed` is `false`), so the app routinely sits in the Dock with zero
 /// windows, and until now the only way back in was a plain click on the icon,
 /// which reopens whatever happened to be open last. Everything else — another
-/// session, a recent launch, an ssh host — needed a window first, so you had to
+/// session, an ssh host — needed a window first, so you had to
 /// open the wrong thing to get at the right one. Right-click now answers "what
 /// can I open?" directly, with no window in the picture.
 ///
 /// **Nothing here may block.** AppKit asks for this menu synchronously, on the
 /// main thread, in the moment of the right-click; anything slow shows up as a
-/// Dock that doesn't respond. So all three sources are local reads: the session
-/// list is a cached array the 5s poll already filled in, `~/.ssh/config` is one
-/// small file, and the recents come from `UserDefaults`. No `tmux` shell-out,
+/// Dock that doesn't respond. So both sources are local reads: the session
+/// list is a cached array the 5s poll already filled in, and `~/.ssh/config`
+/// is one small file. No `tmux` shell-out,
 /// and specifically no ssh: enumerating sessions on a remote host is a network
 /// round trip that can also stop on a password or 2FA prompt, which is why the
 /// SSH section offers hosts (`ssh <alias>`) rather
 /// than sessions on them.
 ///
-/// Order: the three creation verbs (`LaunchAction.displayOrder`), then
-/// "Sessions", "Recent Launches", "SSH Hosts". The verbs lead because the
+/// Order: the creation verbs (`LaunchAction.displayOrder`), then
+/// "Sessions", "SSH Hosts". The verbs lead because the
 /// commonest thing to want from a standing start is a quick shell to run one command in, and it used to be the
 /// last item in this menu, spelled "New Window", behind however many sessions
 /// and hosts happened to exist.
@@ -37,10 +37,8 @@ enum DockMenu {
     /// is already moving; past roughly half a dozen rows a section stops being
     /// scannable and the toolbar's ＋ and Session menus are the better tools. The numbers differ per section by how fast the tail decays:
     /// sessions are few and all plausible; a `~/.ssh/config` can hold dozens of
-    /// aliases of which a handful are ever opened by hand; and for recents only
-    /// the newest few are ever the one you meant.
+    /// aliases of which a handful are ever opened by hand.
     static let sessionLimit = 6
-    static let recentLimit = 4
     static let sshLimit = 5
 
     /// Build the menu fresh. Called per right-click — there is no cache to
@@ -48,8 +46,8 @@ enum DockMenu {
     static func build(provider: OpenTargetProvider = .shared) -> NSMenu {
         let menu = NSMenu()
 
-        // The verbs, first, always all three — a first run has no sessions, no
-        // recents and possibly no `~/.ssh/config`, and these rows are what stop
+        // The verbs, first, always all of them — a first run has no sessions
+        // and possibly no `~/.ssh/config`, and these rows are what stop
         // the menu rendering as nothing. No section header over them: they are
         // at the top with nothing to be told apart from.
         for action in LaunchAction.displayOrder {
@@ -80,10 +78,6 @@ enum DockMenu {
                 item.state = .on
             }
         }
-
-        addSection(to: menu, title: "Recent Launches",
-                   targets: provider.recentTargets(), limit: recentLimit,
-                   provider: provider)
 
         addSection(to: menu, title: "SSH Hosts",
                    targets: provider.sshTargets(), limit: sshLimit,

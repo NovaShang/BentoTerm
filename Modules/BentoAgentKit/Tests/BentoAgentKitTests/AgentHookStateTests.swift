@@ -33,13 +33,6 @@ final class AgentHookStateTests: XCTestCase {
         }
     }
 
-    func testAgentIDsMapToLaunchablePresets() {
-        XCTAssertEqual(AgentPreset.forAgentID("claude"), .claudeCode)
-        XCTAssertEqual(AgentPreset.forAgentID("claude-code"), .claudeCode)
-        XCTAssertEqual(AgentPreset.forAgentID("codex"), .codex)
-        XCTAssertNil(AgentPreset.forAgentID("something-else"))
-    }
-
     @MainActor
     func testRecentTextStripsEscapesAndKeepsTheTail() {
         let text = PaneRecentText()

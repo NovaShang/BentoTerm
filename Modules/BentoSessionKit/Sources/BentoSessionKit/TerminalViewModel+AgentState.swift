@@ -70,7 +70,6 @@ extension TerminalViewModel {
             if updateSeen(paneVM, from: current, to: newState, isAgent: isAgent) {
                 changed = true
             }
-            await rememberAgentLaunch(pane: paneVM.paneID, agent: isAgent ? paneVM.pane.agent : nil)
             newDone[paneVM.paneID] = paneVM.agentFinishedUnseen
 
             if case .awaitingInput = paneVM.paneState {
@@ -105,9 +104,6 @@ extension TerminalViewModel {
                                        prev: paneDoneUnseen[pane.id] ?? false)
             newDone[pane.id] = done
             if (paneDoneUnseen[pane.id] ?? false) != done { changed = true }
-            // Background windows count too: an agent you left running in
-            // another tmux window is exactly the one you want to start again.
-            await rememberAgentLaunch(pane: pane.id, agent: isAgent ? pane.agent : nil)
         }
         paneStates = newStates
         paneDoneUnseen = newDone
@@ -133,34 +129,6 @@ extension TerminalViewModel {
     static func classifyPane(_ pane: Pane) -> (state: PaneState, isAgent: Bool) {
         AgentHookState.classify(agent: pane.agent, state: pane.agentState,
                                 command: pane.currentCommand)
-    }
-
-    /// Remember "an agent ran here" so it can be started again later — the
-    /// list behind the Recent Agents rows in the split and New menus.
-    ///
-    /// The command comes from the agent id the hook wrote, never from tmux's
-    /// `pane_current_command`. That value is the executed file's name, which on
-    /// a versioned install is a number — `2.1.246` names no program, and rows
-    /// like that are exactly what poisoned this store in builds through 0.3.1
-    /// (see `RecentLaunchPolicy.isReplayableCommand`).
-    ///
-    /// Once per pane per agent: the directory costs a tmux round trip, and the
-    /// poll would otherwise pay it every two seconds for every agent on screen.
-    func rememberAgentLaunch(pane: TmuxPaneID, agent agentID: String?) async {
-        // Filed under `launchHost`: the row is replayed by splitting on the
-        // machine the path lives on, and only offered there.
-        guard usingTmux, let agentID,
-              let command = AgentPreset.forAgentID(agentID)?.launchCommand
-        else { return }
-        let key = "\(pane)|\(agentID)"
-        guard !rememberedAgentLaunches.contains(key) else { return }
-        rememberedAgentLaunches.insert(key)
-        guard let dir = await displayValue("#{pane_current_path}", pane: pane) else {
-            // Nothing to name the row after — let a later poll try again.
-            rememberedAgentLaunches.remove(key)
-            return
-        }
-        LaunchRecents.shared.recordLaunchIfUseful(dir: dir, command: command, host: launchHost)
     }
 
     /// Maintain the "done, unseen" flag. An agent pane that transitions into

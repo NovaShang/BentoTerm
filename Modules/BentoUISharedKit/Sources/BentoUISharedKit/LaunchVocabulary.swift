@@ -1,5 +1,4 @@
 import Foundation
-import BentoSessionKit
 
 /// "Things you can open" — the vocabulary behind the open/create surfaces.
 ///
@@ -12,8 +11,8 @@ import BentoSessionKit
 /// performs them stays app-side (`OpenTargetProvider` on Mac) because acting on
 /// a target means calling the app's own window API.
 ///
-/// Three kinds today: a tmux session on the local server, an SSH host alias
-/// from `~/.ssh/config`, and a recent (directory, command) launch.
+/// Two kinds today: a tmux session on the local server, and an SSH host alias
+/// from `~/.ssh/config`.
 
 // MARK: - tmux session naming
 
@@ -199,12 +198,10 @@ public struct OpenTarget: Identifiable, Equatable, Sendable {
         /// A `Host` alias from `~/.ssh/config`. Opening it runs plain
         /// `ssh <alias>`.
         case sshHost(alias: String)
-        /// A remembered (directory, command) pair.
-        case recentLaunch(LaunchRecord)
     }
 
     public let kind: Kind
-    /// Primary label (session name, host alias, "claude · ~/code/bento-term").
+    /// Primary label (session name, host alias).
     public let title: String
     /// Dimmed secondary line, or nil.
     public let subtitle: String?
@@ -215,7 +212,6 @@ public struct OpenTarget: Identifiable, Equatable, Sendable {
         switch kind {
         case .tmuxSession(let name): return "session:" + name
         case .sshHost(let alias): return "ssh:" + alias
-        case .recentLaunch(let r): return "launch:\(r.host ?? "")|\(r.dir)|\(r.command)"
         }
     }
 
@@ -228,54 +224,44 @@ public struct OpenTarget: Identifiable, Equatable, Sendable {
     }
 }
 
-// MARK: - The three ways to make something new
+// MARK: - The ways to make something new
 
 /// The creation verbs, shared by every surface that offers them.
 ///
-/// There are exactly three ways to get a terminal that did not exist a moment
-/// ago, and several places offer them. Until now each place spelled them its
-/// own way — the toolbar said "New Session with Agent…" while another
-/// surface said "New Agent Session…", and the Shell menu called a blank tmux
-/// session plain "New Session" while the toolbar called it "New Empty Session".
-/// One concept with two names is two concepts to the reader. So the words live
-/// here, once, and the surfaces render them. (iOS's host-sessions sheet was
-/// hand-rolling the same three labels until it adopted this type.)
+/// Several places offer a way to get a terminal that did not exist a moment
+/// ago. Each place used to spell them its own way — the Shell menu called a
+/// blank tmux session plain "New Session" while the toolbar called it "New
+/// Empty Session". One concept with two names is two concepts to the reader.
+/// So the words live here, once, and the surfaces render them.
 ///
 /// **Order is part of the definition.** The quick throwaway shell is first
 /// because it is what the user reaches for most: one command, no session, gone
-/// when it closes. The two tmux creations follow as a pair — same shape, one
-/// word different — because choosing between them is a second, smaller
-/// question than "do I even want tmux here".
+/// when it closes.
 public enum LaunchAction: String, CaseIterable, Identifiable, Sendable {
     /// A raw local pty, no tmux, gone when you close it.
     case plainTerminal
-    /// The agent wizard (name, folder, agent).
-    case agentSession
     /// A blank tmux session, auto-named `session-N`.
     case emptySession
 
     /// Declaration order is not display order — `allCases` would otherwise
-    /// silently decide the layout of four surfaces.
-    public static let displayOrder: [LaunchAction] = [.plainTerminal, .agentSession, .emptySession]
+    /// silently decide the layout of every surface.
+    public static let displayOrder: [LaunchAction] = [.plainTerminal, .emptySession]
 
     public var id: String { "new:" + rawValue }
 
     public var title: String {
         switch self {
         case .plainTerminal: return "New Terminal without tmux"
-        case .agentSession:  return "New Agent Session…"
         case .emptySession:  return "New Empty Session"
         }
     }
 
     /// The one-line explanation, used as tooltip text — the difference between
-    /// these three is exactly what a new user needs told.
+    /// these is exactly what a new user needs told.
     public var detail: String {
         switch self {
         case .plainTerminal:
             return "A quick local shell. Closing it discards it for good."
-        case .agentSession:
-            return "A fresh tmux session running Claude, Codex or another agent."
         case .emptySession:
             return "A blank tmux session on the host. It keeps running after you disconnect."
         }
@@ -284,17 +270,7 @@ public enum LaunchAction: String, CaseIterable, Identifiable, Sendable {
     public var systemImage: String {
         switch self {
         case .plainTerminal: return "terminal"
-        case .agentSession:  return "rectangle.stack"
         case .emptySession:  return "plus.rectangle"
         }
     }
-}
-
-/// `~`-abbreviate a path for display. Shared so every menu shortens
-/// the same way.
-public func tildeAbbreviated(_ path: String) -> String {
-    let home = NSHomeDirectory()
-    if path == home { return "~" }
-    if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
-    return path
 }

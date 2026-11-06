@@ -56,12 +56,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// The active tab is a plain (no-tmux) terminal — its menu is just "Close".
     var activeTabIsPlain = false
 
-    /// Where the active tab's session runs (`TerminalViewModel.launchHost`):
-    /// nil = this Mac. The "+" menu's Recent Agents rows come from here, so a
-    /// tab on a remote tmux offers what was launched THERE. Set by the window
-    /// whenever it rebinds the toolbar to a tab.
-    var launchHost: String?
-
     /// Which items belong in the toolbar right now.
     ///
     /// - **Sessions** names the active session and lists the others.

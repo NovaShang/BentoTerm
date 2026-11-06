@@ -233,11 +233,11 @@ extension TerminalToolbarController {
     }
 
     /// Every way to make something new, in one menu: more of this session
-    /// (a pane or tmux window, an agent), then a new session, a plain shell, or
-    /// a host from `~/.ssh/config`.
+    /// (a pane or tmux window), then a new session, a plain shell, or a host
+    /// from `~/.ssh/config`.
     ///
-    /// Rows that create INSIDE a tmux session (the first row and Recent Agents)
-    /// come from the shared catalog (`PaneMenuLayout.macNewMenuSessionRows`)
+    /// Rows that create INSIDE a tmux session (the first row) come from the
+    /// shared catalog (`PaneMenuLayout.macNewMenuSessionRows`)
     /// and are dropped on a plain terminal rather than disabled. The level is
     /// spelled out in each title ("New tmux Window", "New Session"): a bare
     /// "Window" reads as a Mac window everywhere else in the OS. Key
@@ -257,24 +257,9 @@ extension TerminalToolbarController {
             item.keyEquivalentModifierMask = .command
             menu.addItem(item.keepingImageVisible())
         }
-        menu.addItem(plainItem(symbol: LaunchAction.agentSession.systemImage, title: "New Agent…",
-                               tip: LaunchAction.agentSession.detail,
-                               action: #selector(newAgentAction)).keepingImageVisible())
-        if rows.contains(.recentAgents) {
-            // The agent you already had open in that repo, split in beside this
-            // pane. Dispatched through the responder chain like the other pane
-            // actions, so it lands on the active tab's pane host.
-            let recents = GhosttyTiledPaneHost.recentAgentItems(
-                host: launchHost, target: self, action: #selector(splitRecentAction(_:)))
-            if !recents.isEmpty {
-                let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
-                header.isEnabled = false
-                menu.addItem(header)
-                recents.forEach { menu.addItem($0) }
-            }
-        }
-
-        menu.addItem(.separator())
+        // A plain terminal has no in-session rows, and a menu must not open
+        // on a separator.
+        if !rows.isEmpty { menu.addItem(.separator()) }
         let session = plainItem(symbol: LaunchAction.emptySession.systemImage, title: "New Session",
                                 tip: "A new tmux session in a window of its own.",
                                 action: #selector(newSessionAction))
@@ -320,7 +305,6 @@ extension TerminalToolbarController {
     // MARK: - Actions
 
     @objc private func newPaneOrWindowAction() { BentoTerminalWindow.newPaneOrWindow() }
-    @objc private func newAgentAction() { BentoTerminalWindow.onNewAgentSession?() }
     @objc private func newSessionAction() { BentoTerminalWindow.newSessionWindow() }
     @objc private func newPlainTerminalAction() { BentoTerminalWindow.newWindowNoTmux() }
     @objc private func sshShellAction(_ sender: NSMenuItem) {
@@ -344,11 +328,6 @@ extension TerminalToolbarController {
     @objc private func aboutAction() {
         NSApp.activate(ignoringOtherApps: true)
         NSApp.orderFrontStandardAboutPanel(nil)
-    }
-    /// Forwarded with the menu item as the sender, because the record it
-    /// carries IS the argument.
-    @objc private func splitRecentAction(_ sender: Any?) {
-        BentoPaneAction.dispatch(BentoPaneAction.splitRecent, from: sender)
     }
     @objc private func renameAction() { onRenameSession?() }
     @objc private func detachAction() { onDetach?() }
