@@ -9,7 +9,7 @@ import AppKit
 /// Each item is a stock bordered `NSButton` hosted in an `NSToolbarItem.view`,
 /// so the icon and text sit side by side (a view-less item can only stack the
 /// label below the icon) while macOS still styles the button per OS version
-/// (borderless ≤14, bordered "glass" on 26+).
+/// (bordered "glass").
 ///
 /// Layout (left → right):
 ///   [▢ <session> ⌄] [Parallel│Focus]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋ ▤]
@@ -664,7 +664,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         // options are governed separately and kept showing up on right-click.
         // They are meaningless here — every item is deliberately icon-only, and a
         // toolbar this small has no display mode worth choosing.
-        if #available(macOS 15.0, *) { tb.allowsDisplayModeCustomization = false }
+        tb.allowsDisplayModeCustomization = false
         // Pin the session strip to the WINDOW's center, independent of the side
         // items' widths — so the session-name button can size to its text without
         // ever nudging the tabs (the native alternative to hardcoding widths).
@@ -1046,7 +1046,7 @@ extension NSMenuItem {
     /// text-only, which is the system's default for a reason.
     @discardableResult
     func keepingImageVisible() -> NSMenuItem {
-        if #available(macOS 27.0, *) { preferredImageVisibility = .visible }
+        preferredImageVisibility = .visible
         return self
     }
 }
@@ -1161,9 +1161,7 @@ final class RemoteSessionsMenuFiller: NSObject, NSMenuDelegate {
                 item.image = NSImage(systemSymbolName: session.attached ? "record.circle" : "rectangle.stack",
                                      accessibilityDescription: nil)
                 let windows = session.windows == 1 ? "1 window" : "\(session.windows) windows"
-                if #available(macOS 14.4, *) {
-                    item.subtitle = session.attached ? "\(windows) · attached" : windows
-                }
+                item.subtitle = session.attached ? "\(windows) · attached" : windows
                 menu.addItem(item)
             }
         case .failure(let why):

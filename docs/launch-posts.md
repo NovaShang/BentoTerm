@@ -177,7 +177,7 @@ Parallel, voice, remote — one way of working.
 
 Run a group of agents side by side on one screen. Direct them by talking instead of typing. And because everything lives in real tmux over SSH, the same session follows you from the Mac to iPhone and iPad.
 
-Free & open source (Apache-2.0) · macOS 14+ · iPhone & iPad coming to the App Store
+Free & open source (Apache-2.0) · macOS 27+ · iPhone & iPad coming to the App Store
 Website: https://bentoai.dev/term/
 GitHub: https://github.com/NovaShang/BentoTerm
 ```

@@ -55,11 +55,11 @@ jobs:
   # foreign Mac shows the Gatekeeper warning until D (notarize) lands.
   mac-app:
     needs: resolve-tag
-    # The codebase needs Xcode 26 (macos-15's Xcode 16.x fails to compile
-    # it — that broke the v0.1.0 first attempt). macos-26 ships Xcode 26.x
-    # and reads the objectVersion 77 format xcodegen emits natively, so no
+    # The codebase needs Xcode 27 and targets macOS 27 (an older image's Xcode
+    # fails to compile it — that broke the v0.1.0 first attempt). The Xcode 27
+    # image reads the objectVersion 77 format xcodegen emits natively, so no
     # project-format downgrade is needed either.
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
 

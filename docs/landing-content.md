@@ -267,7 +267,7 @@ Footer
   `tmux` works as it is.
 - **Can I reach a machine behind NAT?** That's yours to arrange — Bento speaks
   plain SSH, so a VPN, Tailscale or a jump host in `~/.ssh/config` all work.
-- **Intel Macs?** Not currently. Apple Silicon, macOS 14+.
+- **Intel Macs?** Not currently. Apple Silicon, macOS 27+.
 - **What does it cost?** Nothing. Apache-2.0, and the app is the whole product.
 - **iOS?** *(上架后：链接 App Store。上架前：一句 "In review." 不做等待名单。)*
 - **Where do I report bugs?** GitHub issues — the tracker is public.
@@ -276,7 +276,7 @@ Footer
 
 > ## Your agents are already running. Go see them.
 >
-> **[Download for Mac]** — Free & open source · macOS 14+ · Apple Silicon
+> **[Download for Mac]** — Free & open source · macOS 27+ · Apple Silicon
 
 ---
 

@@ -1271,7 +1271,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         let killButton = alert.addButton(withTitle: copy.confirm)
         alert.addButton(withTitle: "Cancel")
         killButton.keyEquivalent = ""   // require a deliberate click, not Return
-        if #available(macOS 11.0, *) { killButton.hasDestructiveAction = true }
+        killButton.hasDestructiveAction = true
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }
             self?.performKillSession(tab: tab)

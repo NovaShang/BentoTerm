@@ -29,7 +29,8 @@ jobs:
   # why the two xcodebuild invocations stay together in one job below.
   packages:
     name: packages (swift test)
-    runs-on: macos-26
+    # macOS 27 / Xcode 27 image (Apple Silicon): the app's floor is macOS 27.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
 
@@ -94,10 +95,9 @@ jobs:
 
   apps:
     name: apps (xcodebuild build + test)
-    # The codebase needs Xcode 26. macos-latest still maps to macos-15
-    # (Xcode 16.x), which is why this job was red for weeks — pin the
-    # macos-26 image (Xcode 26.x) explicitly until -latest catches up.
-    runs-on: macos-26
+    # The codebase needs Xcode 27 and targets macOS 27 — pin the macOS 27 /
+    # Xcode 27 image explicitly rather than trusting -latest to have caught up.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
 

@@ -41,7 +41,7 @@
 
 ## 安装
 
-要求：macOS 14+，Apple Silicon。
+要求：macOS 27+，Apple Silicon。
 
 ```sh
 brew install --cask NovaShang/tap/bento-term
