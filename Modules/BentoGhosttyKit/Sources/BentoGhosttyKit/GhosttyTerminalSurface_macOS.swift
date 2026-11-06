@@ -2,7 +2,6 @@
 import BentoFilePreviewKit
 import BentoFoundationKit
 import AppKit
-import Carbon   // TIS* — identifies whether the input source is a plain layout
 import GhosttyKit
 
 /// libghostty-backed terminal surface for macOS. Same external-backend contract
@@ -52,11 +51,11 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// the host can pre-warm the mic engine — overlapping cold-start with the hold
     /// the user is already waiting through, so recording is live by the threshold.
     public var onVoicePrewarm: (() -> Void)?
-    public private(set) var currentSize: TerminalSurfaceSize?
+    public internal(set) var currentSize: TerminalSurfaceSize?
 
-    nonisolated(unsafe) private var surface: ghostty_surface_t?
-    private var theme: TerminalTheme
-    nonisolated(unsafe) private var renderLink: CVDisplayLink?
+    nonisolated(unsafe) var surface: ghostty_surface_t?
+    private(set) var theme: TerminalTheme
+    nonisolated(unsafe) var renderLink: CVDisplayLink?
 
     /// `ghostty_surface_draw` synchronously waits for the GPU
     /// (`MTLCommandBuffer.waitUntilCompleted`). When a frame stalls (Space
@@ -66,7 +65,7 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// enqueues the draw here instead; a stalled frame blocks only this queue,
     /// the UI stays live. `surfaceLock` guards the `surface` pointer across the
     /// render queue (draw + free) and the main thread (create + teardown).
-    private let renderQueue = DispatchQueue(label: "com.novashang.bento.render", qos: .userInteractive)
+    let renderQueue = DispatchQueue(label: "com.novashang.bento.render", qos: .userInteractive)
     /// Output parsing (`ghostty_surface_process_output`) runs here, SEPARATE from
     /// `renderQueue`, so a slow parse (ghostty's periodic `PageList.grow` bzero)
     /// doesn't make draws queue up behind it — they interleave instead, keeping
@@ -75,14 +74,14 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// chained through BOTH queues (`enqueueSurfaceFree`) so it can never run
     /// while a parse or a draw is still touching the surface.
     private let ioQueue = DispatchQueue(label: "com.novashang.bento.io", qos: .userInteractive)
-    private let surfaceLock = NSLock()
+    let surfaceLock = NSLock()
     /// TEMP: pane-id label + one-shot flags for the white-screen-on-switch trace. REMOVE when fixed.
     nonisolated(unsafe) public var debugLabel = "?"
     nonisolated(unsafe) private var diagLoggedFeed = false
-    nonisolated(unsafe) private var diagLoggedDraw = false
+    nonisolated(unsafe) var diagLoggedDraw = false
     /// Coalesce display-link ticks: never queue a second draw while one is still
     /// in flight (a stalled frame would otherwise pile up thousands of draws).
-    nonisolated(unsafe) private var renderInFlight = false
+    nonisolated(unsafe) var renderInFlight = false
     /// Dirty flag: the display link only draws when something changed, instead of
     /// an unconditional 60fps redraw of every surface (which kept the GPU and this
     /// queue busy all day on an idle background app — battery drain). Set true by any
@@ -90,45 +89,45 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// when a draw is scheduled. Starts true so the first frames draw (which also
     /// poll ghostty's grid size to start the pty — see reportSizeIfNeeded).
     /// Guarded by `surfaceLock` since `setNeedsDraw` is called from any thread.
-    nonisolated(unsafe) private var needsDraw = true
+    nonisolated(unsafe) var needsDraw = true
     /// Timestamp of the last scheduled draw. Drives a low idle redraw rate so the
     /// cursor keeps blinking (the prebuilt libghostty drives blink internally and
     /// never emits a RENDER action) and any un-marked local change still recovers.
     /// Touched only under `surfaceLock`.
-    nonisolated(unsafe) private var lastDrawNs: UInt64 = 0
-    nonisolated private static let idleRedrawIntervalNs: UInt64 = 250_000_000   // 250ms ≈ 4fps
+    nonisolated(unsafe) var lastDrawNs: UInt64 = 0
+    nonisolated static let idleRedrawIntervalNs: UInt64 = 250_000_000   // 250ms ≈ 4fps
     /// Floor between *draw-on-arrival* kicks (a draw fired straight from output
     /// processing instead of waiting for the next CVDisplayLink tick). Keeps a
     /// flood of output from driving the render queue past the display refresh —
     /// anything skipped here is still picked up by the next vsync tick. ~7ms ≈
     /// 140fps ceiling, below ProMotion's 120Hz only marginally.
-    nonisolated private static let minArrivalDrawIntervalNs: UInt64 = 7_000_000
+    nonisolated static let minArrivalDrawIntervalNs: UInt64 = 7_000_000
     /// Once ghostty's cell grid first reports a non-zero size, stop polling it from
     /// every render frame (see `renderTick`): later size changes arrive through
     /// `set_size` (window resize / font change), which calls `reportSizeIfNeeded`
     /// directly. Without this every drawn frame of every pane posts a size-poll to
     /// the main thread — hundreds/sec across many live panes. Guarded by `surfaceLock`.
-    nonisolated(unsafe) private var gridSettled = false
-    nonisolated(unsafe) private var pendingBytes: [Data] = []
-    private var lastAppliedFontSize: Float = 0
+    nonisolated(unsafe) var gridSettled = false
+    nonisolated(unsafe) var pendingBytes: [Data] = []
+    var lastAppliedFontSize: Float = 0
 
     // IME state. `markedText` holds the in-flight composition (e.g. pinyin
     // before a candidate is chosen); the key event currently being routed
     // through the input context is stashed so `doCommandBySelector` can encode
     // special keys (Enter/Tab/arrows) via the engine.
-    private var markedText = NSMutableAttributedString()
-    private var keyEventForIME: NSEvent?
-    nonisolated(unsafe) private var isTornDown = false
+    var markedText = NSMutableAttributedString()
+    var keyEventForIME: NSEvent?
+    nonisolated(unsafe) private(set) var isTornDown = false
 
     // Scroll-review-compose: local draft capture while scrolled into history.
     // See docs/scroll-review-compose.md and ScrollReviewCompose.swift.
     let compose = ScrollReviewCompose()
-    private var composeBar: ComposeBarView?
+    var composeBar: ComposeBarView?
 
     // Engine-requested mouse cursor shape (I-beam over text, pointer over links,
     // resize over splits) and hide-on-type visibility.
-    private var mouseCursor: NSCursor = .iBeam
-    private var mouseHidden = false
+    var mouseCursor: NSCursor = .iBeam
+    var mouseHidden = false
 
     // Path preview (⌘hover to highlight, ⌘click to open, also on the context
     // menu). The host attaches a `PathPreviewContext` when the pane's files are
@@ -141,12 +140,151 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
     /// Wrap width for the visual-row math. tmux panes pass `pane.width`; nil
     /// falls back to ghostty's grid.
     public var pathWrapCols: (() -> Int?)?
-    private let pathHitEngine = SurfacePathHitEngine()
-    private var pathHighlight: PathHighlightView?
-    private var hoveredPathHit: SurfacePathHitEngine.Hit?
-    private var lastHoverCell: (col: Int, row: Int)?
+    let pathHitEngine = SurfacePathHitEngine()
+    var pathHighlight: PathHighlightView?
+    var hoveredPathHit: SurfacePathHitEngine.Hit?
+    var lastHoverCell: (col: Int, row: Int)?
     /// Viewport-top row from the last SCROLLBAR action (visual-row space).
-    private var lastScrollTop: Int?
+    var lastScrollTop: Int?
+
+    // State for the concerns split into GhosttyTerminalSurface_macOS+*.swift
+    // (stored properties cannot live in extensions). Original order kept.
+    var renderObservers: [NSObjectProtocol] = []
+
+    var sizeDebounce: DispatchWorkItem?
+
+    /// Sub-row remainder for the trackpad → wheel-report path, so a slow drag
+    /// still accumulates to whole rows instead of being truncated away.
+    var wheelReportRows = ScrollRowAccumulator()
+
+    /// tmux reports this pane as `pane_in_mode`. Bento does not implement
+    /// copy-mode; this flag exists so a pane that entered it elsewhere (another
+    /// client, a script, the user's own binding) isn't a rectangle that ignores
+    /// the scroll wheel with no explanation.
+    public var tmuxInMode = false {
+        didSet {
+            guard oldValue != tmuxInMode else { return }
+            if tmuxInMode {
+                // Right-click, not the title-bar glyph: Focus mode hides the pane
+                // title bar entirely, so the badge isn't always there to point at.
+                PaneHintChip.show("tmux copy-mode — scroll to move, right-click to exit", in: self)
+            } else {
+                PaneHintChip.dismiss(in: self)
+            }
+        }
+    }
+
+    /// Leave copy-mode (host sends tmux's `cancel`).
+    public var onExitCopyMode: (() -> Void)?
+
+    /// Wheel travel in copy-mode, in rows (positive = toward older output). The
+    /// host turns this into `send-keys -X -N n scroll-up`.
+    public var onCopyModeScroll: ((Int) -> Void)?
+
+    var copyModeRows = ScrollRowAccumulator()
+
+    var trackingArea: NSTrackingArea?
+
+    /// The cell the engine was last told the pointer is over.
+    var lastEngineMouseCell: (col: Int, row: Int)?
+    /// The engine's own answer for that cell: an OSC 8 hyperlink's target.
+    var engineLink: (url: String, col: Int, row: Int)?
+
+    /// Per-pane mouse-reporting mode, learned from tmux's `mouse_any_flag` /
+    /// `mouse_sgr_flag` (the engine can't see the program's mouse-enable through
+    /// control mode). When `any` is on, mouse events are ENCODED and forwarded to
+    /// the program via `onInput` instead of doing local selection. Set by the host.
+    public struct MouseReporting: Equatable {
+        public var any: Bool
+        public var sgr: Bool
+        public init(any: Bool = false, sgr: Bool = false) { self.any = any; self.sgr = sgr }
+    }
+    public var mouseReporting = MouseReporting()
+
+    /// User override: mouse reporting suppressed for this pane until toggled back
+    /// (the sticky escape hatch behind ⇧-drag). Mirrors ghostty's
+    /// `toggle_mouse_reporting`; the pane's title bar shows a glyph while it's on
+    /// so a pane that stopped talking to its program explains itself.
+    public var mouseReportingSuppressed = false {
+        didSet {
+            guard oldValue != mouseReportingSuppressed else { return }
+            onMouseReportingSuppressedChanged?(mouseReportingSuppressed)
+        }
+    }
+    public var onMouseReportingSuppressedChanged: ((Bool) -> Void)?
+
+    /// Where a mouse-reported drag started, for the "hold ⇧ to select" hint.
+    var reportedDragOrigin: NSPoint?
+    var lastMouseGrabHintAt: Date?
+
+    /// Whether the CURRENT left/middle button press was forwarded to the
+    /// program. Release and drag follow the press's decision rather than
+    /// re-deciding, so a report can never arrive unpaired.
+    ///
+    /// Load-bearing for ⌘click: that path consumes the press for Bento (a path
+    /// preview) and returns, so re-deciding at `mouseUp` sent the program a
+    /// release with no press. Claude Code's fullscreen mode accepts a bare
+    /// release as a click — so every ⌘click on a file path also fired whatever
+    /// CC had under the cursor (in practice: copy-to-tmux-buffer), on top of
+    /// the preview not opening.
+    var leftButtonForwarded = false
+    var middleButtonForwarded = false
+
+    /// Bento itself took this press (⌘click on a link or a path). Neither the
+    /// program nor the selection engine gets to see the rest of the gesture:
+    /// `GhosttySel.end`/`extend` on a press that never called `begin` leaves a
+    /// stray selection behind, and a live selection is exactly what the link
+    /// reader used to refuse to run on.
+    var bentoConsumedPress = false
+
+    // Right button. Press-and-hold (≥ holdThreshold) → voice input (select this
+    // pane + start hold-to-talk); a quick right-click → the existing behavior
+    // (mouse-report forward, else the Copy/Paste context menu). We defer the
+    // quick-click action until release so we can tell a hold from a click.
+    var rightHoldTimer: Timer?
+    var rightVoiceActive = false
+    var rightDownEvent: NSEvent?
+
+    /// The hit captured when the context menu was built, consumed by its item.
+    var contextMenuPathHit: SurfacePathHitEngine.Hit?
+
+    /// URL under the pointer (nil when not over a link) → surface tooltip.
+    /// A ⌘-mouseDown that hit a URL, resolved (opened) or cancelled (drag) at
+    /// mouseUp — standard button semantics.
+    var pendingLinkClick: (url: String, forceSystem: Bool)?
+
+    /// Which machine this pane's `localhost` means — see the iOS surface's copy.
+    public var linkOriginProvider: (@MainActor () -> LinkOrigin?)?
+
+    var lastReportedLinkURL: String?
+
+    /// OSC 7 working-directory report (shell integration). Lets path-preview
+    /// resolve relative paths in non-tmux local panes.
+    public internal(set) var reportedPwd: String?
+
+    /// Serial number so a slow resolution can't open a panel for a stale click.
+    var pathClickSeq = 0
+
+    /// Rate limit for the "⌘click to preview" nudge.
+    var lastPathHintAt: Date?
+
+    /// Debounce timer for arming review mode on a scroll-up. nil unless a
+    /// not-at-bottom update is waiting out the settle window.
+    var pendingReviewEntry: DispatchWorkItem?
+
+    /// The engine reported an actually-rendered color (initial theme
+    /// resolution, config reload, or runtime OSC 10/11/12). Background reports
+    /// are broadcast so the window chrome can wear the terminal's true color —
+    /// reading the configured theme instead would miss the user's own ghostty
+    /// config and any runtime OSC changes.
+    public internal(set) var reportedBackgroundColor: NSColor?
+
+    var searchBar: PaneSearchBar?
+
+    var searchTotal: Int?
+    var searchSelected: Int?
+
+    var healthBanner: NSTextField?
 
     public init(theme: TerminalTheme) {
         self.theme = theme
@@ -237,297 +375,6 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
         let ok = super.resignFirstResponder()
         if let surface { ghostty_surface_set_focus(surface, false) }
         return ok
-    }
-
-    // MARK: - Lifecycle
-
-    private var renderObservers: [NSObjectProtocol] = []
-
-    public override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        renderObservers.forEach { NotificationCenter.default.removeObserver($0) }
-        renderObservers.removeAll()
-        guard let window else { stopRenderLink(); return }
-        createSurfaceIfNeeded()
-        // Start/stop the render loop with the window's visibility (occlusion /
-        // miniaturize) so we never spin the GPU-blocking draw while off screen.
-        let nc = NotificationCenter.default
-        for name in [NSWindow.didChangeOcclusionStateNotification,
-                     NSWindow.didMiniaturizeNotification,
-                     NSWindow.didDeminiaturizeNotification] {
-            renderObservers.append(nc.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                guard let self else { return }
-                MainActor.assumeIsolated { self.updateRenderActive() }
-            })
-        }
-        // The renderer picks its vsync cadence from the display it believes it is
-        // on; dragging a window to another monitor doesn't tell it. Without this
-        // an external 60Hz panel keeps being driven on the built-in ProMotion
-        // timing (and vice versa) — visible as uneven scrolling on the second
-        // display. `viewDidChangeBackingProperties` only fires when the SCALE
-        // differs, so it can't stand in for this.
-        renderObservers.append(nc.addObserver(forName: NSWindow.didChangeScreenNotification,
-                                              object: window, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            MainActor.assumeIsolated { self.syncDisplayID() }
-        })
-        syncDisplayID()
-        updateRenderActive()
-    }
-
-    /// Tell ghostty which CoreGraphics display this surface is rendering on.
-    private func syncDisplayID() {
-        guard let surface, let screen = window?.screen else { return }
-        guard let number = screen.deviceDescription[
-            NSDeviceDescriptionKey("NSScreenNumber")
-        ] as? NSNumber else { return }
-        ghostty_surface_set_display_id(surface, number.uint32Value)
-    }
-
-    /// Report the terminal's light/dark to the engine so programs running inside
-    /// it can query it (OSC 2031 / DSR ?996). Sourced from the ACTIVE PALETTE,
-    /// not the app chrome's appearance — what matters to vim/delta/bat is the
-    /// background they are drawing onto.
-    private func syncColorScheme() {
-        guard let surface else { return }
-        ghostty_surface_set_color_scheme(
-            surface, theme.isDark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
-    }
-
-    // Fires when the window moves to a display with a different backing scale
-    // factor (e.g. a 2× Retina panel ↔ a 1× external monitor). Push the new
-    // content scale + drawable size to ghostty so glyphs keep the same physical
-    // size; otherwise the OS up/down-scales a stale-resolution drawable and the
-    // text balloons (1×→2×) or shrinks (2×→1×) by the scale ratio.
-    public override func viewDidChangeBackingProperties() {
-        super.viewDidChangeBackingProperties()
-        updateSurfaceSize()
-    }
-
-    public override func layout() {
-        super.layout()
-        createSurfaceIfNeeded()
-        updateSurfaceSize()
-        layoutComposeBar()
-        layoutSearchBar()
-        layoutHealthBanner()
-    }
-
-    private var currentScale: CGFloat {
-        let s = window?.backingScaleFactor ?? 2.0
-        return s > 0 ? s : 2.0
-    }
-
-    private func createSurfaceIfNeeded() {
-        guard !isTornDown,
-              surface == nil,
-              bounds.width > 0, bounds.height > 0,
-              let app = GhosttyRuntime.shared.app else { return }
-
-        var cfg = ghostty_surface_config_new()
-        cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
-        cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
-        cfg.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(
-            nsview: Unmanaged.passUnretained(self).toOpaque()
-        ))
-        cfg.scale_factor = Double(currentScale)
-        cfg.font_size = Float(theme.fontSize)
-        cfg.wait_after_command = false
-
-        guard let created = ghostty_surface_new(app, &cfg) else { return }
-        // Publish the surface and claim any buffered bytes atomically — a feed
-        // racing on renderQueue either appended to pendingBytes (captured here)
-        // or will see the live surface and process directly.
-        surfaceLock.lock()
-        surface = created
-        let queued = pendingBytes
-        pendingBytes.removeAll()
-        surfaceLock.unlock()
-        lastAppliedFontSize = Float(theme.fontSize)
-
-        updateSurfaceSize()
-        ghostty_surface_set_focus(created, true)
-        syncColorScheme()
-        syncDisplayID()
-        ghostty_surface_refresh(created)
-        ghostty_surface_draw(created)
-        updateRenderActive()
-
-        DIAG("surf create \(debugLabel) bounds=\(Int(bounds.width))x\(Int(bounds.height)) queued=\(queued.count)")
-        for chunk in queued { feed(chunk) }
-    }
-
-    private func updateSurfaceSize() {
-        guard let surface, bounds.width > 0, bounds.height > 0 else { return }
-        let scale = currentScale
-        let w = bounds.width * scale
-        let h = bounds.height * scale
-        // Clamp to a sane drawable range. A multi-client tmux resize (e.g. the
-        // system Terminal attached to the same session and dragging) can briefly
-        // hand us a degenerate or huge size; an out-of-range Metal drawable
-        // triggers a texture-validation abort / GPU stall. Metal's max texture
-        // dimension is 16384 on Apple GPUs.
-        guard w >= 1, h >= 1, w <= 16384, h <= 16384 else { return }
-        // ghostty makes this a LAYER-HOSTING view (it assigns its own CAMetalLayer
-        // via the nsview handle) and sets the layer's contentsScale ONCE at
-        // creation from cfg.scale_factor. AppKit does NOT auto-maintain
-        // contentsScale for a hosted layer, so when the window is dragged to a
-        // display with a different backing scale (2× Retina ↔ 1× external),
-        // set_content_scale below fixes ghostty's render density but the layer
-        // still COMPOSITES the drawable at the stale scale — glyphs come out
-        // wrong by exactly the ratio (and a window resize doesn't fix it, since
-        // that only changes bounds). Sync it here, matching the iOS path's
-        // synchronizeGhosttyLayerGeometry.
-        if let layer, layer.contentsScale != scale {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            layer.contentsScale = scale
-            CATransaction.commit()
-        }
-        ghostty_surface_set_content_scale(surface, Double(scale), Double(scale))
-        ghostty_surface_set_size(surface, UInt32(w), UInt32(h))
-        ghostty_surface_refresh(surface)
-        setNeedsDraw()
-        reportSizeIfNeeded()
-    }
-
-    private var sizeDebounce: DispatchWorkItem?
-
-    private func reportSizeIfNeeded() {
-        guard let surface else { return }
-        let s = ghostty_surface_size(surface)
-        let size = TerminalSurfaceSize(
-            columns: Int(s.columns),
-            rows: Int(s.rows),
-            cellWidthPx: Int(s.cell_width_px),
-            cellHeightPx: Int(s.cell_height_px)
-        )
-        guard size.columns > 0, size.rows > 0 else {
-            // Grid not computed yet (ghostty needs a few frames after creation).
-            // Keep requesting draws until it settles, so onSizeChanged fires and
-            // the pty starts — otherwise the dirty gate would stop drawing first.
-            setNeedsDraw()
-            return
-        }
-        // Grid has settled — stop the per-frame size poll from renderTick.
-        surfaceLock.lock(); gridSettled = true; surfaceLock.unlock()
-        guard size != currentSize else { return }
-        currentSize = size
-        // Debounce the PTY-resize callback. A continuous window drag fires many
-        // size changes; coalescing to one resize ~60ms after it settles means
-        // the shell gets a single SIGWINCH and the TUI redraws once, instead of
-        // garbling through a burst of mid-drag resizes. Rendering is unaffected
-        // — ghostty already has the live pixel size via set_size/draw.
-        sizeDebounce?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.onSizeChanged?(size) }
-        sizeDebounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
-    }
-
-    nonisolated private func startRenderLink() {
-        if renderLink == nil {
-            var link: CVDisplayLink?
-            CVDisplayLinkCreateWithActiveCGDisplays(&link)
-            guard let link else { return }
-            let ctx = Unmanaged.passUnretained(self).toOpaque()
-            CVDisplayLinkSetOutputCallback(link, { _, _, _, _, _, userdata in
-                guard let userdata else { return kCVReturnSuccess }
-                let view = Unmanaged<GhosttyTerminalSurface>.fromOpaque(userdata).takeUnretainedValue()
-                view.enqueueRenderTick()
-                return kCVReturnSuccess
-            }, ctx)
-            renderLink = link
-        }
-        if let renderLink, !CVDisplayLinkIsRunning(renderLink) { CVDisplayLinkStart(renderLink) }
-    }
-
-    nonisolated private func stopRenderLink() {
-        if let renderLink, CVDisplayLinkIsRunning(renderLink) { CVDisplayLinkStop(renderLink) }
-    }
-
-    /// Run the render loop only while the surface is actually on screen. ghostty's
-    /// draw blocks the main thread on `waitUntilCompleted`; when the window is
-    /// occluded / miniaturized, Metal's `nextDrawable` stalls, so an unpaused
-    /// display link hangs the app (multi-second beachballs). We also tell ghostty
-    /// it's occluded so it skips its own rendering.
-    private func updateRenderActive() {
-        guard let surface, !isTornDown else { return }
-        let visible = isSurfaceVisible
-        ghostty_surface_set_occlusion(surface, visible)
-        if visible { startRenderLink() } else { stopRenderLink() }
-    }
-
-    private var isSurfaceVisible: Bool {
-        guard !isTornDown, let window, !isHiddenOrHasHiddenAncestor else { return false }
-        if window.isMiniaturized { return false }
-        return window.occlusionState.contains(.visible)
-    }
-
-    /// Called on the CVDisplayLink thread, once per vsync. Draws when dirty
-    /// (output/interaction → full frame rate) or, when idle, at the low backstop
-    /// rate (cursor blink + recovery for any un-marked change). This is what
-    /// turns the always-on 60fps redraw of every surface into a dirty-driven one.
-    nonisolated fileprivate func enqueueRenderTick() {
-        scheduleDraw(allowIdle: true, throttle: false)
-    }
-
-    /// Schedule a draw on `renderQueue` if one isn't already in flight. Shared by
-    /// the CVDisplayLink tick (`allowIdle: true`) and the draw-on-arrival path in
-    /// `processFeed` (`throttle: true`). Draw-on-arrival is the latency win: a
-    /// freshly-echoed keystroke paints immediately instead of waiting up to a
-    /// full frame for the next display-link tick to notice it's dirty — measured
-    /// as the dominant (and most jittery) segment of typing latency.
-    nonisolated private func scheduleDraw(allowIdle: Bool, throttle: Bool) {
-        let now = DispatchTime.now().uptimeNanoseconds
-        surfaceLock.lock()
-        if renderInFlight || isTornDown { surfaceLock.unlock(); return }
-        let sinceLast = now &- lastDrawNs
-        let idleDue = allowIdle && sinceLast >= Self.idleRedrawIntervalNs
-        let dirty = needsDraw
-        if !dirty && !idleDue { surfaceLock.unlock(); return }
-        // Rate-cap the arrival path so sustained output can't outrun the display
-        // refresh; the next vsync tick coalesces whatever this skips.
-        if throttle && dirty && sinceLast < Self.minArrivalDrawIntervalNs {
-            surfaceLock.unlock(); return
-        }
-        needsDraw = false
-        renderInFlight = true
-        lastDrawNs = now
-        surfaceLock.unlock()
-        renderQueue.async { [weak self] in self?.renderTick() }
-    }
-
-    /// Mark the surface dirty so the next display-link tick draws it. Lock-guarded
-    /// and callable from any thread — ghostty's RENDER action can arrive off the
-    /// main thread, and output (`feed`) runs on `ioQueue`.
-    nonisolated public func setNeedsDraw() {
-        surfaceLock.lock(); needsDraw = true; surfaceLock.unlock()
-    }
-
-    /// Runs on `renderQueue` (NOT main). The synchronous GPU wait inside
-    /// `ghostty_surface_draw` therefore blocks only this queue if a frame stalls.
-    nonisolated private func renderTick() {
-        surfaceLock.lock()
-        let s = surface
-        let torn = isTornDown
-        let settled = gridSettled
-        surfaceLock.unlock()
-        defer {
-            surfaceLock.lock(); renderInFlight = false; surfaceLock.unlock()
-        }
-        guard !torn, let s else { return }
-        if !diagLoggedDraw { diagLoggedDraw = true; DIAG("surf FIRST-DRAW \(debugLabel) settled=\(settled)") }
-        // `s` stays valid for this draw: the free is chained onto renderQueue
-        // (via enqueueSurfaceFree), serialized behind this running block.
-        ghostty_surface_draw(s)
-        // ghostty computes its cell grid a few frames after creation; poll it from
-        // the draw loop ONLY until it first settles (then `gridSettled` gates this
-        // off). After that, size changes come through set_size, which calls
-        // reportSizeIfNeeded directly — so we don't post a main-thread size-poll on
-        // every frame of every pane (hundreds/sec across many live panes).
-        if !settled {
-            DispatchQueue.main.async { [weak self] in self?.reportSizeIfNeeded() }
-        }
     }
 
     // MARK: - TerminalSurface
@@ -632,1546 +479,6 @@ public final class GhosttyTerminalSurface: NSView, TerminalSurface, Sendable {
         onInput?(data)
     }
 
-    // MARK: - Input
-
-    // All key input goes through ghostty_surface_key (NOT ghostty_surface_text),
-    // so the engine encodes everything correctly: printable text as text, Enter
-    // as CR, arrows/function keys as escape sequences, Ctrl-chords as control
-    // bytes. Feeding raw event.characters to ghostty_surface_text (the old
-    // approach) echoed special keys as private-use glyphs and never sent CR.
-
-    public override func keyDown(with event: NSEvent) {
-        // Scroll-review-compose: while reviewing history, the bar owns navigation
-        // and editing keys (returns true = consumed). Printable text still flows
-        // through the IME path below and branches into the draft in insertText.
-        if compose.isReviewing, handleReviewKeyDown(event) { return }
-
-        if event.modifierFlags.contains(.command) {
-            let key = event.charactersIgnoringModifiers?.lowercased()
-            switch key {
-            case "d":
-                // ⌘D / ⌘⇧D → split the active pane (iTerm2-style).
-                onSplit?(!event.modifierFlags.contains(.shift))
-                return
-            case "c" where hasSelection:
-                // ⌘C → copy the selection to the pasteboard (only when there IS
-                // a selection; otherwise fall through so ⌘C can be a no-op
-                // rather than interrupting).
-                copySelection()
-                return
-            case "v":
-                // While composing, ⌘V pastes into the draft, not the terminal.
-                if compose.isReviewing {
-                    if let s = TerminalClipboard.read() { compose.insertText(s) }
-                } else {
-                    pasteFromClipboard()
-                }
-                return
-            case "a":
-                _ = selectAll()
-                return
-            default:
-                // Other ⌘ chords aren't text input — encode directly (bypass the
-                // IME so we don't insert "v" etc.). They reach the engine and snap
-                // to bottom, so bail the draft first to avoid an auto-commit.
-                if compose.isReviewing { compose.cancelForPassthrough() }
-                sendKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
-                return
-            }
-        }
-
-        // Ordinary typing on a plain keyboard layout doesn't need the input
-        // method at all, and `handleEvent` is a synchronous IPC that blocks the
-        // main thread — profiled at a 15.73ms median, 73ms worst case, with a
-        // third-party IME active. Encode those keys directly. Anything that
-        // could involve composition — an IME input source, an in-flight preedit,
-        // or a modifier that can start a dead key — still takes the full route.
-        if canBypassInputMethod(event) {
-            sendKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
-            return
-        }
-
-        // Everything else routes through the macOS input system so IME
-        // composition (Chinese / Japanese / dead keys) works. The input context
-        // calls back into our NSTextInputClient conformance: `insertText` for
-        // committed text, `setMarkedText` for the in-flight composition,
-        // `doCommandBySelector` for special keys. If the context doesn't consume
-        // the event we encode it ourselves via the engine.
-        keyEventForIME = event
-        defer { keyEventForIME = nil }
-        if inputContext?.handleEvent(event) != true {
-            sendKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
-        }
-    }
-
-    /// Whether this key event can skip the input method entirely.
-    ///
-    /// Deliberately conservative — a wrong `true` here breaks CJK input, which
-    /// is far worse than the latency it saves:
-    ///   - the active input source must be a plain keyboard LAYOUT, not an IME
-    ///     (a Pinyin/Kana source reports `kTISTypeKeyboardInputMode` and is
-    ///     excluded)
-    ///   - no composition may be in flight (`markedText` empty)
-    ///   - no modifier that can begin a dead-key sequence (⌥e → ´ works even on
-    ///     ABC), so only shift/caps/fn/numpad are allowed through
-    ///   - empty `characters` means the key produced no text, which is exactly
-    ///     what a dead key does on press (US International's `'` and `` ` ``
-    ///     take no modifier at all). Its continuation is then covered by the
-    ///     `markedText` check above, since IMK marks the pending composition.
-    ///   - the scroll-review draft owns its own keys, so not while reviewing
-    private func canBypassInputMethod(_ event: NSEvent) -> Bool {
-        guard markedText.length == 0, !compose.isReviewing else { return false }
-        guard let chars = event.characters, !chars.isEmpty else { return false }
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard mods.isSubset(of: [.shift, .capsLock, .function, .numericPad]) else { return false }
-        return Self.activeInputSourceIsPlainLayout
-    }
-
-    /// Cached because TIS lookups aren't free and this is consulted per key.
-    /// Invalidated on the same notification that tells ghostty to rebuild its
-    /// keyboard table (see GhosttyRuntime).
-    private static var cachedPlainLayout: Bool?
-
-    static func invalidateInputSourceCache() { cachedPlainLayout = nil }
-
-    private static var activeInputSourceIsPlainLayout: Bool {
-        if let cachedPlainLayout { return cachedPlainLayout }
-        let value = computePlainLayout()
-        cachedPlainLayout = value
-        return value
-    }
-
-    private static func computePlainLayout() -> Bool {
-        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
-              let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceType)
-        else { return false }
-        let type = Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
-        // kTISTypeKeyboardLayout = a layout with no input method behind it.
-        // Everything else (input modes, input methods) must keep the IME path.
-        return type == (kTISTypeKeyboardLayout as String)
-    }
-
-    public override func keyUp(with event: NSEvent) {
-        // While reviewing, draft keys never reached the engine — don't leak a
-        // stray key-up to it either.
-        if compose.isReviewing { return }
-        // Don't emit key-up while composing — the IME owns the sequence.
-        guard markedText.length == 0 else { return }
-        sendKeyEvent(event, action: GHOSTTY_ACTION_RELEASE)
-    }
-
-    // MARK: - Scroll
-
-    /// Rows scrolled per row of finger travel, for high-precision (trackpad)
-    /// deltas. AppKit already accelerates those deltas, so tracking them 1:1
-    /// overshoots when you're reading text — half speed is the readable ratio.
-    /// Lower this to slow the trackpad further; the mouse wheel is unaffected.
-    private static let trackpadScrollRatio = 0.5
-
-    /// Sub-row remainder for the trackpad → wheel-report path, so a slow drag
-    /// still accumulates to whole rows instead of being truncated away.
-    private var wheelReportRows = ScrollRowAccumulator()
-
-    public override func scrollWheel(with event: NSEvent) {
-        clearPathHover()   // rows shift under the cursor; stale highlight lies
-        guard let surface else { return }
-
-        // tmux has this pane in copy-mode: IT owns the viewport, and it repaints
-        // the pane from its own scroll position. Running our scrollback scroll as
-        // well means two scroll positions for one screen — you scroll up, tmux
-        // repaints the same rows, nothing appears to move. Hand the wheel to
-        // tmux's copy-mode instead.
-        if tmuxInMode {
-            let rows = copyModeScrollRows(event)
-            if rows != 0 { onCopyModeScroll?(rows) }
-            return
-        }
-
-        // Mouse-reporting pane → forward wheel as button 64 (up) / 65 (down).
-        // ⇧-scroll falls through to our own scrollback, matching xterm (and the
-        // ⇧-drag bypass right below it).
-        if shouldReportMouse(event) {
-            forwardScrollAsWheel(event)
-            return
-        }
-
-        // ghostty applies scroll at the tracked mouse position, so make sure it
-        // knows the cursor is inside this surface first.
-        updateMousePosition(event)
-
-        // Pack ghostty's scroll mods: bit 0 = high-precision (trackpad),
-        // bits 1-3 = momentum phase (see src/input/mouse.zig).
-        var mods: Int32 = 0
-        if event.hasPreciseScrollingDeltas { mods |= 1 }
-        let momentum: ghostty_input_mouse_momentum_e
-        switch event.momentumPhase {
-        case .began:      momentum = GHOSTTY_MOUSE_MOMENTUM_BEGAN
-        case .stationary: momentum = GHOSTTY_MOUSE_MOMENTUM_STATIONARY
-        case .changed:    momentum = GHOSTTY_MOUSE_MOMENTUM_CHANGED
-        case .ended:      momentum = GHOSTTY_MOUSE_MOMENTUM_ENDED
-        case .cancelled:  momentum = GHOSTTY_MOUSE_MOMENTUM_CANCELLED
-        case .mayBegin:   momentum = GHOSTTY_MOUSE_MOMENTUM_MAY_BEGIN
-        default:          momentum = GHOSTTY_MOUSE_MOMENTUM_NONE
-        }
-        mods |= Int32(momentum.rawValue) << 1
-
-        var x = event.scrollingDeltaX
-        var y = event.scrollingDeltaY
-        if event.hasPreciseScrollingDeltas {
-            // ghostty's precise path reads the delta in DEVICE PIXELS (it divides
-            // by the cell's pixel height to get rows), but AppKit reports trackpad
-            // deltas in POINTS — passing them raw made the speed depend on the
-            // display: 1:1 with the finger on a non-Retina monitor, half that on
-            // Retina. Convert points → pixels, then apply the ratio so every
-            // display scrolls alike.
-            let s = Double(currentScale) * Self.trackpadScrollRatio
-            x *= s
-            y *= s
-        } else {
-            // Mouse wheel: deltas are in lines — scale so each notch moves a few rows.
-            x *= 3
-            y *= 3
-        }
-        ghostty_surface_mouse_scroll(surface, x, y, mods)
-        ghostty_surface_refresh(surface)
-        setNeedsDraw()
-    }
-
-    // MARK: - tmux copy-mode (entered from outside Bento)
-
-    /// tmux reports this pane as `pane_in_mode`. Bento does not implement
-    /// copy-mode; this flag exists so a pane that entered it elsewhere (another
-    /// client, a script, the user's own binding) isn't a rectangle that ignores
-    /// the scroll wheel with no explanation.
-    public var tmuxInMode = false {
-        didSet {
-            guard oldValue != tmuxInMode else { return }
-            if tmuxInMode {
-                // Right-click, not the title-bar glyph: Focus mode hides the pane
-                // title bar entirely, so the badge isn't always there to point at.
-                PaneHintChip.show("tmux copy-mode — scroll to move, right-click to exit", in: self)
-            } else {
-                PaneHintChip.dismiss(in: self)
-            }
-        }
-    }
-
-    /// Leave copy-mode (host sends tmux's `cancel`).
-    public var onExitCopyMode: (() -> Void)?
-
-    /// Wheel travel in copy-mode, in rows (positive = toward older output). The
-    /// host turns this into `send-keys -X -N n scroll-up`.
-    public var onCopyModeScroll: ((Int) -> Void)?
-
-    private var copyModeRows = ScrollRowAccumulator()
-
-    private func copyModeScrollRows(_ event: NSEvent) -> Int {
-        let dy = event.scrollingDeltaY
-        guard event.hasPreciseScrollingDeltas else {
-            return dy == 0 ? 0 : (dy > 0 ? 3 : -3)   // one notch ≈ a few rows
-        }
-        if event.phase == .began { copyModeRows.reset() }
-        guard let cell = cellSizePoints() else { return 0 }
-        // Same points-per-row as the local scrollback path, so a pane in
-        // copy-mode scrolls at the speed the others do.
-        let rows = copyModeRows.rows(adding: dy, rowHeight: cell.height / Self.trackpadScrollRatio)
-        guard rows != 0 else { return 0 }
-        // Cap the burst; a flick's momentum tail would otherwise send tmux a very
-        // large repeat count in one command.
-        return max(-12, min(12, rows))
-    }
-
-    /// Forward a scroll to a mouse-reporting program (an alt-screen TUI) as wheel
-    /// button reports. A wheel notch is one report, but a trackpad emits a
-    /// continuous stream of tiny deltas at ~60-120 Hz — one report each sent the
-    /// TUI flying. Accumulate the precise deltas and emit one report per whole
-    /// cell-row of travel instead, matching the touch path on iOS.
-    private func forwardScrollAsWheel(_ event: NSEvent) {
-        let dy = event.scrollingDeltaY
-        guard event.hasPreciseScrollingDeltas else {
-            guard dy != 0 else { return }
-            forwardMouse(event, button: dy > 0 ? 64 : 65, press: true)
-            return
-        }
-        if event.phase == .began { wheelReportRows.reset() }   // fresh gesture
-        guard let cell = cellSizePoints() else { return }
-        // Points of finger travel per report — the same ratio the local
-        // scrollback path uses, so both kinds of pane scroll at one speed.
-        let rows = wheelReportRows.rows(adding: dy,
-                                        rowHeight: cell.height / Self.trackpadScrollRatio)
-        guard rows != 0 else { return }
-        let button = rows > 0 ? 64 : 65
-        // Cap the burst: a flick's momentum tail can cross many rows in one
-        // event, and TUIs handle a wall of wheel reports poorly.
-        for _ in 0..<min(abs(rows), 8) { forwardMouse(event, button: button, press: true) }
-    }
-
-    public override func mouseMoved(with event: NSEvent) {
-        updateMousePosition(event)
-        if event.modifierFlags.contains(.command) {
-            updatePathHover(event)
-        } else {
-            clearPathHover()
-        }
-    }
-
-    // A tracking area is required for `mouseMoved` to fire at all — without it,
-    // mouse-motion reporting (xterm modes 1002/1003) and hover never reach the
-    // app. Scoped to the key window + visible rect so background panes stay quiet.
-    private var trackingArea: NSTrackingArea?
-    public override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea { removeTrackingArea(trackingArea) }
-        let ta = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self, userInfo: nil)
-        addTrackingArea(ta)
-        trackingArea = ta
-    }
-
-    private func updateMousePosition(_ event: NSEvent) {
-        guard let surface else { return }
-        // Remember WHERE we told the engine the pointer is, so a MOUSE_OVER_LINK
-        // that comes back can be attributed to a cell. Without that anchor a
-        // stale hover from three cells ago would answer the next ⌘click.
-        lastEngineMouseCell = cellCoord(event)
-        let p = pxPoint(event)
-        ghostty_surface_mouse_pos(surface, p.x, p.y, modsFromFlags(event.modifierFlags))
-    }
-
-    /// The cell the engine was last told the pointer is over.
-    private var lastEngineMouseCell: (col: Int, row: Int)?
-    /// The engine's own answer for that cell: an OSC 8 hyperlink's target.
-    private var engineLink: (url: String, col: Int, row: Int)?
-
-    /// 1-based cell under a view point (the `cellCoord(_ event:)` twin).
-    private func cellCoord(atPoint p: NSPoint) -> (col: Int, row: Int) {
-        GhosttyCellGeometry.cell(at: p, size: currentSize, scale: currentScale)
-    }
-
-    // MARK: - Mouse selection
-
-    /// Mouse position for ghostty in LOGICAL POINTS (not backing pixels).
-    /// ghostty applies the surface content scale internally, so passing pixels
-    /// double-applies the scale (selection landed at 2× the row on Retina).
-    private func pxPoint(_ event: NSEvent) -> (x: Double, y: Double) {
-        let loc = convert(event.locationInWindow, from: nil)
-        return (Double(loc.x), Double(loc.y))
-    }
-
-    // MARK: - Mouse reporting (tmux -CC)
-
-    /// Per-pane mouse-reporting mode, learned from tmux's `mouse_any_flag` /
-    /// `mouse_sgr_flag` (the engine can't see the program's mouse-enable through
-    /// control mode). When `any` is on, mouse events are ENCODED and forwarded to
-    /// the program via `onInput` instead of doing local selection. Set by the host.
-    public struct MouseReporting: Equatable {
-        public var any: Bool
-        public var sgr: Bool
-        public init(any: Bool = false, sgr: Bool = false) { self.any = any; self.sgr = sgr }
-    }
-    public var mouseReporting = MouseReporting()
-
-    /// User override: mouse reporting suppressed for this pane until toggled back
-    /// (the sticky escape hatch behind ⇧-drag). Mirrors ghostty's
-    /// `toggle_mouse_reporting`; the pane's title bar shows a glyph while it's on
-    /// so a pane that stopped talking to its program explains itself.
-    public var mouseReportingSuppressed = false {
-        didSet {
-            guard oldValue != mouseReportingSuppressed else { return }
-            onMouseReportingSuppressedChanged?(mouseReportingSuppressed)
-        }
-    }
-    public var onMouseReportingSuppressedChanged: ((Bool) -> Void)?
-
-    /// Holding SHIFT takes the mouse back from a program that grabbed it, so you
-    /// can always drag out a selection. This is xterm's convention and ghostty's
-    /// default (`mouse-shift-capture = false`) — worth matching exactly, because
-    /// it's the reflex a terminal user already has.
-    ///
-    /// Note this is NOT free today: `forwardMouse` encodes shift as a modifier
-    /// bit, so before this the shift-drag just reached the program as a modified
-    /// drag and the user got no selection and no explanation.
-    private func mouseReportingBypassed(_ event: NSEvent) -> Bool {
-        event.modifierFlags.contains(.shift)
-    }
-
-    /// Whether this event should be handed to the program rather than used for
-    /// local selection.
-    private func shouldReportMouse(_ event: NSEvent) -> Bool {
-        mouseReporting.any && !mouseReportingSuppressed && !mouseReportingBypassed(event)
-    }
-
-    /// Where a mouse-reported drag started, for the "hold ⇧ to select" hint.
-    private var reportedDragOrigin: NSPoint?
-    private var lastMouseGrabHintAt: Date?
-
-    /// Explain the grabbed mouse the moment it bites: the user pressed and
-    /// dragged a meaningful distance in a pane whose program owns the mouse, and
-    /// got no selection for it. Rate-limited so it teaches once and then stays
-    /// out of the way.
-    private func noteReportedDrag(_ event: NSEvent) {
-        guard let origin = reportedDragOrigin else { return }
-        let p = convert(event.locationInWindow, from: nil)
-        let cell = cellSizePoints() ?? CGSize(width: 8, height: 16)
-        guard abs(p.x - origin.x) > cell.width * 3 || abs(p.y - origin.y) > cell.height * 2 else { return }
-        reportedDragOrigin = nil   // one evaluation per drag
-        if let last = lastMouseGrabHintAt, Date().timeIntervalSince(last) < 60 { return }
-        lastMouseGrabHintAt = Date()
-        PaneHintChip.show("This app is using the mouse — hold ⇧ to select", in: self)
-    }
-
-    /// Cell (col,row), 1-based, for a mouse event — from the cell pixel size.
-    private func cellCoord(_ event: NSEvent) -> (col: Int, row: Int) {
-        let p = pxPoint(event)
-        return cellCoord(atPoint: NSPoint(x: p.x, y: p.y))
-    }
-
-    private func mouseModBits(_ flags: NSEvent.ModifierFlags) -> Int {
-        (flags.contains(.shift) ? 4 : 0)
-            + (flags.contains(.option) ? 8 : 0)
-            + (flags.contains(.control) ? 16 : 0)
-    }
-
-    /// Encode a mouse event and forward it to the program. `button`: 0=left,
-    /// 1=middle, 2=right, 64=wheel-up, 65=wheel-down. Returns true if sent.
-    @discardableResult
-    private func forwardMouse(_ event: NSEvent, button: Int, press: Bool, motion: Bool = false) -> Bool {
-        // The gate lives here so every entry point (click, drag, middle, right,
-        // wheel) honors the ⇧ bypass and the sticky suppression identically.
-        guard shouldReportMouse(event) else { return false }
-        sendMouseReport(event, button: button, press: press, motion: motion)
-        return true
-    }
-
-    /// Ungated encode-and-send. Only for completing a gesture whose PRESS was
-    /// already forwarded: the release and the drags in between must go out even
-    /// if the gate has since flipped (the user pressed ⇧ mid-drag, or the pane
-    /// stopped reporting), or the program is left believing a button is still
-    /// down and every later click reads as a drag.
-    private func sendMouseReport(_ event: NSEvent, button: Int, press: Bool, motion: Bool = false) {
-        let (col, row) = cellCoord(event)
-        // Encoding is shared with the iOS surface (`MouseReport`) — same bytes,
-        // one place, so a touch click and a mouse click can't disagree.
-        onInput?(MouseReport.encode(button: button, press: press, col: col, row: row,
-                                    mods: mouseModBits(event.modifierFlags),
-                                    motion: motion, sgr: mouseReporting.sgr))
-    }
-
-    /// Whether the CURRENT left/middle button press was forwarded to the
-    /// program. Release and drag follow the press's decision rather than
-    /// re-deciding, so a report can never arrive unpaired.
-    ///
-    /// Load-bearing for ⌘click: that path consumes the press for Bento (a path
-    /// preview) and returns, so re-deciding at `mouseUp` sent the program a
-    /// release with no press. Claude Code's fullscreen mode accepts a bare
-    /// release as a click — so every ⌘click on a file path also fired whatever
-    /// CC had under the cursor (in practice: copy-to-tmux-buffer), on top of
-    /// the preview not opening.
-    private var leftButtonForwarded = false
-    private var middleButtonForwarded = false
-
-    /// Bento itself took this press (⌘click on a link or a path). Neither the
-    /// program nor the selection engine gets to see the rest of the gesture:
-    /// `GhosttySel.end`/`extend` on a press that never called `begin` leaves a
-    /// stray selection behind, and a live selection is exactly what the link
-    /// reader used to refuse to run on.
-    private var bentoConsumedPress = false
-
-    public override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        onSelect?()
-        leftButtonForwarded = false
-        bentoConsumedPress = false
-        guard let surface else { return }
-        // ⌘-click declares link intent (standard terminal convention), checked
-        // before TUI forwarding and instead of starting a selection: a URL
-        // opens (queued to mouseUp so a drag can still cancel), a recognized
-        // file path previews. The two detectors are disjoint — the path
-        // scanner excludes URLs — so the order is just cost.
-        if event.modifierFlags.contains(.command) {
-            let p = convert(event.locationInWindow, from: nil)
-            if let url = linkURL(at: p) {
-                // ⌘⇧-click is the way out to the system browser; plain ⌘-click
-                // goes wherever the preference says (the side dock by default).
-                pendingLinkClick = (url, event.modifierFlags.contains(.shift))
-                bentoConsumedPress = true
-                return
-            }
-            let scan = pathTapHits(at: p)
-            if !scan.hits.isEmpty {
-                handlePathClick(scan)
-                bentoConsumedPress = true
-                return
-            }
-        }
-        // Mouse-reporting pane → forward the click to the program (not selection),
-        // unless the user is holding ⇧ to take the mouse back.
-        if forwardMouse(event, button: 0, press: true) {
-            leftButtonForwarded = true
-            let p = convert(event.locationInWindow, from: nil)
-            reportedDragOrigin = p
-            // Not when ⌘ is already down — that click reached here because the
-            // path scan found nothing, and telling someone to do what they just
-            // did is worse than saying nothing.
-            if !event.modifierFlags.contains(.command) { notePathClickForwarded(at: p) }
-            return
-        }
-        reportedDragOrigin = nil
-        if event.clickCount >= 2 {
-            _ = GhosttySel.selectWord(surface, px: pxPoint(event))
-        } else {
-            GhosttySel.begin(surface, px: pxPoint(event), mods: modsFromFlags(event.modifierFlags))
-        }
-        setNeedsDraw()
-    }
-
-    public override func mouseDragged(with event: NSEvent) {
-        guard let surface else { return }
-        pendingLinkClick = nil   // a drag is never a link click
-        if bentoConsumedPress { return }
-        if leftButtonForwarded {
-            sendMouseReport(event, button: 0, press: true, motion: true)
-            noteReportedDrag(event)
-            return
-        }
-        GhosttySel.extend(surface, px: pxPoint(event), mods: modsFromFlags(event.modifierFlags))
-        setNeedsDraw()
-    }
-
-    public override func mouseUp(with event: NSEvent) {
-        let wasForwarded = leftButtonForwarded
-        let wasConsumed = bentoConsumedPress
-        leftButtonForwarded = false
-        bentoConsumedPress = false
-        guard let surface else { return }
-        if let click = pendingLinkClick {
-            pendingLinkClick = nil
-            LinkRouter.open(click.url, from: linkOrigin, forceSystem: click.forceSystem)
-            return
-        }
-        if wasForwarded {
-            sendMouseReport(event, button: 0, press: false)
-            return
-        }
-        if wasConsumed { return }
-        GhosttySel.end(surface, mods: modsFromFlags(event.modifierFlags))
-    }
-
-    // Middle button → forward (mouse-report pane, or X11-style middle paste).
-    public override func otherMouseDown(with event: NSEvent) {
-        guard event.buttonNumber == 2 else { return super.otherMouseDown(with: event) }
-        middleButtonForwarded = false
-        if forwardMouse(event, button: 1, press: true) {
-            middleButtonForwarded = true
-            return
-        }
-        guard let surface else { return }
-        updateMousePosition(event)
-        _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_MIDDLE,
-                                         modsFromFlags(event.modifierFlags))
-    }
-
-    public override func otherMouseUp(with event: NSEvent) {
-        guard event.buttonNumber == 2 else { return super.otherMouseUp(with: event) }
-        if middleButtonForwarded {
-            middleButtonForwarded = false
-            sendMouseReport(event, button: 1, press: false)
-            return
-        }
-        guard let surface else { return }
-        _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_MIDDLE,
-                                         modsFromFlags(event.modifierFlags))
-    }
-
-    // Right button. Press-and-hold (≥ holdThreshold) → voice input (select this
-    // pane + start hold-to-talk); a quick right-click → the existing behavior
-    // (mouse-report forward, else the Copy/Paste context menu). We defer the
-    // quick-click action until release so we can tell a hold from a click.
-    private var rightHoldTimer: Timer?
-    private var rightVoiceActive = false
-    private var rightDownEvent: NSEvent?
-    private static let voiceHoldThreshold: TimeInterval = 0.25
-
-    public override func rightMouseDown(with event: NSEvent) {
-        rightDownEvent = event
-        rightVoiceActive = false
-        rightHoldTimer?.invalidate()
-        // Arm the hold only if voice is wired for this pane; otherwise the quick
-        // right-click on release handles everything. We DON'T forward/menu on
-        // down so a hold can supersede the click.
-        if onVoiceStart != nil {
-            // Pre-warm the mic engine NOW (button down) so it's live by the time
-            // the hold threshold fires — the warm-up overlaps the wait instead of
-            // delaying capture after the compass appears.
-            onVoicePrewarm?()
-            // Add in `.common` modes so it still fires while the mouse button is
-            // held (a default-mode timer is starved during event tracking).
-            let timer = Timer(timeInterval: Self.voiceHoldThreshold, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated { self?.triggerVoiceHold() }
-            }
-            RunLoop.current.add(timer, forMode: .common)
-            rightHoldTimer = timer
-        }
-    }
-
-    public override func rightMouseDragged(with event: NSEvent) {
-        if rightVoiceActive { onVoiceDrag?(NSEvent.mouseLocation) }
-    }
-
-    public override func rightMouseUp(with event: NSEvent) {
-        rightHoldTimer?.invalidate()
-        rightHoldTimer = nil
-        if rightVoiceActive {
-            rightVoiceActive = false
-            onVoiceEnd?()
-            rightDownEvent = nil
-            return
-        }
-        // Released before the hold threshold → a normal right-click. Forward to a
-        // mouse-reporting program (press+release together), else pop our menu.
-        if shouldReportMouse(event) {
-            _ = forwardMouse(event, button: 2, press: true)
-            _ = forwardMouse(event, button: 2, press: false)
-        } else if let menu = menu(for: event), let down = rightDownEvent {
-            menu.popUp(positioning: nil, at: convert(down.locationInWindow, from: nil), in: self)
-        }
-        rightDownEvent = nil
-    }
-
-    /// Hold passed the threshold → enter voice input for this pane.
-    private func triggerVoiceHold() {
-        guard !isTornDown, onVoiceStart != nil else { return }
-        rightVoiceActive = true
-        window?.makeFirstResponder(self)
-        onSelect?()
-        onVoiceStart?(NSEvent.mouseLocation)
-    }
-
-    // MARK: - Selection / clipboard
-
-    var hasSelection: Bool {
-        guard let surface else { return false }
-        return GhosttySel.hasSelection(surface)
-    }
-
-    func selectedText() -> String? {
-        guard let surface else { return nil }
-        return GhosttySel.selectedText(surface)
-    }
-
-    @discardableResult
-    func selectAll() -> Bool {
-        guard let surface else { return false }
-        return GhosttySel.selectAll(surface)
-    }
-
-    func copySelection() {
-        guard let text = selectedText(), !text.isEmpty else { return }
-        TerminalClipboard.write(text)
-    }
-
-    func pasteFromClipboard() {
-        guard let surface, let text = TerminalClipboard.read(), !text.isEmpty else { return }
-        // Route through ghostty's paste action (not raw `ghostty_surface_text`)
-        // so it applies bracketed-paste wrapping when the running app enabled it
-        // — otherwise newlines in the pasted text fire Enter per line (e.g. you
-        // can't paste a multi-line block into Claude Code). The action requests
-        // the clipboard via the runtime's `read_clipboard_cb`, which completes on
-        // the surface we register here.
-        GhosttyRuntime.shared.pasteSurface = surface
-        GhosttySel.bindingAction("paste_from_clipboard", on: surface)
-    }
-
-    // MARK: - Context menu (right-click)
-
-    /// The hit captured when the context menu was built, consumed by its item.
-    private var contextMenuPathHit: SurfacePathHitEngine.Hit?
-
-    public override func menu(for event: NSEvent) -> NSMenu? {
-        let menu = NSMenu()
-        contextMenuPathHit = pathHit(at: convert(event.locationInWindow, from: nil))
-        if let hit = contextMenuPathHit {
-            let name = (hit.candidate.path as NSString).lastPathComponent
-            let preview = NSMenuItem(title: "Preview \"\(name)\"",
-                                     action: #selector(contextPreviewPath), keyEquivalent: "")
-            preview.target = self
-            menu.addItem(preview)
-            let copyPath = NSMenuItem(title: "Copy Path",
-                                      action: #selector(contextCopyPath), keyEquivalent: "")
-            copyPath.target = self
-            menu.addItem(copyPath)
-            menu.addItem(.separator())
-        }
-        let copy = NSMenuItem(title: "Copy", action: #selector(contextCopy), keyEquivalent: "c")
-        copy.isEnabled = hasSelection
-        copy.target = self
-        menu.addItem(copy)
-        let paste = NSMenuItem(title: "Paste", action: #selector(contextPaste), keyEquivalent: "v")
-        paste.target = self
-        menu.addItem(paste)
-        menu.addItem(.separator())
-        let all = NSMenuItem(title: "Select All", action: #selector(contextSelectAll), keyEquivalent: "a")
-        all.target = self
-        menu.addItem(all)
-        let find = NSMenuItem(title: "Find…", action: #selector(contextFind), keyEquivalent: "f")
-        find.target = self
-        menu.addItem(find)
-        // Always reachable, unlike the title-bar badge (Focus mode has no title
-        // bar), and the mode is easy to enter by accident from another client.
-        if tmuxInMode {
-            menu.addItem(.separator())
-            let exitMode = NSMenuItem(title: "Exit tmux copy-mode",
-                                      action: #selector(contextExitCopyMode), keyEquivalent: "")
-            exitMode.target = self
-            menu.addItem(exitMode)
-        }
-        // Only offered where it can matter — a pane whose program has taken the
-        // mouse. ⇧-drag is the per-gesture answer; this is the sticky one.
-        if mouseReporting.any {
-            menu.addItem(.separator())
-            let mouse = NSMenuItem(title: "Mouse Reporting",
-                                   action: #selector(contextToggleMouseReporting),
-                                   keyEquivalent: "")
-            mouse.state = mouseReportingSuppressed ? .off : .on
-            mouse.target = self
-            menu.addItem(mouse)
-        }
-        // The host's pane actions last, as one block ending in Close Pane.
-        //
-        // The surface's own text/clipboard entries stay on top because they are
-        // what a right-click on TEXT is usually reaching for, and because the
-        // contextual toggles above are about this surface too — keeping them
-        // together means one insertion point instead of interleaving the two
-        // sources. Close Pane is still the final item overall.
-        let paneItems = contextMenuPaneItems?() ?? []
-        if !paneItems.isEmpty {
-            menu.addItem(.separator())
-            for item in paneItems { menu.addItem(item) }
-        }
-        return menu
-    }
-
-    @objc private func contextFind() { beginSearch() }
-
-    @objc private func contextExitCopyMode() { onExitCopyMode?() }
-
-    @objc private func contextToggleMouseReporting() {
-        mouseReportingSuppressed.toggle()
-        PaneHintChip.show(
-            mouseReportingSuppressed
-                ? "Mouse reporting off — this app no longer sees the mouse"
-                : "Mouse reporting on",
-            in: self)
-    }
-
-    @objc private func contextCopy() { copySelection() }
-    @objc private func contextPaste() { pasteFromClipboard() }
-    @objc private func contextSelectAll() { _ = selectAll() }
-    @objc private func contextPreviewPath() {
-        if let hit = contextMenuPathHit { presentPathPreview(hit) }
-        contextMenuPathHit = nil
-    }
-    @objc private func contextCopyPath() {
-        if let hit = contextMenuPathHit { TerminalClipboard.write(hit.candidate.path) }
-        contextMenuPathHit = nil
-    }
-
-    /// `textOverride` supplies the committed text from the input system (e.g. the
-    /// character `insertText` produced) so direct key input is encoded by
-    /// ghostty's key pipeline rather than injected as raw text — see `insertText`.
-    private func sendKeyEvent(_ event: NSEvent, action: ghostty_input_action_e, textOverride: String? = nil) {
-        guard let surface else { return }
-
-        var keyEvent = ghostty_input_key_s(
-            action: action,
-            mods: modsFromFlags(event.modifierFlags),
-            consumed_mods: GhosttyKeyMods.consumed(modsFromFlags(event.modifierFlags),
-                                                   surface: surface),
-            keycode: UInt32(event.keyCode),
-            text: nil,
-            unshifted_codepoint: unshiftedCodepoint(from: event),
-            composing: false
-        )
-
-        // ghostty_surface_key synchronously runs the engine's key encoding AND
-        // its write-to-host callback, so this span covers everything from key to
-        // "bytes handed to the tmux batcher".
-        if let text = textOverride ?? translatedText(from: event) {
-            text.withCString { ptr in
-                keyEvent.text = ptr
-                ghostty_surface_key(surface, keyEvent)
-            }
-        } else {
-            ghostty_surface_key(surface, keyEvent)
-        }
-    }
-
-    private func modsFromFlags(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
-        var raw = GHOSTTY_MODS_NONE.rawValue
-        if flags.contains(.shift) { raw |= GHOSTTY_MODS_SHIFT.rawValue }
-        if flags.contains(.control) { raw |= GHOSTTY_MODS_CTRL.rawValue }
-        if flags.contains(.option) { raw |= GHOSTTY_MODS_ALT.rawValue }
-        if flags.contains(.command) { raw |= GHOSTTY_MODS_SUPER.rawValue }
-        if flags.contains(.capsLock) { raw |= GHOSTTY_MODS_CAPS.rawValue }
-        return ghostty_input_mods_e(rawValue: raw)
-    }
-
-    private func unshiftedCodepoint(from event: NSEvent) -> UInt32 {
-        guard let chars = event.characters(byApplyingModifiers: []),
-              let scalar = chars.unicodeScalars.first else { return 0 }
-        return scalar.value
-    }
-
-    /// The text payload for the key event, or nil to let ghostty derive it from
-    /// keycode. Control chars and private-use function keys (arrows etc.) return
-    /// nil/stripped so the engine encodes them itself.
-    private func translatedText(from event: NSEvent) -> String? {
-        // Dedicated keys (Tab/Return/Keypad-Enter/Escape) carry a control-char
-        // `characters` value (\t, \r, \e). Passing that text makes ghostty emit
-        // it verbatim and skip its modifier-aware encoding — so Shift+Tab would
-        // send a plain Tab instead of backtab (CSI Z). Return nil for these and
-        // let ghostty encode from the keycode + mods.
-        switch event.keyCode {
-        case 48, 36, 76, 53: return nil   // Tab, Return, Keypad Enter, Escape
-        default: break
-        }
-        guard let chars = event.characters else { return nil }
-        if chars.count == 1, let scalar = chars.unicodeScalars.first {
-            if scalar.value < 0x20 {
-                // Control character — let ghostty encode it; pass the
-                // unmodified-by-control text so it knows the base key.
-                return event.characters(byApplyingModifiers: event.modifierFlags.subtracting(.control))
-            }
-            if scalar.value >= 0xF700 && scalar.value <= 0xF8FF {
-                // Private-use range = arrows / function keys; encode via keycode.
-                return nil
-            }
-        }
-        return chars
-    }
-
-    // MARK: - NSTextInputClient (IME)
-
-    /// Committed text from the input system (plain typing, or the chosen IME
-    /// candidate). Feed it to the engine as literal text and clear any preedit.
-    public func insertText(_ string: Any, replacementRange: NSRange) {
-        let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
-
-        // Scroll-review-compose: committed text (plain typing or an IME candidate)
-        // goes into the local draft, not the engine.
-        if compose.isReviewing {
-            markedText = NSMutableAttributedString()
-            compose.insertText(text)
-            return
-        }
-
-        let wasComposing = markedText.length > 0
-        markedText = NSMutableAttributedString()
-        if let surface { GhosttySel.setPreedit(surface, nil) }
-        // Clearing the preedit changes only ghostty's local overlay, and the
-        // prebuilt pull-model libghostty never emits a RENDER action, so nothing
-        // repaints on its own. For a NON-empty commit we deliberately do NOT mark
-        // dirty here: the committed text round-trips to the shell and its echo's
-        // draw (draw-on-arrival) repaints the line with the text in place. Drawing
-        // now would paint one composition-less frame *before* that echo lands —
-        // the characters blink out and back, i.e. the "上屏整行闪一下" (and the
-        // lingering highlighted preedit looked like the prior commit was selected).
-        // Only an empty commit / cancel has no echo to repaint it, so draw then.
-        if wasComposing && text.isEmpty { setNeedsDraw() }
-        guard !text.isEmpty, let surface else { return }
-
-        // Direct key input (not an IME composition commit) must go through the
-        // KEY pipeline so ghostty encodes it per the active keyboard protocol
-        // (kitty / CSI-u progressive enhancement). `ghostty_surface_text` injects
-        // raw text and bypasses that — so TUIs that enabled enhanced key
-        // reporting never see the keypress and their q/space/etc. bindings don't
-        // fire. (Hardware keys on iOS already go through ghostty_surface_key.)
-        if !wasComposing, let event = keyEventForIME {
-            sendKeyEvent(event,
-                         action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS,
-                         textOverride: text)
-            return
-        }
-
-        // IME commit (e.g. pinyin → 你好) or other multi-char insertion: send as
-        // literal text. (Routing this through the key pipeline was tried and makes
-        // no difference — ghostty emits the same raw UTF-8 either way, verified by
-        // tracing the host bytes.)
-        let utf8 = Array(text.utf8)
-        utf8.withUnsafeBufferPointer { buf in
-            buf.baseAddress?.withMemoryRebound(to: CChar.self, capacity: buf.count) { p in
-                ghostty_surface_text(surface, p, UInt(buf.count))
-            }
-        }
-    }
-
-    /// In-flight composition (e.g. pinyin before a candidate is picked). Show it
-    /// as ghostty preedit; nothing is sent to the shell until commit.
-    public func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
-        let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
-        markedText = NSMutableAttributedString(string: text)
-
-        // Scroll-review-compose: show the in-flight composition in the bar, not
-        // as engine preedit in the terminal.
-        if compose.isReviewing {
-            compose.setPreedit(text)
-            return
-        }
-
-        guard let surface else { return }
-        GhosttySel.setPreedit(surface, text)
-        setNeedsDraw()
-    }
-
-    public func unmarkText() {
-        markedText = NSMutableAttributedString()
-        if let surface { GhosttySel.setPreedit(surface, nil) }
-        // Same as insertText: the cleared preedit won't repaint on its own under
-        // the dirty-driven renderer, so mark dirty here.
-        setNeedsDraw()
-    }
-
-    public func hasMarkedText() -> Bool { markedText.length > 0 }
-
-    // IMK queries these synchronously while `handleEvent` is blocked, so any
-    // cost here would land inside the keystroke. Keep them constant-time.
-
-    public func selectedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
-
-    public func markedRange() -> NSRange {
-        markedText.length > 0 ? NSRange(location: 0, length: markedText.length)
-                              : NSRange(location: NSNotFound, length: 0)
-    }
-
-    public func attributedSubstring(forProposedRange range: NSRange,
-                                    actualRange: NSRangePointer?) -> NSAttributedString? {
-        nil
-    }
-
-    public func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
-
-    public func characterIndex(for point: NSPoint) -> Int { 0 }
-
-    /// Where the IME candidate window should anchor. We don't track the exact
-    /// cell cursor here, so anchor near the bottom-left of the surface — good
-    /// enough that the candidate list is visible and near the typing area.
-    public func firstRect(forCharacterRange range: NSRange,
-                          actualRange: NSRangePointer?) -> NSRect {
-        let local = NSRect(x: 4, y: bounds.height - 24, width: 1, height: 20)
-        let inWindow = convert(local, to: nil)
-        return window?.convertToScreen(inWindow) ?? inWindow
-    }
-
-    /// Special keys routed by the input system (Enter/Tab/Backspace/arrows/Esc).
-    /// Encode the stashed key event via the engine; the engine emits the right
-    /// escape sequence / control byte.
-    public override func doCommand(by selector: Selector) {
-        // In review, special keys are handled in handleReviewKeyDown before the
-        // IME ever sees them; ignore anything that still routes here.
-        if compose.isReviewing { return }
-        guard let event = keyEventForIME else { return }
-        sendKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS)
-    }
-
-    // MARK: - Engine cursor & mouse feedback
-
-    public override func resetCursorRects() {
-        addCursorRect(bounds, cursor: mouseCursor)
-    }
-
-    /// Apply the cursor shape ghostty requests as the pointer moves over text /
-    /// links / split handles.
-    public func handleMouseShape(_ shape: ghostty_action_mouse_shape_e) {
-        let c = Self.cursor(for: shape)
-        guard c != mouseCursor else { return }
-        mouseCursor = c
-        c.set()
-        window?.invalidateCursorRects(for: self)
-    }
-
-    private static func cursor(for shape: ghostty_action_mouse_shape_e) -> NSCursor {
-        switch shape {
-        case GHOSTTY_MOUSE_SHAPE_TEXT, GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT: return .iBeam
-        case GHOSTTY_MOUSE_SHAPE_POINTER: return .pointingHand
-        case GHOSTTY_MOUSE_SHAPE_CROSSHAIR: return .crosshair
-        case GHOSTTY_MOUSE_SHAPE_GRAB: return .openHand
-        case GHOSTTY_MOUSE_SHAPE_GRABBING: return .closedHand
-        case GHOSTTY_MOUSE_SHAPE_COL_RESIZE, GHOSTTY_MOUSE_SHAPE_E_RESIZE,
-             GHOSTTY_MOUSE_SHAPE_W_RESIZE, GHOSTTY_MOUSE_SHAPE_EW_RESIZE: return .resizeLeftRight
-        case GHOSTTY_MOUSE_SHAPE_ROW_RESIZE, GHOSTTY_MOUSE_SHAPE_N_RESIZE,
-             GHOSTTY_MOUSE_SHAPE_S_RESIZE, GHOSTTY_MOUSE_SHAPE_NS_RESIZE: return .resizeUpDown
-        case GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED, GHOSTTY_MOUSE_SHAPE_NO_DROP: return .operationNotAllowed
-        default: return .arrow
-        }
-    }
-
-    /// Hide the pointer while typing; show it on mouse move. Balanced so the
-    /// cursor can't get stuck hidden.
-    public func handleMouseVisibility(_ visible: Bool) {
-        if visible {
-            if mouseHidden { NSCursor.unhide(); mouseHidden = false }
-        } else if !mouseHidden {
-            NSCursor.hide(); mouseHidden = true
-        }
-    }
-
-    /// URL under the pointer (nil when not over a link) → surface tooltip.
-    /// A ⌘-mouseDown that hit a URL, resolved (opened) or cancelled (drag) at
-    /// mouseUp — standard button semantics.
-    private var pendingLinkClick: (url: String, forceSystem: Bool)?
-
-    /// Which machine this pane's `localhost` means — see the iOS surface's copy.
-    public var linkOriginProvider: (@MainActor () -> LinkOrigin?)?
-
-    public var linkOrigin: LinkOrigin? { linkOriginProvider?() }
-
-    /// The engine re-reports the hovered link on EVERY mouse-position update
-    /// (not just when it changes), so a slow drag across one link fires this
-    /// dozens of times a second. Everything below the cell update is gated on
-    /// an actual change — an unchanged `toolTip` assignment still churns
-    /// AppKit's tooltip machinery, and an unchanged log line is pure noise in
-    /// the one stream that has to stay readable while debugging a click.
-    public func handleMouseOverLink(_ url: String?) {
-        let clean = (url?.isEmpty == false) ? url : nil
-        if let clean, let c = lastEngineMouseCell {
-            engineLink = (clean, c.col, c.row)
-        } else {
-            engineLink = nil
-        }
-        guard clean != lastReportedLinkURL else { return }
-        lastReportedLinkURL = clean
-        toolTip = clean
-        linkLog.log("MOUSE_OVER_LINK url=⟨\(clean ?? "nil", privacy: .public)⟩ cell=\(self.lastEngineMouseCell.map { "\($0.col),\($0.row)" } ?? "?", privacy: .public)")
-    }
-
-    private var lastReportedLinkURL: String?
-
-    /// The URL rendered under `point`, or nil — shared TerminalLinkDetector
-    /// over the visual rows read via a transient selection (cleared before
-    /// returning). Only called with no live selection (⌘-click guard).
-    /// The logical line + tapped cell under `point`, from the same screen
-    /// snapshot path detection uses. Not gated on `pathPreviewContext` — links
-    /// must open in a pane that has no preview context at all.
-    private func logicalLine(at point: NSPoint) -> (line: String, cell: Int)? {
-        guard !isTornDown, let cell = cellSizePoints(), let cs = currentSize else { return nil }
-        return pathHitEngine.logicalLine(
-            point: point, cellSize: cell, viewportRows: cs.rows,
-            cols: pathWrapCols?() ?? cs.columns,
-            scrollTop: lastScrollTop,
-            readText: { [weak self] in self?.readScrollback() })
-    }
-
-    /// The URL under `point`, or nil.
-    ///
-    /// This used to read the screen by driving a transient ghostty SELECTION
-    /// across each nearby row and reading it back — which both mutated live
-    /// state to answer a question and gave link detection a different picture of
-    /// the screen than path detection had. A URL the path scanner read whole
-    /// could be invisible here, and then the path scanner would happily
-    /// fuzzy-match the URL's last segment to a local directory and open a file
-    /// viewer for a link. One snapshot, one answer.
-    private func linkURL(at point: NSPoint) -> String? {
-        // The engine's answer is the last hover, anchored to its cell so a
-        // stale hover can't answer for a later click.
-        let c = cellCoord(atPoint: point)
-        let engine = engineLink.flatMap { $0.col == c.col && $0.row == c.row ? $0.url : nil }
-        if engine == nil {
-            linkLog.log("link via scrape cell=\(c.col, privacy: .public),\(c.row, privacy: .public) engine=\(self.engineLink.map(\.url) ?? "nil", privacy: .public)")
-        }
-        return SurfaceLinkResolver.url(engine: engine) { logicalLine(at: point) }
-    }
-
-    /// OSC 7 working-directory report (shell integration). Lets path-preview
-    /// resolve relative paths in non-tmux local panes.
-    public private(set) var reportedPwd: String?
-    public func handlePwd(_ pwd: String?) {
-        if let pwd, !pwd.isEmpty { reportedPwd = pwd }
-    }
-
-    // MARK: - Path preview (⌘hover / ⌘click / context menu)
-
-    private func cellSizePoints() -> CGSize? {
-        GhosttyCellGeometry.cellSize(currentSize, scale: currentScale)
-    }
-
-    /// Path candidate + highlight rects under `point` (surface coords), or nil.
-    /// Same-line only — the zero-I/O detector behind hover and context menus.
-    func pathHit(at point: NSPoint) -> SurfacePathHitEngine.Hit? {
-        guard pathPreviewContext != nil, !isTornDown,
-              let cell = cellSizePoints(), let cs = currentSize else { return nil }
-        return pathHitEngine.hit(
-            point: point, cellSize: cell, viewportRows: cs.rows,
-            cols: pathWrapCols?() ?? cs.columns,
-            scrollTop: lastScrollTop,
-            readText: { [weak self] in self?.readScrollback() })
-    }
-
-    /// Ordered tap candidates under `point` (wrap-chain joins first) plus
-    /// screen-context root hints. Used by ⌘click, which can afford
-    /// stat-verification before showing UI.
-    func pathTapHits(at point: NSPoint) -> SurfacePathHitEngine.TapScan {
-        guard pathPreviewContext != nil, !isTornDown,
-              let cell = cellSizePoints(), let cs = currentSize else { return .empty }
-        return pathHitEngine.tapHits(
-            point: point, cellSize: cell, viewportRows: cs.rows,
-            cols: pathWrapCols?() ?? cs.columns,
-            scrollTop: lastScrollTop,
-            readText: { [weak self] in self?.readScrollback() })
-    }
-
-    /// Serial number so a slow resolution can't open a panel for a stale click.
-    private var pathClickSeq = 0
-
-    /// ⌘click on path candidates: a self-contained explicit token opens
-    /// immediately (the panel shows not-found if it lied); everything else —
-    /// bare relatives, wrap-chain joins, truncated suffixes — resolves through
-    /// `SmartPathResolver` first, and the first candidate that exists wins.
-    private func handlePathClick(_ scan: SurfacePathHitEngine.TapScan) {
-        guard let context = pathPreviewContext else { return }
-        clearPathHover()
-        let hits = scan.hits
-        if hits[0].fastPath {
-            onOpenPreview?(hits[0].path, hits[0].line, context)
-            return
-        }
-        pathClickSeq += 1
-        let seq = pathClickSeq
-        Task { @MainActor [weak self] in
-            let res = try? await SmartPathResolver.resolveFirst(
-                paths: hits.map(\.path), rootHints: scan.rootHints,
-                context: context)
-            guard let self, self.pathClickSeq == seq, !self.isTornDown else { return }
-            if let res {
-                onOpenPreview?(res.resolvedPath, hits[res.index].line, context)
-            } else if let url = hits.lazy.compactMap({ TerminalLinkDetector.schemelessURL($0.path) }).first {
-                // Nothing exists by that name and it's host-shaped
-                // ("github.com/NovaShang/…"): it was a link all along. Checked
-                // AFTER resolution so a real file of that name still wins.
-                LinkRouter.open(url, from: self.linkOrigin)
-            } else {
-                // Nothing stat'd. Open the best guess anyway so the panel says
-                // "not found" — a ⌘click that resolves to silence is
-                // indistinguishable from a ⌘click that never fired, and sends
-                // the user looking for a broken build instead of a wrong path.
-                onOpenPreview?(hits[0].path, hits[0].line, context)
-            }
-        }
-    }
-
-    /// Rate limit for the "⌘click to preview" nudge.
-    private var lastPathHintAt: Date?
-
-    /// A plain click that landed on a file path in a pane whose program owns
-    /// the mouse. Forwarding it is correct — the program asked for clicks — but
-    /// the user near-certainly wanted the preview, and nothing on screen says
-    /// the gesture moved. Claude Code's fullscreen mode made this the common
-    /// case: it grabs the mouse for a UI whose most clickable-looking things are
-    /// the file paths it prints, which are Bento's, not its.
-    private func notePathClickForwarded(at p: NSPoint) {
-        guard pathPreviewContext != nil else { return }
-        if let last = lastPathHintAt, Date().timeIntervalSince(last) < 300 { return }
-        guard pathHit(at: p) != nil else { return }
-        lastPathHintAt = Date()
-        PaneHintChip.show("⌘-click to preview this path", in: self)
-    }
-
-    /// ⌘hover: highlight the path token under the cursor. Recomputed only when
-    /// the hovered cell changes (mouse-moved storms are cheap).
-    private func updatePathHover(_ event: NSEvent) {
-        guard pathPreviewContext != nil, let cell = cellSizePoints() else { return }
-        let p = convert(event.locationInWindow, from: nil)
-        let cellPos = (col: Int(p.x / cell.width), row: Int(p.y / cell.height))
-        if let last = lastHoverCell, last == cellPos { return }
-        lastHoverCell = cellPos
-        let hit = pathHit(at: p)
-        hoveredPathHit = hit
-        if let hit {
-            let view = ensurePathHighlight()
-            view.rects = hit.rects
-            view.isHidden = false
-            toolTip = nil
-            NSCursor.pointingHand.set()
-        } else {
-            clearPathHover()
-        }
-    }
-
-    private func clearPathHover() {
-        lastHoverCell = nil
-        hoveredPathHit = nil
-        guard let pathHighlight, !pathHighlight.isHidden else { return }
-        pathHighlight.isHidden = true
-        mouseCursor.set()
-    }
-
-    private func ensurePathHighlight() -> PathHighlightView {
-        if let pathHighlight { return pathHighlight }
-        let v = PathHighlightView(frame: bounds)
-        v.autoresizingMask = [.width, .height]
-        v.isHidden = true
-        addSubview(v)
-        pathHighlight = v
-        return v
-    }
-
-    /// Open the preview in the side dock for a confirmed hit.
-    private func presentPathPreview(_ hit: SurfacePathHitEngine.Hit) {
-        guard let context = pathPreviewContext else { return }
-        clearPathHover()
-        onOpenPreview?(hit.candidate.path, hit.candidate.line, context)
-    }
-
-    public override func flagsChanged(with event: NSEvent) {
-        if !event.modifierFlags.contains(.command) { clearPathHover() }
-        super.flagsChanged(with: event)
-    }
-
-    public override func mouseExited(with event: NSEvent) {
-        clearPathHover()
-        super.mouseExited(with: event)
-    }
-
-    // MARK: - Scroll-review-compose
-
-    private func setupCompose() {
-        let bar = ComposeBarView(frame: .zero)
-        bar.monoFont = composeFont()
-        bar.isHidden = true
-        addSubview(bar)
-        composeBar = bar
-
-        compose.onChange = { [weak self] in self?.updateComposeBar() }
-        compose.onInject = { [weak self] text, execute in self?.injectComposed(text, execute: execute) }
-        compose.onSnapToBottom = { [weak self] in self?.scrollComposeToBottom() }
-    }
-
-    private func composeFont() -> NSFont {
-        let size = CGFloat(theme.fontSize > 0 ? theme.fontSize : 13)
-        if let fam = theme.fontFamily, let f = NSFont(name: fam, size: size) { return f }
-        return .monospacedSystemFont(ofSize: size, weight: .regular)
-    }
-
-    /// Debounce timer for arming review mode on a scroll-up. nil unless a
-    /// not-at-bottom update is waiting out the settle window.
-    private var pendingReviewEntry: DispatchWorkItem?
-
-    /// The engine reported an actually-rendered color (initial theme
-    /// resolution, config reload, or runtime OSC 10/11/12). Background reports
-    /// are broadcast so the window chrome can wear the terminal's true color —
-    /// reading the configured theme instead would miss the user's own ghostty
-    /// config and any runtime OSC changes.
-    public private(set) var reportedBackgroundColor: NSColor?
-
-    public func handleColorChange(kind: ghostty_action_color_kind_e, red: UInt8, green: UInt8, blue: UInt8) {
-        guard kind == GHOSTTY_ACTION_COLOR_KIND_BACKGROUND else { return }
-        reportedBackgroundColor = NSColor(
-            srgbRed: CGFloat(red) / 255, green: CGFloat(green) / 255,
-            blue: CGFloat(blue) / 255, alpha: 1)
-        NotificationCenter.default.post(name: .ghosttySurfaceBackgroundChanged, object: self)
-    }
-
-    /// Called by GhosttyRuntime on every SCROLLBAR action (already on main).
-    ///
-    /// ghostty emits a transient not-at-bottom frame while it auto-scrolls to
-    /// the new bottom on fresh output (the echo of your own typing, or a CJK
-    /// preedit refresh): for one frame `offset+len < total` before the pin
-    /// catches up. Forwarding that blip straight to the compose machine armed
-    /// review mode (`isReviewing`), which routed the next IME commit into the
-    /// draft bar instead of the engine — the text then only surfaced on the
-    /// following at-bottom update, read as a ~1s "上屏" stutter on ~1/3 of
-    /// commits. So debounce the live→review *entry*: only a scroll-up that
-    /// persists past a short settle window is a real, user-initiated scroll.
-    public func handleScrollbar(total: UInt64, offset: UInt64, len: UInt64) {
-        lastScrollTop = Int(offset)
-        let atBottom = offset + len >= total
-        if atBottom {
-            // Any real bottom cancels a pending entry and is reported at once.
-            pendingReviewEntry?.cancel()
-            pendingReviewEntry = nil
-            compose.scrollChanged(atBottom: true)
-            return
-        }
-        // Already reviewing: forward scroll updates immediately so draft/scroll
-        // stay responsive. Only the initial entry from `.live` is debounced.
-        if compose.isReviewing {
-            compose.scrollChanged(atBottom: false)
-            return
-        }
-        guard pendingReviewEntry == nil else { return }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.pendingReviewEntry = nil
-            self.compose.scrollChanged(atBottom: false)
-        }
-        pendingReviewEntry = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
-    }
-
-    // MARK: - Scrollback search (⌘F)
-
-    private var searchBar: PaneSearchBar?
-
-    /// True while the find bar holds the keyboard. The host checks this before
-    /// re-asserting first responder on the surface — otherwise its periodic
-    /// `updateActiveBorders` would yank the caret out of the field mid-typing.
-    public var searchFieldHasFocus: Bool { searchBar?.fieldHasFocus ?? false }
-
-    public var isSearchOpen: Bool { searchBar != nil }
-
-    /// Open the find bar. `prefill` (⌘F with a selection, or the engine's own
-    /// START_SEARCH) seeds the field and searches immediately.
-    public func beginSearch(prefill: String? = nil) {
-        let bar = searchBar ?? makeSearchBar()
-        if let seed = SearchBarModel.needle(
-            fromSelection: prefill ?? surface.flatMap { GhosttySel.selectedText($0) }) {
-            bar.query = seed
-            bar.model.setQuery(seed)   // counts for a seed that never went through typing
-            runSearch(seed)
-        }
-        layoutSearchBar()
-        bar.focusField()
-    }
-
-    /// Close the find bar and hand the keyboard back to the terminal.
-    public func endSearchUI() {
-        guard let bar = searchBar else { return }
-        bar.model.cancelPendingQuery()
-        bar.removeFromSuperview()
-        searchBar = nil
-        // Ask the engine to drop the search LAST: ghostty performs keybind
-        // actions synchronously and echoes END_SEARCH back through
-        // handleEndSearch → this method. With the bar already nil'd the echo
-        // hits `guard searchBar != nil` and returns — dispatch first, and the
-        // echo re-dispatches end_search forever (observed: ~770 stack levels).
-        if let surface { GhosttySel.endSearch(surface) }
-        // Only reclaim first responder if the bar actually had it; a click that
-        // moved focus to another pane must not be dragged back here.
-        if window?.firstResponder == nil || bar.fieldHasFocus {
-            window?.makeFirstResponder(self)
-        }
-        setNeedsDraw()
-    }
-
-    public func findNext() { navigateSearch(forward: true) }
-    public func findPrevious() { navigateSearch(forward: false) }
-
-    /// ⌘E — Use Selection for Find (the standard macOS pair with ⌘F/⌘G).
-    public func useSelectionForFind() {
-        guard let surface,
-              let text = SearchBarModel.needle(fromSelection: GhosttySel.selectedText(surface))
-        else { return }
-        let bar = searchBar ?? makeSearchBar()
-        bar.query = text
-        bar.model.setQuery(text)
-        runSearch(text)
-        layoutSearchBar()
-    }
-
-    private func navigateSearch(forward: Bool) {
-        guard let surface else { return }
-        // ⌘G with no bar open is still meaningful once a search has run, but the
-        // engine drops the search on end_search — so open the bar first.
-        guard searchBar != nil else { beginSearch(); return }
-        GhosttySel.navigateSearch(surface, forward: forward)
-        setNeedsDraw()
-    }
-
-    private func makeSearchBar() -> PaneSearchBar {
-        let bar = PaneSearchBar(frame: PaneSearchBar.frame(in: bounds.size))
-        bar.model.onQueryChanged = { [weak self] text in self?.runSearch(text) }
-        bar.model.onNext = { [weak self] in self?.findNext() }
-        bar.model.onPrevious = { [weak self] in self?.findPrevious() }
-        bar.model.onClose = { [weak self] in self?.endSearchUI() }
-        addSubview(bar)
-        searchBar = bar
-        return bar
-    }
-
-    private func runSearch(_ needle: String) {
-        guard let surface else { return }
-        GhosttySel.search(surface, needle: needle)
-        if needle.isEmpty { searchBar?.model.setCounts(total: nil, selected: nil) }
-        setNeedsDraw()
-    }
-
-    private func layoutSearchBar() {
-        guard let bar = searchBar else { return }
-        bar.frame = PaneSearchBar.frame(in: bounds.size)
-    }
-
-    // Engine → app. All four arrive on the main thread inside `ghostty_app_tick`.
-
-    public func handleStartSearch(needle: String?) {
-        beginSearch(prefill: needle)
-    }
-
-    public func handleEndSearch() {
-        guard searchBar != nil else { return }
-        endSearchUI()
-    }
-
-    public func handleSearchTotal(_ total: Int?) {
-        searchTotal = total
-        searchBar?.model.setCounts(total: searchTotal, selected: searchSelected)
-    }
-
-    public func handleSearchSelected(_ selected: Int?) {
-        searchSelected = selected
-        searchBar?.model.setCounts(total: searchTotal, selected: searchSelected)
-    }
-
-    private var searchTotal: Int?
-    private var searchSelected: Int?
-
-    // MARK: - Renderer health
-
-    private var healthBanner: NSTextField?
-
-    /// The Metal renderer reported it stopped working. Without this the pane just
-    /// goes black and stays black with no explanation.
-    public func handleRendererHealth(healthy: Bool) {
-        if healthy {
-            healthBanner?.removeFromSuperview()
-            healthBanner = nil
-            return
-        }
-        guard healthBanner == nil else { return }
-        let label = NSTextField(labelWithString:
-            "Renderer stopped — this pane won't update. Close it or restart Bento.")
-        label.font = .systemFont(ofSize: 11)
-        label.textColor = .white
-        label.alignment = .center
-        label.wantsLayer = true
-        // Brand salmon (docs/bento-icon.svg) — a warning that is deliberately NOT
-        // one of the pane state colors, because this is not a pane state.
-        label.layer?.backgroundColor = NSColor(srgbRed: 0xE8 / 255.0, green: 0x9B / 255.0,
-                                               blue: 0x7C / 255.0, alpha: 1).cgColor
-        label.drawsBackground = false
-        addSubview(label)
-        healthBanner = label
-        layoutHealthBanner()
-    }
-
-    private func layoutHealthBanner() {
-        guard let banner = healthBanner else { return }
-        let h: CGFloat = 22
-        banner.frame = NSRect(x: 0, y: 0, width: bounds.width, height: h)
-    }
-
-    /// The whole scrollback as text (one line per row, top-aligned with the
-    /// SCROLLBAR row space).
-    public func readScrollback() -> String? {
-        guard let surface else { return nil }
-        return GhosttySel.screenText(surface)
-    }
-
-    private var composeBarHeight: CGFloat { ceil(composeFont().ascender - composeFont().descender) + 16 }
-
-    private func layoutComposeBar() {
-        guard let bar = composeBar else { return }
-        let h = composeBarHeight
-        // isFlipped == true, so the bottom strip sits at the max-y edge.
-        bar.frame = NSRect(x: 0, y: bounds.height - h, width: bounds.width, height: h)
-    }
-
-    private func updateComposeBar() {
-        guard let bar = composeBar else { return }
-        switch compose.phase {
-        case .live:
-            bar.isHidden = true
-        case .reviewIdle:
-            bar.monoFont = composeFont()
-            bar.isHidden = false
-            bar.showHint()
-        case .reviewDraft:
-            bar.monoFont = composeFont()
-            bar.isHidden = false
-            bar.showDraft(before: compose.before, preedit: compose.preedit, after: compose.after)
-        }
-        layoutComposeBar()
-    }
-
-    /// Keys the bar owns while reviewing. Returns true if fully consumed (no
-    /// further handling), false to fall through (control / ⌘ chords).
-    private func handleReviewKeyDown(_ event: NSEvent) -> Bool {
-        let mods = event.modifierFlags
-        // Control chords (Ctrl-C/D/Z…) go to the engine, which snaps to bottom.
-        // Discard the draft first so the snap doesn't auto-commit it.
-        if mods.contains(.control) {
-            compose.cancelForPassthrough()
-            return false
-        }
-        switch event.keyCode {
-        case 53:                      // Escape
-            compose.escape(); return true
-        case 36, 76:                  // Return, Keypad Enter
-            if mods.contains(.shift) { compose.newline() }
-            else if mods.contains(.command) { compose.commit(execute: true) }
-            else { compose.commit(execute: false) }
-            return true
-        case 51:                      // Delete (Backspace)
-            compose.backspace(); return true
-        case 117:                     // Forward Delete
-            compose.deleteForward(); return true
-        case 123:                     // Left
-            compose.moveLeft(); return true
-        case 124:                     // Right
-            compose.moveRight(); return true
-        case 126:                     // Up
-            reviewScroll(lines: -1); return true
-        case 125:                     // Down
-            reviewScroll(lines: 1); return true
-        case 116:                     // Page Up
-            reviewScroll(lines: -max(1, (currentSize?.rows ?? 10) - 2)); return true
-        case 121:                     // Page Down
-            reviewScroll(lines: max(1, (currentSize?.rows ?? 10) - 2)); return true
-        default:
-            return false              // printable / other → ⌘ handling + IME path
-        }
-    }
-
-    /// Scroll the history view by `lines` (negative = up/older) without touching
-    /// the engine key pipeline (so it doesn't snap to bottom).
-    func reviewScroll(lines: Int) {
-        guard let surface else { return }
-        // Match scrollWheel's sign: positive y scrolls toward older content.
-        ghostty_surface_mouse_scroll(surface, 0, Double(-lines), 0)
-        ghostty_surface_refresh(surface)
-        setNeedsDraw()
-    }
-
-    /// Inject a committed draft into the program's real input line via ghostty's
-    /// paste pipeline (bracketed-paste wrapping when the app enabled it) without
-    /// clobbering the system clipboard. `execute` then sends a CR to run it.
-    private func injectComposed(_ text: String, execute: Bool) {
-        guard let surface, !text.isEmpty else { return }
-        GhosttyRuntime.shared.pendingPasteText = text
-        GhosttyRuntime.shared.pasteSurface = surface
-        GhosttySel.bindingAction("paste_from_clipboard", on: surface)
-        if execute { sendReturn() }
-    }
-
-    private func sendReturn() {
-        guard let surface else { return }
-        let keyEvent = ghostty_input_key_s(
-            action: GHOSTTY_ACTION_PRESS,
-            mods: GHOSTTY_MODS_NONE,
-            consumed_mods: GHOSTTY_MODS_NONE,
-            keycode: 36,            // macOS virtual keycode for Return
-            text: nil,
-            unshifted_codepoint: 0,
-            composing: false
-        )
-        ghostty_surface_key(surface, keyEvent)
-    }
-
-    private func scrollComposeToBottom() {
-        guard let surface else { return }
-        GhosttySel.bindingAction("scroll_to_bottom", on: surface)
-        ghostty_surface_refresh(surface)
-    }
 }
 
 // NSTextInputClient is an unisolated AppKit protocol; the class is
