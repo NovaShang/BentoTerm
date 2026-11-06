@@ -430,7 +430,7 @@ struct TerminalWrapperView: View {
                     }
                 }
                 ToolbarItem(placement: .principal) {
-                    if viewModel.isTmuxReady { modeToggle }
+                    if showsModeSwitch { modeToggle }
                 }
             } else {
                 // A phone's bar has one usable slot. While the canvas is
@@ -701,6 +701,14 @@ struct TerminalWrapperView: View {
         }
     }
 
+    /// Parallel/Focus is offered once there is something to arrange: a second
+    /// pane or a second window (`SessionChrome`). A one-pane session is a plain
+    /// terminal, and a switch that changes nothing on screen is only noise.
+    private var showsModeSwitch: Bool {
+        viewModel.isTmuxReady && SessionChrome.showsModeSwitch(
+            paneCount: viewModel.sessionPanes.count, windowCount: viewModel.windows.count)
+    }
+
     /// The mode switch itself (a structure transformation shared by every
     /// attached device, not a view preference). The one confirmation:
     /// flattening a mixed external structure into List.
@@ -780,7 +788,7 @@ struct TerminalWrapperView: View {
                 // so the layout choice lives here instead (see modeSection).
                 // Fullscreen shows it everywhere (the iPad bar's toggle is
                 // floating then, and there is no bar to host the switch).
-                if !isRegularWidth || isFullscreen { modeSection }
+                if showsModeSwitch, !isRegularWidth || isFullscreen { modeSection }
                 layoutSection
                 releaseSizeButton
             }
@@ -1300,9 +1308,13 @@ final class PaneContainerVC: UIViewController {
     /// tap-a-path already uses means the browser can never read a different
     /// disk than the preview would.
     func presentFileBrowser() {
-        guard let target = focusedOrActiveVC,
+        guard let viewModel,
+              let target = focusedOrActiveVC,
               let provider = target.pathPreviewContext else { return }
-        let browser = FileTreeBrowserView(contextProvider: provider) { [weak self, weak target] path, _ in
+        // The pane the sheet browses — nil for a plain (non-tmux) shell.
+        let paneID = paneControllers.first(where: { $0.value === target })?.key
+        let browser = PaneFileTreeBrowser(viewModel: viewModel, paneID: paneID,
+                                          contextProvider: provider) { [weak self, weak target] path, _ in
             // One sheet at a time: let the browser go, then preview.
             self?.dismiss(animated: true) {
                 target?.presentPathPreviewSheet(path: path, line: nil)
@@ -2338,6 +2350,25 @@ extension PaneContainerVC {
 /// system drag interaction, so the phone's usual long-press-then-move applies
 /// and holding still keeps opening the context menu instead — a hand-rolled
 /// long-press gesture would have to fight that menu for the same touch.
+/// The Files sheet's tree, re-rooted when its pane `cd`s while the sheet is
+/// open. A directory change raises no event a client can see; tmux pushes it
+/// (`paneWorkingDirectories`, a `refresh-client -B` subscription), and that
+/// value is the tree's reload key. On tmux < 3.2 nothing is pushed, the key
+/// stays nil, and the sheet keeps the root it opened with — as before.
+private struct PaneFileTreeBrowser: View {
+    @ObservedObject var viewModel: TerminalViewModel
+    let paneID: TmuxPaneID?
+    let contextProvider: () -> PathPreviewContext?
+    let onOpenFile: (String, PathPreviewContext) -> Void
+
+    var body: some View {
+        FileTreeBrowserView(
+            reloadKey: paneID.flatMap { viewModel.paneWorkingDirectories[$0] },
+            contextProvider: contextProvider,
+            onOpenFile: onOpenFile)
+    }
+}
+
 struct WindowTabBar: View {
     @ObservedObject var viewModel: TerminalViewModel
     /// Handed to the "New Window" sheet so its working directory can be

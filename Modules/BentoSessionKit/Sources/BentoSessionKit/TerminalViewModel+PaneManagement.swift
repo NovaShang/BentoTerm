@@ -100,6 +100,12 @@ extension TerminalViewModel {
         // Panes that no longer exist anywhere: drop their recent text too,
         // so the per-pane dictionaries don't grow unbounded across splits/closes.
         for pane in dropped { recentOutput.clearPane(pane) }
+        // Same for pushed working directories. Only panes we had SEEN and that
+        // are now gone: a pane newer than this listing may already have its
+        // directory pushed, and tmux will not repeat an unchanged value.
+        if dropped.contains(where: { paneWorkingDirectories[$0] != nil }) {
+            for pane in dropped { paneWorkingDirectories[pane] = nil }
+        }
         if sessionPanes != allPanes { sessionPanes = allPanes }
         updatePaneViewModels(panes)
         recomputeSessionMode()

@@ -64,6 +64,14 @@ struct CommandTests {
         #expect(cmd.commandString == "send-keys -t %1 -l 'hello world'")
     }
 
+    /// The format holds `#{…}`: unquoted, tmux reads `#` as a comment and the
+    /// subscription silently loses its format. One argument — tmux splits
+    /// name:what:format itself.
+    @Test func subscribeQuotesTheFormat() {
+        let cmd = TmuxCommand.subscribe(name: "bento_cwd", target: "%*", format: "#{pane_current_path}")
+        #expect(cmd.commandString == "refresh-client -B 'bento_cwd:%*:#{pane_current_path}'")
+    }
+
     @Test func refreshClient() {
         let cmd = TmuxCommand.refreshClient(width: 120, height: 40)
         #expect(cmd.commandString == "refresh-client -C 120,40")

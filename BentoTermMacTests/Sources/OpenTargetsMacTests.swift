@@ -88,7 +88,7 @@ import BentoUISharedKit
         #expect(recents.map(\.title) == ["claude  ·  /tmp"])
     }
 
-    @Test func targetsCarryNoPaletteOrSwiftUITypes() {
+    @Test func targetsCarryNoClosuresOrSwiftUITypes() {
         // The contract that lets the Dock menu and App Intents consume this:
         // a target is inert data. Equality across two independently built
         // providers only holds because nothing in it is a closure.

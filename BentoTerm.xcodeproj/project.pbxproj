@@ -10,7 +10,6 @@
 		0004FD435221A6B8EE0D4CE3 /* SSHFailureMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CA929E54636F2D487A90169 /* SSHFailureMessageTests.swift */; };
 		0134653A60C317674A77BA89 /* PreviewDock_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7665217835A4054C96BF0849 /* PreviewDock_macOS.swift */; };
 		076D9075BDE6553238396FBE /* HostStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4803E3F5247DDE54AEFD2E4B /* HostStoreTests.swift */; };
-		07805B57C98FFB458CF356D4 /* CommandPaletteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD437B6718BACF11393153D5 /* CommandPaletteTests.swift */; };
 		08E0D29E0B87D940D3A7B9C6 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = A64AE9E623020BB5D5846E5E /* GhosttyKit */; };
 		0DF0C974375A3AEF4600EFC0 /* BentoTmuxKit in Frameworks */ = {isa = PBXBuildFile; productRef = F041BB764D65EF7832D661DE /* BentoTmuxKit */; };
 		192B2D2F755BD406019F8F08 /* MacPortForwarder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62053B9B6ACE43B9D19B1849 /* MacPortForwarder.swift */; };
@@ -24,7 +23,6 @@
 		2D0D3C403373C25D72F2AF79 /* TmuxCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = C924A57EB55D22991ED5C268 /* TmuxCLI.swift */; };
 		2E414E2C5007C72AA77F9059 /* BentoGhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = FEB433042508CBFC8CC88F73 /* BentoGhosttyKit */; };
 		2E68A8D6745D1821025EF321 /* DockMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4CA9766A043F5494CE71E70 /* DockMenu.swift */; };
-		2F37EC36D0687C906A1A74F4 /* LauncherModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 015810BD0D9FE818A1D554F1 /* LauncherModelTests.swift */; };
 		33FEF1503938876E1E5CFAC2 /* SSHConfigHosts_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = F48438B4652DD480581513DC /* SSHConfigHosts_macOS.swift */; };
 		341CF69E9B598D00045A814C /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 0181295013BB3A720C9550C1 /* Citadel */; };
 		354615115BE921DEC8C6DE30 /* BentoFilePreviewKit in Frameworks */ = {isa = PBXBuildFile; productRef = 9FFB4D8CEA3A5CDB1A432888 /* BentoFilePreviewKit */; };
@@ -46,7 +44,6 @@
 		62121B4103E924F730126D41 /* BentoVoiceKit in Frameworks */ = {isa = PBXBuildFile; productRef = 652BB3841174D307C9EE84CF /* BentoVoiceKit */; };
 		62C8DF9ED83DD7EF87ABC311 /* MacVoiceController_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E4566DBC1CA2E6668378EF /* MacVoiceController_macOS.swift */; };
 		65CBA7B8C49BB7288D07D02A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F42A4B4AE7104B7199E93DA /* AppDelegate.swift */; };
-		67491125BC45E7753E57B31A /* LauncherModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6628571E93E712CBC68D5146 /* LauncherModel.swift */; };
 		688722CF5B0893C7B2DD0A51 /* BentoSessionKit in Frameworks */ = {isa = PBXBuildFile; productRef = 7E3B5CE3E7764405AEDFE229 /* BentoSessionKit */; };
 		6CBD84F798DD242571C294E9 /* BentoUISharedKit in Frameworks */ = {isa = PBXBuildFile; productRef = F19694B3F0BE043605E42DAF /* BentoUISharedKit */; };
 		6E18A222389C3A2FDC1870C4 /* BentoFoundationKit in Frameworks */ = {isa = PBXBuildFile; productRef = 39EB79202F55AFFF3B77D4DF /* BentoFoundationKit */; };
@@ -74,7 +71,6 @@
 		931467E6D3C6192C5D0649F6 /* GhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 913BEC53E4BC77D1DA0971DD /* GhosttyKit */; };
 		93CDD1F21AB0D362454751FE /* SessionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = B75E58A2AE8BB259D1E2A63A /* SessionsMenu.swift */; };
 		94815DBFF71E8BF1E3FC403D /* HapticService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C7096EA4BFE9BD6C81ACB83 /* HapticService.swift */; };
-		94B0B2FA9A351F39BC54EDEA /* CommandPaletteController_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EEBC570CE1FECDCB8F4839A /* CommandPaletteController_macOS.swift */; };
 		96DE6781B70322DBE7D06697 /* IOSPortForwarder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766EF2138AFDF04717EE3132 /* IOSPortForwarder.swift */; };
 		A4BAAD18E35074AD734AE434 /* TerminalColorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AA380AC141FE59EA92F8BBF /* TerminalColorTheme.swift */; };
 		A7D5920747EFC82F92258936 /* VoicePressGesture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AB656CA8F56E6016903CD6B /* VoicePressGesture.swift */; };
@@ -98,7 +94,6 @@
 		E12CFE5D3ECE943195DDA85C /* FilePreviewPanel_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D2E1051A5DBA07DF8687860 /* FilePreviewPanel_macOS.swift */; };
 		E130732CC1A4340B8D1C679E /* BentoUISharedKit in Frameworks */ = {isa = PBXBuildFile; productRef = B8D307C163DE0594C96584A1 /* BentoUISharedKit */; };
 		E30BCEE7DB373D6CA4C43F1B /* WebSheetPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78C811BD479E36CD28EE04A5 /* WebSheetPresenter.swift */; };
-		E45B8D18D99331FC13C1248B /* LauncherWindow_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE75853EE67ACF330BAA0F2F /* LauncherWindow_macOS.swift */; };
 		E8233DFCEDB62F09D7247726 /* BentoFilePreviewKit in Frameworks */ = {isa = PBXBuildFile; productRef = DE362A7DB877D64835B7BC67 /* BentoFilePreviewKit */; };
 		F24991CEB3F9390F1AC0D389 /* BentoMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C4A837B9CCF54EBAD7A6C2 /* BentoMark.swift */; };
 		F26D562072F2FB5A879D27E2 /* LocalPty_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17153E75F17F00881A8B94BC /* LocalPty_macOS.swift */; };
@@ -127,7 +122,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		015810BD0D9FE818A1D554F1 /* LauncherModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherModelTests.swift; sourceTree = "<group>"; };
 		037698AF7E6B1096A0C55B73 /* OpenTargets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenTargets.swift; sourceTree = "<group>"; };
 		0643C3C972EA2C012C63767A /* LocalPtyTransport_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPtyTransport_macOS.swift; sourceTree = "<group>"; };
 		0946E5B1A8FBCF38BBA45A6A /* TerminalContainerVC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalContainerVC.swift; sourceTree = "<group>"; };
@@ -157,7 +151,6 @@
 		62053B9B6ACE43B9D19B1849 /* MacPortForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPortForwarder.swift; sourceTree = "<group>"; };
 		65672D777444AB77E35217FF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		657CBA69B22D6D31ABE4AEBA /* SSHFailureMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHFailureMessage.swift; sourceTree = "<group>"; };
-		6628571E93E712CBC68D5146 /* LauncherModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherModel.swift; sourceTree = "<group>"; };
 		672660AE602A5D3F45E5260C /* LocalPtyTransportExitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPtyTransportExitTests.swift; sourceTree = "<group>"; };
 		7364E154E2E25F681044EB28 /* GhosttyTerminalWindow_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyTerminalWindow_macOS.swift; sourceTree = "<group>"; };
 		749DA8B50F55E6C00C93987E /* BentoTmuxKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BentoTmuxKit; path = Modules/BentoTmuxKit; sourceTree = SOURCE_ROOT; };
@@ -174,13 +167,10 @@
 		922F13A99F720F4A2A7EC814 /* BentoVoiceKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = BentoVoiceKit; path = Modules/BentoVoiceKit; sourceTree = SOURCE_ROOT; };
 		982A590D038A77CF72EBB363 /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
 		9D2E1051A5DBA07DF8687860 /* FilePreviewPanel_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePreviewPanel_macOS.swift; sourceTree = "<group>"; };
-		9EEBC570CE1FECDCB8F4839A /* CommandPaletteController_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteController_macOS.swift; sourceTree = "<group>"; };
 		A79506589FAADCC2767D8287 /* MapleMono-NF-CN-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "MapleMono-NF-CN-Regular.ttf"; sourceTree = "<group>"; };
 		A81310C1D2D1A7B7BCB38483 /* SoftwareUpdateSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareUpdateSection.swift; sourceTree = "<group>"; };
 		A91FFC1F002B2A858BA6BD4C /* BentoTermTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BentoTermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AD2FC80BBACA3BB9527CB5BD /* HostSessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSessionsView.swift; sourceTree = "<group>"; };
-		AD437B6718BACF11393153D5 /* CommandPaletteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteTests.swift; sourceTree = "<group>"; };
-		AE75853EE67ACF330BAA0F2F /* LauncherWindow_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LauncherWindow_macOS.swift; sourceTree = "<group>"; };
 		AF9DBB6D03D227C62D3B9816 /* WelcomeFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeFlowView.swift; sourceTree = "<group>"; };
 		B06F422BAC36C23B8F22B665 /* MacKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacKeychain.swift; sourceTree = "<group>"; };
 		B73561C6F88999D2ABEF2F0B /* GhosttyKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GhosttyKit; path = Modules/GhosttyKit; sourceTree = SOURCE_ROOT; };
@@ -317,8 +307,6 @@
 			children = (
 				4F42A4B4AE7104B7199E93DA /* AppDelegate.swift */,
 				0BF84CFBF93345463C8E1B86 /* BentoTermMacApp.swift */,
-				6628571E93E712CBC68D5146 /* LauncherModel.swift */,
-				AE75853EE67ACF330BAA0F2F /* LauncherWindow_macOS.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -379,7 +367,6 @@
 			isa = PBXGroup;
 			children = (
 				C457641AFF45E7019B2FA344 /* AgentWizardWindow.swift */,
-				9EEBC570CE1FECDCB8F4839A /* CommandPaletteController_macOS.swift */,
 				E4CA9766A043F5494CE71E70 /* DockMenu.swift */,
 				9D2E1051A5DBA07DF8687860 /* FilePreviewPanel_macOS.swift */,
 				C1B2FFDC5ED192F9C857392B /* GhosttyTerminalTabBar_macOS.swift */,
@@ -405,8 +392,6 @@
 		8A0C9F92DD8728DC67C94CCB /* Sources */ = {
 			isa = PBXGroup;
 			children = (
-				AD437B6718BACF11393153D5 /* CommandPaletteTests.swift */,
-				015810BD0D9FE818A1D554F1 /* LauncherModelTests.swift */,
 				672660AE602A5D3F45E5260C /* LocalPtyTransportExitTests.swift */,
 				F6BF81C6F8E8DCF8DF46D418 /* OpenTargetsMacTests.swift */,
 				F3D1B826E7150998CF4FA1BB /* PreviewDockModelTests.swift */,
@@ -784,8 +769,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				07805B57C98FFB458CF356D4 /* CommandPaletteTests.swift in Sources */,
-				2F37EC36D0687C906A1A74F4 /* LauncherModelTests.swift in Sources */,
 				8A1E631CA77891E808D0BC64 /* LocalPtyTransportExitTests.swift in Sources */,
 				DBE9099B783192484E965E16 /* OpenTargetsMacTests.swift in Sources */,
 				DC68501D8E3453C185AFCAD2 /* PreviewDockModelTests.swift in Sources */,
@@ -836,14 +819,11 @@
 				65CBA7B8C49BB7288D07D02A /* AppDelegate.swift in Sources */,
 				7C7DAFD3F0B93180F263622B /* AppUpdater.swift in Sources */,
 				D91A2F0B90BCAE4198E80791 /* BentoTermMacApp.swift in Sources */,
-				94B0B2FA9A351F39BC54EDEA /* CommandPaletteController_macOS.swift in Sources */,
 				2E68A8D6745D1821025EF321 /* DockMenu.swift in Sources */,
 				E12CFE5D3ECE943195DDA85C /* FilePreviewPanel_macOS.swift in Sources */,
 				596A5E4F204F9B5C272D7A51 /* GhosttyTerminalTabBar_macOS.swift in Sources */,
 				870E930C9DDB0A987B78CCF7 /* GhosttyTerminalWindow_macOS.swift in Sources */,
 				290D08C30B891884D76A97D5 /* GhosttyTiledPaneHost_macOS.swift in Sources */,
-				67491125BC45E7753E57B31A /* LauncherModel.swift in Sources */,
-				E45B8D18D99331FC13C1248B /* LauncherWindow_macOS.swift in Sources */,
 				C1C668B1149BED34D8244DB0 /* LocalPtyTransport_macOS.swift in Sources */,
 				F26D562072F2FB5A879D27E2 /* LocalPty_macOS.swift in Sources */,
 				717EFF5EF6601382EDA82A1A /* MacKeychain.swift in Sources */,
@@ -900,7 +880,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.BentoTermMacTests;
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BentoTerm.app/Contents/MacOS/BentoTerm";
@@ -998,7 +978,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1036,7 +1016,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.BentoTermMacTests;
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BentoTerm.app/Contents/MacOS/BentoTerm";
@@ -1062,7 +1042,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 0.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.mac;
 				PRODUCT_NAME = BentoTerm;
@@ -1123,7 +1103,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -1180,7 +1160,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 0.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bento.term.mac;
 				PRODUCT_NAME = BentoTerm;

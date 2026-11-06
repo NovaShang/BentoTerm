@@ -27,20 +27,26 @@ struct BentoTermMacApp: App {
 }
 
 /// The Shell menu for Bento terminal windows (split / zoom / navigate / close),
-/// plus File → New Window.
+/// plus File → New Pane / New Window.
 struct TerminalCommands: Commands {
     var body: some Commands {
-        // ⌘N is the reflex key for "give me one more of these" in every Mac
-        // app, so it always makes a new one — never a no-op when a window is
-        // already up. What lands in it is the launcher: ⌘N asks, ⌘⇧T (New Empty
-        // Session, below) doesn't. Whether that new one is a window or a tab is
-        // the placement preference's answer, the same as for a session, because
-        // what ⌘N opens is a session window that hasn't chosen its session yet.
-        // Reopen-the-last-session is a RESTORE gesture and lives where restore
-        // gestures belong: the Dock icon and launch (`openMainWindow`).
+        // The app is a single-window terminal by default, so ⌘N — the reflex
+        // key for "one more" — adds to the session you are in instead of
+        // opening another window: a pane split along the active pane's longer
+        // side in Parallel, a tmux window in Focus. Its title follows the
+        // front session's mode ("New Pane" / "New tmux Window"); that is done
+        // on the AppKit item (`BentoTerminalWindow.refreshNewItemTitle`), not
+        // with observed state here — see there for why. With no session
+        // window, ⌘N opens one the way launch does.
+        //
+        // ⇧⌘N is the explicit second window: a new Mac window holding a new
+        // session, `<default>-2`, `-3`…. Every other kind of new thing is in
+        // the toolbar's ＋ menu.
         CommandGroup(replacing: .newItem) {
-            Button("New Window") { BentoTerminalWindow.newSessionWindow() }
+            Button(BentoTerminalWindow.newPaneTitle) { BentoTerminalWindow.newPaneOrWindow() }
                 .keyboardShortcut("n", modifiers: .command)
+            Button("New Window") { BentoTerminalWindow.newSessionWindow() }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
         }
 
         // Where every Mac app keeps it: straight under "About BentoTerm".
@@ -49,13 +55,11 @@ struct TerminalCommands: Commands {
         }
 
         CommandMenu("Shell") {
-            Button("Command Palette…") { BentoTerminalWindow.presentCommandPalette() }
-                .keyboardShortcut("p", modifiers: .command)
             Button("Toggle Preview Panel") { BentoTerminalWindow.togglePreviewDock() }
                 .keyboardShortcut("p", modifiers: [.command, .option])
             Divider()
-            // Scoped to the ACTIVE PANE's scrollback — the omnibox above is the
-            // app-wide one. Standard macOS find keys so nobody has to learn them.
+            // Scoped to the ACTIVE PANE's scrollback. Standard macOS find keys
+            // so nobody has to learn them.
             Button("Find…") { BentoPaneAction.dispatch(BentoPaneAction.findInPane) }
                 .keyboardShortcut("f", modifiers: .command)
             Button("Find Next") { BentoPaneAction.dispatch(BentoPaneAction.findNext) }
@@ -74,7 +78,7 @@ struct TerminalCommands: Commands {
             // new-window sat on ⌃⌘T. Frequency and resistance were inverted.
             Button("New tmux Window") { BentoPaneAction.dispatch(BentoPaneAction.newTmuxWindow) }
                 .keyboardShortcut("t", modifiers: .command)
-            // Same two names the toolbar's `+`, the launcher page and the Dock
+            // Same two names the toolbar's `+` and the Dock
             // menu use (`LaunchAction`). This menu used to say "New Session"
             // for the blank one — which stopped being unambiguous the moment an
             // agent session sat beside it — and "New Window (no tmux)" for a

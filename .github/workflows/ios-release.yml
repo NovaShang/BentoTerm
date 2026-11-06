@@ -3,7 +3,7 @@
 # Why this exists: builds archived on this project's dev Mac are rejected with
 # ITMS-90111 ("Unsupported SDK or Xcode version") because that machine runs a
 # beta macOS and Apple reads the BuildMachineOSBuild stamp — the Xcode (26.6)
-# and SDK (iphoneos26.5) in those builds were already correct. The macos-26
+# and SDK (iphoneos26.5) in those builds were already correct. The Xcode 27
 # runner has a released OS, so its archives carry a clean stamp.
 #
 # It also removes the manual step: no Xcode Organizer, no interactive Apple ID
@@ -22,7 +22,7 @@ on:
 
 jobs:
   ios-app:
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
 

@@ -26,7 +26,8 @@ struct HostSessionsView: View {
 
     @StateObject private var lister: TmuxLister
 
-    @State private var newSessionName: String = TmuxSessionNaming.defaultName
+    /// Starts as Settings → General → Default session name (`bento` unset).
+    @State private var newSessionName: String = TmuxSessionNaming.configuredDefault()
     @State private var showNameField = false
     @FocusState private var nameFieldFocused: Bool
     @State private var isStartingNew = false

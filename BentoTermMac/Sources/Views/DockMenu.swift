@@ -5,8 +5,8 @@ import BentoUISharedKit
 
 /// The menu behind a right-click on the Dock icon.
 ///
-/// This is the third surface built on `OpenTargetProvider`, after the command
-/// palette — and it is the one that pays for the provider existing. Closing the
+/// This is the surface built on `OpenTargetProvider` — and it is the one that
+/// pays for the provider existing. Closing the
 /// last window does not quit BentoTerm (`applicationShouldTerminateAfterLast‐
 /// WindowClosed` is `false`), so the app routinely sits in the Dock with zero
 /// windows, and until now the only way back in was a plain click on the icon,
@@ -22,27 +22,20 @@ import BentoUISharedKit
 /// small file, and the recents come from `UserDefaults`. No `tmux` shell-out,
 /// and specifically no ssh: enumerating sessions on a remote host is a network
 /// round trip that can also stop on a password or 2FA prompt, which is why the
-/// SSH section offers hosts (`ssh <alias>`, exactly as the palette does) rather
+/// SSH section offers hosts (`ssh <alias>`) rather
 /// than sessions on them.
 ///
-/// Vocabulary and ordering are deliberately the launcher's, so the surfaces
-/// can't disagree about what a thing is called or where it sits: the three
-/// creation verbs (`LaunchAction.displayOrder`), then "Sessions", "Recent
-/// Launches", "SSH Hosts". The verbs lead for the reason the launcher page
-/// gives (docs/launcher-design.md §5) — the commonest thing to want from a
-/// standing start is a quick shell to run one command in, and it used to be the
+/// Order: the three creation verbs (`LaunchAction.displayOrder`), then
+/// "Sessions", "Recent Launches", "SSH Hosts". The verbs lead because the
+/// commonest thing to want from a standing start is a quick shell to run one command in, and it used to be the
 /// last item in this menu, spelled "New Window", behind however many sessions
 /// and hosts happened to exist.
 ///
-/// That "New Window" row is gone, not renamed. It opened the launcher, i.e. it
-/// answered "what can I open?" with the same question again; now that the three
-/// answers are in this menu, the round trip is what it was worth.
 @MainActor
 enum DockMenu {
     /// Caps, not scrollbars. A Dock menu is read at a glance while the pointer
     /// is already moving; past roughly half a dozen rows a section stops being
-    /// scannable and the palette (⌘P, fuzzy-matched, unbounded) is the better
-    /// tool. The numbers differ per section by how fast the tail decays:
+    /// scannable and the toolbar's ＋ and Session menus are the better tools. The numbers differ per section by how fast the tail decays:
     /// sessions are few and all plausible; a `~/.ssh/config` can hold dozens of
     /// aliases of which a handful are ever opened by hand; and for recents only
     /// the newest few are ever the one you meant.

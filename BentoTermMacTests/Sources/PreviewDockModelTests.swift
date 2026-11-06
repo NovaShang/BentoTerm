@@ -73,3 +73,39 @@ import BentoFilePreviewKit
         #expect(m.selectedID == "/a.txt")
     }
 }
+
+/// The toolbar's centre title — the same focused-pane directory the dock
+/// follows, plus what is running there.
+@Suite struct PaneLocationTitleTests {
+    private let home = "/Users/me"
+
+    @Test func bareShellShowsOnlyThePath() {
+        #expect(PaneLocationTitle.text(command: "zsh", directory: "/Users/me/proj",
+                                       sshHost: nil, home: home) == "~/proj")
+        #expect(PaneLocationTitle.text(command: "-bash", directory: "/Users/me",
+                                       sshHost: nil, home: home) == "~")
+    }
+
+    @Test func programLeadsThePath() {
+        #expect(PaneLocationTitle.text(command: "claude", directory: "/Users/me/proj",
+                                       sshHost: nil, home: home) == "claude · ~/proj")
+    }
+
+    @Test func homeIsOnlyAbbreviatedOnAWholeComponent() {
+        #expect(PaneLocationTitle.text(command: nil, directory: "/Users/meow/x",
+                                       sshHost: nil, home: home) == "/Users/meow/x")
+    }
+
+    @Test func remoteNamesTheHostAndKeepsItsPath() {
+        #expect(PaneLocationTitle.text(command: "vim", directory: "/Users/me/proj",
+                                       sshHost: "gpu-box", home: home)
+                == "vim · gpu-box: /Users/me/proj")
+        #expect(PaneLocationTitle.text(command: nil, directory: nil,
+                                       sshHost: "gpu-box", home: home) == "gpu-box")
+    }
+
+    @Test func nothingKnownIsNil() {
+        #expect(PaneLocationTitle.text(command: "zsh", directory: nil,
+                                       sshHost: nil, home: home) == nil)
+    }
+}

@@ -377,11 +377,8 @@ struct PreviewDock: View {
         .frame(height: 36)
     }
 
-    /// "+" makes a real, empty tab with the cursor in its address bar.
-    ///
-    /// It used to open the command palette, on the theory that a blank tab has
-    /// nothing to show. But "I know the URL I want" is the ordinary case, and
-    /// routing that through a file-search panel is a puzzle, not a shortcut.
+    /// "+" makes a real, empty tab with the cursor in its address bar —
+    /// "I know the URL I want" is the ordinary case.
     private var newTabButton: some View {
         Button {
             model.openWeb(url: nil, origin: BentoTerminalWindow.focusedLinkOrigin())

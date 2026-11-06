@@ -8,8 +8,7 @@ import BentoUISharedKit
 /// There is no split view here to put a panel in, so a page gets exactly the
 /// standing a file preview has: a sheet over the terminal, same detents, same
 /// grabber. Passive only — a page arrives because you tapped a link or took the
-/// offer of a dev server, never because you typed an address, which is what ⌘P
-/// is for and the phone has no ⌘P.
+/// offer of a dev server, never because you typed an address.
 ///
 /// Where this really earns its place: on a Mac you can always drop to a shell
 /// and run `ssh -L` yourself. On a phone you cannot, so "the agent started a

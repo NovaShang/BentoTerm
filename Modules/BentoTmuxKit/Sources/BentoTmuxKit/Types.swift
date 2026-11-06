@@ -65,6 +65,12 @@ public enum TmuxNotification: Sendable {
     /// Code copies exactly this way (`tmux load-buffer -w -`) once it detects
     /// tmux, so without acting on this notification its "copy" reaches nothing.
     case pasteBufferChanged(name: String)
+    /// A format subscribed with `refresh-client -B` changed value (tmux ≥ 3.2).
+    /// tmux re-evaluates subscriptions at most once a second and reports only a
+    /// CHANGED value, so this is a push, not a poll. `pane` is nil for a
+    /// session- or window-scoped subscription (tmux writes `-` there). `value`
+    /// is the expanded format verbatim — it may hold spaces and colons.
+    case subscriptionChanged(name: String, pane: TmuxPaneID?, value: String)
     case exit(reason: String?)
 }
 

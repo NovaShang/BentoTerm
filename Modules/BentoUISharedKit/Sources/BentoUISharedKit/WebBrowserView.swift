@@ -60,11 +60,6 @@ public struct WebBrowserView: View {
     /// you want to go is the ordinary case — and the way out to the real
     /// browser.
     ///
-    /// The address shipped read-only on the theory that ⌘P was the address bar.
-    /// It isn't: nobody guesses that the file palette takes URLs, and the
-    /// palette is not even reachable from a pane with no tmux behind it. A
-    /// browser has an address bar.
-    ///
     /// There is deliberately no "which machine" chip. It said "This Mac" almost
     /// all the time, and on the occasions it said something else the window
     /// title had already said it — every pane in a window is on the same host,
@@ -122,9 +117,9 @@ public struct WebBrowserView: View {
         .background(Color.primary.opacity(0.04))
     }
 
-    /// Accepts exactly what ⌘P accepts — `localhost:3000`, `github.com/x`, a
-    /// full URL — because they are the same parser. `localhost` means the
-    /// machine this tab's pane is on, the same one the window title names.
+    /// Accepts `localhost:3000`, `github.com/x` or a full URL (`WebAddress`).
+    /// `localhost` means the machine this tab's pane is on, the same one the
+    /// window title names.
     private var addressField: some View {
         TextField("Address", text: $typed)
             .textFieldStyle(.plain)
@@ -136,7 +131,7 @@ public struct WebBrowserView: View {
                 // address that doesn't parse, blurring would revert the text
                 // and leave no trace that anything was wrong — the cursor
                 // staying put is the feedback.
-                guard PaletteURL.candidate(for: typed) != nil else { return }
+                guard WebAddress.candidate(for: typed) != nil else { return }
                 let text = typed
                 Task { await tab.navigate(to: text) }
                 addressFocused = false

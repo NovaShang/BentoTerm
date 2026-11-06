@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.bento.term
   deploymentTarget:
     iOS: "17.0"
-    macOS: "14.0"
+    macOS: "27.0"
   xcodeVersion: "26.4"
   defaultConfig: Debug
   # Nest groups per directory so Xcode's navigator mirrors the real
@@ -190,7 +190,7 @@ targets:
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Bento needs microphone access for voice input to terminal."
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Bento uses speech recognition to convert voice to text and shell commands."
         PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.mac
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "27.0"
         # App version surfaced in Finder/About and reported by Telemetry
         # (CFBundleShortVersionString). Bump alongside release tags.
         MARKETING_VERSION: "0.7.0"
@@ -267,5 +267,5 @@ targets:
         # Contents/MacOS — spell it out or the host app is missing.
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/BentoTerm.app/Contents/MacOS/BentoTerm"
         PRODUCT_BUNDLE_IDENTIFIER: com.bento.term.BentoTermMacTests
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "27.0"
 

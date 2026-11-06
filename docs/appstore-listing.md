@@ -118,7 +118,7 @@ M5 模拟器现成）。各出一套，en/zh 各一份说明字（同底图换�
 | 3 | 语音输入进行中，转写含代码名 | Say it, don't type it / 动口，不动手 |
 | 4 | 同一会话（与 1 同布局）继续在跑 | Leave the desk, not the work / 人走，活不停 |
 | 5 | 文件树 + Markdown/代码预览 | See the files, not just the output / 看得到文件，不只是输出 |
-| 6 | 主题/字体或 ⌘P 面板（iPad 版换 Parallel 全景） | Small things, done properly / 小事，也认真做 |
+| 6 | 主题/字体（⌘P 面板 2026-11-05 已删）（iPad 版换 Parallel 全景） | Small things, done properly / 小事，也认真做 |
 
 iPad 套：1=Parallel 全景（最能打的图，放第一）、2=Focus、3=语音、4=文件预览、
 5=琥珀确认。

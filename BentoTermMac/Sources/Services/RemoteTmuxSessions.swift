@@ -10,8 +10,8 @@ import BentoTmuxKit
 /// from a list after connecting; here the list has to come first, so it comes
 /// from a separate, short-lived `ssh <alias> tmux list-sessions`.
 ///
-/// Cheap enough to run on a drill-in (one connection, ~6s ceiling, cached for a
-/// few seconds so re-rendering the palette doesn't re-ssh), and honest when it
+/// Cheap enough to run when the host's submenu opens (one connection, ~6s ceiling, cached for a
+/// few seconds so reopening the menu doesn't re-ssh), and honest when it
 /// can't: a host that wants a password we don't have says so, rather than
 /// showing an empty list that reads as "nothing running here".
 @MainActor

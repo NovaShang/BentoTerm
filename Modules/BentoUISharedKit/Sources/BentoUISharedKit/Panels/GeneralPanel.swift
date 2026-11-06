@@ -53,6 +53,11 @@ public struct GeneralPanel<Extra: View>: View {
 
     @State private var agents: [DetectedAgent] = []
     @State private var scanning = true
+    /// What the field shows while being edited. Stored only once it is made
+    /// addressable (`commitDefaultName`), so a half-typed `foo.` never becomes
+    /// the name a launch reaches for.
+    @State private var defaultNameDraft = ""
+    @FocusState private var defaultNameFocused: Bool
 
     /// - Parameters:
     ///   - facts: the tmux the Mac resolved. nil on iOS, where tmux belongs to
@@ -83,6 +88,22 @@ public struct GeneralPanel<Extra: View>: View {
                             .multilineTextAlignment(.trailing)
                     }
                 }
+            }
+
+            Section {
+                TextField("Default session name", text: $defaultNameDraft,
+                          prompt: Text(TmuxSessionNaming.defaultName))
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .focused($defaultNameFocused)
+                    .onSubmit(commitDefaultName)
+                    .onChange(of: defaultNameFocused) { _, focused in
+                        if !focused { commitDefaultName() }
+                    }
+            } header: { Text("Sessions") } footer: {
+                PanelNote(Self.sessionsCopy)
             }
 
             Section {
@@ -118,10 +139,38 @@ public struct GeneralPanel<Extra: View>: View {
         .bentoPanelForm()
         // Scanned each time the page opens, which is what a Re-scan button
         // used to be for.
+        .onAppear { defaultNameDraft = Self.storedDefaultName }
+        .onDisappear(perform: commitDefaultName)
         .task {
             agents = await InstalledAgents.scan()
             scanning = false
         }
+    }
+
+    /// The stored name, as typed (empty = none set, so the prompt shows).
+    private static var storedDefaultName: String {
+        UserDefaults.standard.string(forKey: TmuxSessionNaming.defaultNameKey) ?? ""
+    }
+
+    /// Store what was typed, made addressable (`foo.bar` → `foo-bar`); blank
+    /// clears it, which means `bento`. The field is rewritten with what was
+    /// stored so it never shows a name tmux would not take.
+    private func commitDefaultName() {
+        let name = TmuxSessionNaming.typed(defaultNameDraft)
+        if let name {
+            UserDefaults.standard.set(name, forKey: TmuxSessionNaming.defaultNameKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: TmuxSessionNaming.defaultNameKey)
+        }
+        defaultNameDraft = name ?? ""
+    }
+
+    private static var sessionsCopy: LocalizedStringKey {
+        #if os(macOS)
+        return "The tmux session Bento opens when you start it with nothing to go back to. New Window (⇧⌘N) adds -2, -3…"
+        #else
+        return "The name a new session on a host starts with."
+        #endif
     }
 
     private static var hooksURL: URL { URL(string: "https://github.com/NovaShang/BentoTerm#agent-hooks")! }

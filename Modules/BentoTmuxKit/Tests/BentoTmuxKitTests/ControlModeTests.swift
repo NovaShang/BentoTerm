@@ -911,3 +911,110 @@ struct PreGreetingWriteTests {
         #expect(sent.current.isEmpty)
     }
 }
+
+/// `refresh-client -B` subscriptions (tmux ≥ 3.2): how Bento learns a pane's
+/// working directory changed without asking on a timer. The value is a path,
+/// so the parse must survive spaces and colons in it.
+@Suite("%subscription-changed")
+struct SubscriptionChangedTests {
+    private func subscriptions(_ c: NotificationCollector) -> [(String, TmuxPaneID?, String)] {
+        c.notifications.compactMap {
+            if case .subscriptionChanged(let name, let pane, let value) = $0 { return (name, pane, value) }
+            return nil
+        }
+    }
+
+    @Test func plainPaneValue() {
+        let (s, c) = makeAttachedService()
+        s.feedData(Data("%subscription-changed bento_cwd $1 @2 0 %3 : /Users/me/code\n".utf8))
+        let subs = subscriptions(c)
+        #expect(subs.count == 1)
+        #expect(subs.first?.0 == "bento_cwd")
+        #expect(subs.first?.1 == TmuxPaneID(3))
+        #expect(subs.first?.2 == "/Users/me/code")
+    }
+
+    @Test func valueKeepsSpacesAndColons() {
+        let p = TmuxControlMode.parseSubscriptionChanged(
+            "%subscription-changed bento_cwd $0 @0 1 %12 : /tmp/a b:c/ : d /x ")
+        #expect(p?.name == "bento_cwd")
+        #expect(p?.pane == TmuxPaneID(12))
+        #expect(p?.value == "/tmp/a b:c/ : d /x ")
+    }
+
+    /// "Any arguments after pane-id up until a single ':' are for future use
+    /// and should be ignored" — tokens that merely CONTAIN a colon are not it.
+    @Test func futureFieldsBeforeTheColonAreIgnored() {
+        let p = TmuxControlMode.parseSubscriptionChanged(
+            "%subscription-changed n $0 @0 1 %4 future x:y : /srv/app")
+        #expect(p?.pane == TmuxPaneID(4))
+        #expect(p?.value == "/srv/app")
+    }
+
+    @Test func sessionScopedHasNoPane() {
+        let p = TmuxControlMode.parseSubscriptionChanged("%subscription-changed s $0 - - - : value")
+        #expect(p != nil)
+        #expect(p?.pane == nil)
+        #expect(p?.value == "value")
+    }
+
+    @Test func emptyValue() {
+        #expect(TmuxControlMode.parseSubscriptionChanged("%subscription-changed n $0 @0 0 %1 : ")?.value == "")
+        #expect(TmuxControlMode.parseSubscriptionChanged("%subscription-changed n $0 @0 0 %1 :")?.value == "")
+    }
+
+    @Test func malformedIsRejected() {
+        #expect(TmuxControlMode.parseSubscriptionChanged("%subscription-changed n $0 @0 0 %1") == nil)
+        #expect(TmuxControlMode.parseSubscriptionChanged("%subscription-changed n : /x") == nil)
+    }
+
+    /// tmux sends these on its own timer, unsynchronised with whatever command
+    /// is in flight — mid-block it must route out, not join the response.
+    @Test func routesOutOfABlock() async {
+        let (service, collector) = makeAttachedService()
+        service.sendToSSH = { _ in }
+        let task = Task { await service.send(.listPanes()) }
+        try? await Task.sleep(for: .milliseconds(50))
+        service.feedData(Data(
+            "%begin 1 100 1\nline1\n%subscription-changed bento_cwd $0 @0 0 %0 : /a b\nline2\n%end 1 100 1\n".utf8))
+        #expect(await task.value.output == "line1\nline2")
+        #expect(subscriptions(collector).first?.2 == "/a b")
+    }
+
+    @Test func junkPrefixedInsideABlockRoutesOut() async {
+        let (service, collector) = makeAttachedService()
+        service.sendToSSH = { _ in }
+        let task = Task { await service.send(.listPanes()) }
+        try? await Task.sleep(for: .milliseconds(50))
+        service.feedData(Data(
+            "%begin 1 100 1\nrow1\n\u{1b}Pjunk%subscription-changed bento_cwd $0 @0 0 %5 : /x:y\nrow2\n%end 1 100 1\n".utf8))
+        #expect(await task.value.output == "row1\nrow2")
+        let subs = subscriptions(collector)
+        #expect(subs.count == 1)
+        #expect(subs.first?.1 == TmuxPaneID(5))
+        #expect(subs.first?.2 == "/x:y")
+    }
+
+    @Test func junkPrefixedOutsideABlockRealigns() {
+        let (s, c) = makeAttachedService()
+        s.feedData(Data("\u{1b}P1000p%subscription-changed bento_cwd $0 @0 0 %7 : /tmp\n".utf8))
+        #expect(subscriptions(c).first?.1 == TmuxPaneID(7))
+    }
+
+    /// tmux < 3.2 answers `refresh-client -B` with `%error`. That error block
+    /// must be consumed by the subscribe call itself, or the next caller in the
+    /// FIFO would receive it.
+    @Test func olderTmuxErrorStaysWithTheSubscribe() async {
+        let (service, _) = makeAttachedService()
+        service.sendToSSH = { _ in }
+        let sub = Task { await service.send(.subscribe(name: "bento_cwd", target: "%*", format: "#{pane_current_path}")) }
+        try? await Task.sleep(for: .milliseconds(30))
+        let next = Task { await service.send(.listPanes()) }
+        try? await Task.sleep(for: .milliseconds(30))
+        service.feedData(Data(
+            "%begin 1 100 1\nunknown flag -B\n%error 1 100 1\n%begin 1 101 1\n%0 80x24\n%end 1 101 1\n".utf8))
+        let subResp = await sub.value
+        #expect(subResp.isError)
+        #expect(await next.value.output == "%0 80x24")
+    }
+}

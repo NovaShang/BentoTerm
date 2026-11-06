@@ -5,7 +5,7 @@ let package = Package(
     name: "BentoFilePreviewKit",
     platforms: [
         .iOS(.v17),
-        .macOS(.v14),
+        .macOS("27.0"),
     ],
     products: [
         .library(

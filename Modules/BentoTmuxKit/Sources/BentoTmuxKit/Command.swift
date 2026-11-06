@@ -177,6 +177,15 @@ public enum TmuxCommand: Sendable {
     /// Switch the attached control client to another session on the same server
     /// (tmux emits %session-changed, which re-syncs windows/panes).
     case switchClient(session: String)
+    /// Ask tmux to PUSH a format's value whenever it changes
+    /// (`refresh-client -B name:what:format`, tmux ≥ 3.2). `what` is empty for
+    /// the attached session, `%N` / `@N` for one pane / window, or `%*` / `@*`
+    /// for every pane / window of the ATTACHED session. tmux checks at most once
+    /// a second and reports only changes, as `%subscription-changed`. An older
+    /// tmux answers with `%error` (unknown flag) — callers must treat that as
+    /// "no subscriptions here", not as a failure. Re-subscribing with the same
+    /// name replaces the old subscription and re-reports every value.
+    case subscribe(name: String, target: String, format: String)
 
     /// The `.reorderWindow` that lands the window at `from` in `order` at
     /// position `destination` — the drag-to-rearrange decision, kept next to
@@ -400,6 +409,12 @@ public enum TmuxCommand: Sendable {
 
         case .switchClient(let session):
             return "switch-client -t \(escapeArg(session))"
+
+        case .subscribe(let name, let target, let format):
+            // One argument: tmux splits it on the first two colons itself, so
+            // the format may contain colons. It contains `#{`, so it MUST be
+            // quoted (an unquoted `#` starts a comment — see escapeArg).
+            return "refresh-client -B \(escapeArg("\(name):\(target):\(format)"))"
         }
     }
 

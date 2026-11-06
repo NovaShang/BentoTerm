@@ -44,7 +44,7 @@ public struct LinkHost: Sendable, Equatable, Hashable {
 }
 
 /// The pane a link was clicked in. `nil` origin means "no terminal was
-/// involved" (⌘P, a link inside a file preview) — which resolves to this
+/// involved" (an address typed into the browser, a link inside a file preview) — which resolves to this
 /// device, the same answer a local pane would give.
 public struct LinkOrigin: Sendable, Equatable {
     public let paneID: String?

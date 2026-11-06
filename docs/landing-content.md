@@ -185,7 +185,7 @@ Footer
 > **Never type a command again** — If you'd rather not, you don't have to. Pick a folder, pick
 > an agent, pick a layout — Bento opens the panes and starts the agent in every one of them.
 > Four Claude Codes in one repo is three clicks and no shell. Everything after that is one ⌘P
-> away.
+> away. *(⌘P palette removed 2026-11-05 — rewrite this line before using it.)*
 
 三条都核对过代码，措辞受这些事实约束：
 
@@ -235,7 +235,7 @@ Footer
 
 | | |
 |---|---|
-| **⌘P command palette** — every command and session, from anywhere. | **Your `~/.ssh/config`** — the hosts you already have, one click from the launcher. |
+| ~~**⌘P command palette**~~ (removed 2026-11-05) | **Your `~/.ssh/config`** — the hosts you already have, one click from the launcher. |
 | **⌘F in the scrollback** — search runs in the engine, matches highlight in place. | **Bring your own theme** — import any iTerm2 `.itermcolors`; light, dark, or follow-system. |
 | **Any monospaced font on your Mac** — enumerated from the system, not a list of four. | **Built for the phone** — keyboard avoidance on the real cursor, inline CJK compose, scroll inertia. |
 
@@ -267,7 +267,7 @@ Footer
   `tmux` works as it is.
 - **Can I reach a machine behind NAT?** That's yours to arrange — Bento speaks
   plain SSH, so a VPN, Tailscale or a jump host in `~/.ssh/config` all work.
-- **Intel Macs?** Not currently. Apple Silicon, macOS 14+.
+- **Intel Macs?** Not currently. Apple Silicon, macOS 27+.
 - **What does it cost?** Nothing. Apache-2.0, and the app is the whole product.
 - **iOS?** *(上架后：链接 App Store。上架前：一句 "In review." 不做等待名单。)*
 - **Where do I report bugs?** GitHub issues — the tracker is public.
@@ -276,7 +276,7 @@ Footer
 
 > ## Your agents are already running. Go see them.
 >
-> **[Download for Mac]** — Free & open source · macOS 14+ · Apple Silicon
+> **[Download for Mac]** — Free & open source · macOS 27+ · Apple Silicon
 
 ---
 

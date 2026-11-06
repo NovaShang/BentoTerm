@@ -101,6 +101,16 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateActiveBorders() }
             .store(in: &cancellables)
+        // A second pane or window brings the title bars back; closing down to
+        // one takes them away. The pane list alone can't say that — Focus has
+        // one pane per window — so re-tile when the session's shape changes.
+        viewModel.$sessionPanes.map(\.count)
+            .combineLatest(viewModel.$windows.map(\.count))
+            .map { SessionChrome.isSinglePane(paneCount: $0, windowCount: $1) }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.needsLayout = true }
+            .store(in: &cancellables)
         viewModel.$zoomedPaneID
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -602,10 +612,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// change under the user.
     func paneMenuItems(for paneID: TmuxPaneID) -> [NSMenuItem] {
         let menu = NSMenu()
-        // No "Command Palette…" here: the toolbar carries a permanent search
-        // field now, and a global action does not belong at the top of a menu
-        // that is otherwise entirely about THIS pane. Same reason there are no
-        // session-level entries: this menu is about one pane.
+        // No session-level entries: this menu is about one pane.
         let zoomed = (viewModel.zoomedPaneID == paneID)
         // Rows, order and words come from the shared catalog (PaneMenuLayout):
         // splits only in Parallel — Focus creates via the sidebar's New Window,
@@ -616,8 +623,12 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             switch row {
             case .command(let command):
                 guard let action = Self.paneMenuSelector(command) else { continue }
-                menu.addItem(item(command.title(on: .macPaneMenu, zoomed: zoomed), action,
-                                  symbol: command.symbol(on: .macPaneMenu, zoomed: zoomed)))
+                let row = item(command.title(on: .macPaneMenu, zoomed: zoomed), action,
+                               symbol: command.symbol(on: .macPaneMenu, zoomed: zoomed))
+                // macOS 27 hides menu images by default; the splits and the
+                // destructive row keep theirs (see `keepingImageVisible`).
+                if Self.paneMenuRowsWithImages.contains(command) { row.keepingImageVisible() }
+                menu.addItem(row)
             case .separator:
                 menu.addItem(.separator())
             case .recentAgents:
@@ -649,6 +660,10 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         return items
     }
 
+    static let paneMenuRowsWithImages: Set<PaneCommand> = [
+        .splitRight, .splitDown, .splitDuplicate, .splitPathCommand, .closePane,
+    ]
+
     /// How the Mac performs a catalog command: the responder-chain selectors
     /// the menu bar uses too. nil = not a pane-menu action on this platform.
     static func paneMenuSelector(_ command: PaneCommand) -> Selector? {
@@ -659,10 +674,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         case .splitPathCommand: return BentoPaneAction.splitPathCommand
         case .zoom: return BentoPaneAction.toggleZoom
         case .closePane: return BentoPaneAction.closePane
-        case .nextPane: return BentoPaneAction.nextPane
-        case .previousPane: return BentoPaneAction.previousPane
-        case .newTmuxWindow: return BentoPaneAction.newTmuxWindow
-        case .newTmuxWindowDuplicate: return BentoPaneAction.newWindowDuplicate
+        // ⌘N's route: `BentoTerminalWindow.newPaneOrWindow`, not a pane action.
+        case .newPane, .newTmuxWindow: return nil
         case .find: return BentoPaneAction.findInPane
         case .exitCopyMode: return nil
         }
@@ -862,9 +875,13 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // the only extra height; all the others reuse divider rows.
         // Focus mode: the sidebar already carries the name + state — a title
         // bar on the single pane would be the same chrome twice, so the
-        // terminal owns the full area.
-        let focusMode = viewModel.sessionMode == .list
-        let titleBar = focusMode ? 0 : (ppc?.height ?? Self.fallbackTitleBarHeight)
+        // terminal owns the full area. Likewise a session that is ONE pane in
+        // total (`SessionChrome`): there is nothing to tell apart, so it looks
+        // like a plain terminal; its agent state stays on the pane's wash.
+        // Either way the one visible pane drives tmux from its own surface grid
+        // (`isSingleOrZoom`), so dropping the row reaches tmux as a resize.
+        let showsTitles = viewModel.sessionMode != .list && !viewModel.isSinglePaneSession
+        let titleBar = showsTitles ? (ppc?.height ?? Self.fallbackTitleBarHeight) : 0
 
         // Push each pane's tmux mouse-reporting mode + the title-bar height onto its
         // surface/cell. (tmux -CC never streams the mouse-enable, so the flag is the
@@ -1035,7 +1052,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         splitRecent(record)
     }
 
-    /// Same split, reached from something that isn't a menu item (⌘P).
+    /// Same split, without a menu item in hand.
     func splitRecent(_ record: LaunchRecord) {
         guard splitsAllowed else { return }
         Task { [viewModel] in
@@ -1049,7 +1066,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// there yet, and the caller drops the separator with it — a lone "Recent
     /// Agents" header over nothing reads as broken.
     static func recentAgentItems(host: String?, target: AnyObject?, action: Selector) -> [NSMenuItem] {
-        PaletteRecents.shared.agentLaunches(host: host).map { record in
+        LaunchRecents.shared.agentLaunches(host: host).map { record in
             let item = NSMenuItem(title: "\(record.command)  ·  \(tildeAbbreviated(record.dir))",
                                   action: action, keyEquivalent: "")
             item.target = target
@@ -1076,198 +1093,10 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         }
     }
 
-    // MARK: - Command palette (⌘P)
-
-    /// Open the command palette over this window's focused pane: its file
-    /// context (source + cwd) drives the File section; the Command / New Pane /
-    /// Recent sections are wired to this host.
-    /// `anchor` is the control that opened it (the toolbar's search field), so
-    /// the panel drops from there instead of the window's launcher position.
-    func presentCommandPalette(from anchor: NSView? = nil) {
-        let ctx = activePaneID.flatMap { cells[$0]?.surface.pathPreviewContext }
-        CommandPaletteController.shared.present(
-            fileContext: ctx,
-            hostLabel: ctx?.hostLabel ?? "This Mac",
-            staticSpecs: buildPaletteSpecs(),
-            from: anchor)
-    }
-
-    @objc private func openCommandPalette(_ sender: Any?) { presentCommandPalette() }
-
     /// The focused pane's file context — the dock's tree roots itself here.
     var activePathPreviewContext: PathPreviewContext? {
         activePaneID.flatMap { cells[$0]?.surface.pathPreviewContext }
     }
-
-    /// The launcher's three kinds (sessions / recent launches / SSH hosts), as
-    /// this window sees them. The session source unions the app-wide list with
-    /// THIS view model's `tmux ls` so the palette can't list fewer sessions
-    /// than it did before the provider existed.
-    private func openTargets() -> OpenTargetProvider {
-        OpenTargetProvider(sessions: { [weak self] in
-            var seen = Set<String>()
-            let mine = self?.viewModel.availableTmuxSessions ?? []
-            return (BentoTerminalWindow.serverSessions + mine)
-                .filter { seen.insert($0).inserted }
-        })
-    }
-
-    private func buildPaletteSpecs() -> [PaletteSectionSpec] {
-        var specs: [PaletteSectionSpec] = []
-        let targets = openTargets()
-
-        /// Every launcher row does the same thing: hand the target back to the
-        /// provider. Only the section it lands in differs.
-        func row(_ target: OpenTarget) -> PaletteItem {
-            PaletteItem(id: target.id, title: target.title, subtitle: target.subtitle,
-                        systemImage: target.systemImage, matchText: target.matchText,
-                        action: .run { targets.open(target) })
-        }
-
-        // Recent files — empty-state suggestions (once you type, the live File
-        // section covers them).
-        let recentFiles = PaletteRecents.shared.files.map { entry in
-            PaletteItem(id: "recent:" + entry.path,
-                        title: (entry.path as NSString).lastPathComponent,
-                        subtitle: tildeAbbreviated(entry.path),
-                        systemImage: "clock",
-                        matchText: (entry.path as NSString).lastPathComponent,
-                        action: .preview(path: entry.path, line: nil))
-        }
-        if !recentFiles.isEmpty {
-            specs.append(PaletteSectionSpec(id: "recentFiles", title: "Recent Files",
-                                            items: recentFiles, emptyStateOnly: true, limit: 5))
-        }
-
-        // Recent (directory + command) launches → open that session again.
-        // These used to spawn a pane in whatever window was front; a remembered
-        // launch is a place you go back to WORK, so it gets its own session
-        // rather than grafting itself onto an unrelated one. Each record shows
-        // once: splitting one into THIS window is the pane menu's and New ⌄'s
-        // Recent Agents, so the palette doesn't list the same rows again under
-        // a second verb.
-        let launches = targets.recentTargets().map(row)
-        if !launches.isEmpty {
-            specs.append(PaletteSectionSpec(id: "launches", title: "Recent Launches",
-                                            items: launches, limit: 6))
-        }
-
-        // Navigation across all three tmux levels. The palette is the one place
-        // you can reach any of them without knowing which chrome owns it —
-        // sessions live behind a menu, windows in the strip, panes only on
-        // screen — so "where is that thing" has a single answer.
-        let windows = viewModel.windows.map { window in
-            let body = viewModel.windowBodyName(window.id)
-            let label = window.index.map { "\($0): \(body)" } ?? body
-            return PaletteItem(id: "window:\(window.id)",
-                               title: label,
-                               systemImage: "rectangle.on.rectangle",
-                               matchText: "window \(label)",
-                               action: .run { [weak self] in self?.viewModel.selectWindow(window.id) })
-        }
-        if windows.count > 1 {
-            specs.append(PaletteSectionSpec(id: "windows", title: "Windows", items: windows, limit: 8))
-        }
-
-        let panes = viewModel.sessionPanes.map { pane -> PaletteItem in
-            let name = [pane.title, pane.currentCommand]
-                .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
-                .first { !$0.isEmpty } ?? "shell"
-            return PaletteItem(id: "pane:\(pane.id)",
-                               title: name,
-                               subtitle: "\(pane.id)",
-                               systemImage: "rectangle.split.2x1",
-                               matchText: "pane \(name)",
-                               action: .run { [weak self] in self?.viewModel.selectPane(pane.id) })
-        }
-        if panes.count > 1 {
-            specs.append(PaletteSectionSpec(id: "panes", title: "Panes", items: panes, limit: 8))
-        }
-
-        let current = viewModel.activeTmuxSessionName
-        let sessions = targets.sessionTargets()
-            .filter { $0.kind != .tmuxSession(name: current ?? "") }
-            .map(row)
-        if !sessions.isEmpty {
-            specs.append(PaletteSectionSpec(id: "sessions", title: "Sessions", items: sessions, limit: 8))
-        }
-
-        // SSH hosts from ~/.ssh/config. The row drills into the host's tmux
-        // sessions (`.drillHost`) rather than acting, for the reason the
-        // launcher's copy of this explains — and the plain `ssh <host>` tab is
-        // a row inside it. (This used to open the plain shell directly, on the
-        // grounds that remote tmux would drive the local server; session keys
-        // are `TmuxSessionID`s now, so that no longer holds.)
-        let hosts = targets.sshTargets().map { target -> PaletteItem in
-            guard case .sshHost(let alias) = target.kind else { return row(target) }
-            return PaletteItem(id: target.id, title: target.title,
-                               subtitle: "tmux sessions on \(alias)",
-                               systemImage: target.systemImage, matchText: target.matchText,
-                               action: .drillHost(alias: alias))
-        }
-        if !hosts.isEmpty {
-            specs.append(PaletteSectionSpec(id: "sshHosts", title: "SSH Hosts", items: hosts, limit: 8))
-        }
-
-        specs.append(PaletteSectionSpec(id: "commands", title: "Commands",
-                                        items: paletteCommands(), limit: 10))
-        return specs
-    }
-
-    private func paletteCommands() -> [PaletteItem] {
-        func cmd(_ id: String, _ title: String, _ image: String,
-                 _ run: @escaping @MainActor () -> Void) -> PaletteItem {
-            PaletteItem(id: "cmd:" + id, title: title, systemImage: image,
-                        matchText: title, action: .run(run))
-        }
-        // Layouts are searchable by BOTH the readable label and the tmux slug,
-        // so "grid" and "tiled" both find the same entry.
-        let layouts = Self.tmuxLayouts.map { layout in
-            PaletteItem(id: "cmd:layout-" + layout.slug,
-                        title: "Layout: \(layout.label)",
-                        systemImage: layout.symbol,
-                        matchText: "layout \(layout.label) \(layout.slug)",
-                        action: .run { [weak self] in
-                            guard let self, let window = self.viewModel.activeWindowID else { return }
-                            Task { [viewModel = self.viewModel] in
-                                _ = await viewModel.applyWindowLayout(window, layout: layout.slug)
-                            }
-                        })
-        }
-        // Pane commands: words and order from the shared catalog. The palette
-        // calls the host directly rather than through the responder chain —
-        // it is already talking to this host.
-        let paneCommands = PaneMenuLayout.macPalette.map { command in
-            cmd(command.paletteID, command.title(on: .macPalette),
-                command.symbol(on: .macPalette) ?? "command") { [weak self] in
-                self?.runPaletteCommand(command)
-            }
-        }
-        return layouts + paneCommands + [
-            cmd("newWindow", LaunchAction.emptySession.title, LaunchAction.emptySession.systemImage) {
-                BentoTerminalWindow.newWindow()
-            },
-            cmd("toggleDock", "Toggle Preview Panel", "sidebar.trailing") { BentoTerminalWindow.togglePreviewDock() },
-        ]
-    }
-
-
-    private func runPaletteCommand(_ command: PaneCommand) {
-        switch command {
-        case .splitRight: splitPaneVertically(nil)
-        case .splitDown: splitPaneHorizontally(nil)
-        case .splitDuplicate:
-            Task { await viewModel.splitPane(horizontal: true, seed: .duplicateCurrent) }
-        case .closePane: closeCurrentPane(nil)
-        case .zoom: toggleCurrentPaneZoom(nil)
-        case .nextPane: selectNextPane(nil)
-        case .previousPane: selectPreviousPane(nil)
-        case .newTmuxWindow: newTmuxWindow(nil)
-        default:
-            if let action = Self.paneMenuSelector(command) { NSApp.sendAction(action, to: self, from: nil) }
-        }
-    }
-
 
     /// Pane menu → Move to Session → <name>. The menu already selected the
     /// pane, so activePaneID is the one to move (same convention as the other
@@ -1357,8 +1186,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 
     /// The surface of the pane the user is actually working in.
     /// Which machine the FOCUSED pane means by `localhost` — what a URL typed
-    /// into ⌘P resolves against, so "localhost:3000" means the same thing there
-    /// as it does in the terminal you are looking at.
+    /// into the browser's address bar resolves against, so "localhost:3000"
+    /// means the same thing there as it does in the terminal you are looking at.
     var activeLinkOrigin: LinkOrigin? { activeSurface?.linkOrigin }
 
     private var activeSurface: GhosttyTerminalSurface? {
@@ -1428,13 +1257,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         }
     }
 
-    /// New window seeded from the current pane — same two seeds a split offers,
-    /// so "another window" and "another pane" are created the same way and only
-    /// differ in where the thing lands.
-    @objc func newWindowDuplicate(_ sender: Any?) {
-        Task { [viewModel] in await viewModel.newListWindow(.duplicateCurrent) }
-    }
-
     private func cyclePane(by step: Int) {
         let ids = orderedPaneIDs
         guard !ids.isEmpty else { return }
@@ -1464,7 +1286,6 @@ public enum BentoPaneAction {
     public static let splitDuplicate = #selector(GhosttyTiledPaneHost.splitDuplicateCurrent(_:))
     public static let splitPathCommand = #selector(GhosttyTiledPaneHost.splitWithPathCommand(_:))
     public static let splitRecent = #selector(GhosttyTiledPaneHost.splitRecentLaunch(_:))
-    public static let newWindowDuplicate = #selector(GhosttyTiledPaneHost.newWindowDuplicate(_:))
     public static let findInPane = #selector(GhosttyTiledPaneHost.findInPane(_:))
     public static let findNext = #selector(GhosttyTiledPaneHost.findNextMatch(_:))
     public static let findPrevious = #selector(GhosttyTiledPaneHost.findPreviousMatch(_:))

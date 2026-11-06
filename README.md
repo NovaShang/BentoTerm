@@ -42,7 +42,7 @@ Two design rules shape everything:
 
 ## Install
 
-Requirements: macOS 14+ on Apple Silicon.
+Requirements: macOS 27+ on Apple Silicon.
 
 ```sh
 brew install --cask NovaShang/tap/bento-term

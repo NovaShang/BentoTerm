@@ -6,7 +6,7 @@ import SwiftUI
 ///
 /// Everything here is gesture-driven UI state (@MainActor). Every fetch
 /// happens inside `DirectoryListCache` (a nonisolated actor) — which is ALSO
-/// the incremental index behind tap search and the palette — so a directory
+/// the incremental index behind tap search — so a directory
 /// you expand is free for the next search, and vice versa. Depth is
 /// unlimited; the only cap left is per-directory (`maxChildren`, with a
 /// "show more" ladder).

@@ -139,8 +139,7 @@ extension TerminalViewModel {
                 resizeToScreen: !isAttachToExisting
             )
             // Attaching IS a launch, and it's the most common one there is —
-            // far more common than any of the three "new …" verbs the launcher
-            // offers. Recorded here rather than where the user clicked, because
+            // far more common than any of the "new …" verbs. Recorded here rather than where the user clicked, because
             // at click time there is nothing to ask: the directory and the
             // program belong to the session, and only the established control
             // -mode connection can name them. `launchTmux` has by now seen the
@@ -169,7 +168,7 @@ extension TerminalViewModel {
             // wizard — the most reusable launch there is, and the reason the
             // recents list exists. Recorded here rather than at the macOS
             // window so the iPad wizard feeds the same list.
-            PaletteRecents.shared.recordLaunchIfUseful(
+            LaunchRecents.shared.recordLaunchIfUseful(
                 dir: spec.workingDir, command: spec.agentCommand, host: launchHost)
             await launchTmux(
                 sessionName: spec.sessionName,
@@ -304,6 +303,9 @@ extension TerminalViewModel {
         // reconnect has to re-assert it — otherwise a pinned session silently
         // goes back to tracking the first client that touches it.
         restoreSizingMode(for: sessionName)
+        // A subscription belongs to the control client, so every attach —
+        // first connect and each reattach — is a new client that has none.
+        subscribeToWorkingDirectories()
         startStatePolling()
         // Warm the session list so Move-to-Session menus (which resolve
         // synchronously from this cache) have targets on their FIRST open —

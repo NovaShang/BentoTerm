@@ -58,7 +58,7 @@ import Testing
             LaunchRecord(dir: home + "/code", command: "claude"),
             LaunchRecord(dir: home + "/Work", command: ""),
         ]
-        let clean = PaletteRecents.repaired(stored)
+        let clean = LaunchRecents.repaired(stored)
 
         // The version rows keep their directory and lose the bogus command; the
         // one at $HOME becomes the plain default and drops out entirely; the

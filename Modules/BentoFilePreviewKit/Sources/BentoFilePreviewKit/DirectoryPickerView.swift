@@ -312,7 +312,7 @@ public struct DirectoryPickerView: View {
 /// The picker's listing state: exactly one directory, replaced on every move.
 ///
 /// Fetches go through the shared `DirectoryListCache`, so a directory the
-/// tree browser, search, or the palette already listed is free here (and vice
+/// tree browser or search already listed is free here (and vice
 /// versa). Results are stamped with the path they were requested for — a slow
 /// listing that lands after you have already moved on is dropped rather than
 /// shown under the wrong breadcrumb.

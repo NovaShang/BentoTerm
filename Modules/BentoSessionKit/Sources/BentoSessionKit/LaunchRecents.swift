@@ -1,9 +1,8 @@
 import Foundation
 
-/// A launch the recents list remembers — the palette's row AND the
-/// launcher-wide value, and only one of those two is allowed to own the
-/// definition. This file owns it so the shared engine (TerminalViewModel
-/// records launches) and the macOS palette can share the same store.
+/// A launch the recents list remembers. This file owns it so the shared engine
+/// (TerminalViewModel records launches) and the Mac's menus can
+/// share the same store.
 ///
 /// `host` is nil for a launch on this Mac and the ssh alias for one on a
 /// remote box (`TerminalViewModel.launchHost`). A row is only ever offered
@@ -30,8 +29,8 @@ public struct LaunchRecord: Codable, Equatable, Sendable {
 
 /// Which launches are worth remembering.
 ///
-/// Every creation path now reports in (that's the point — the list was
-/// permanently empty while only the palette's own rows recorded). But most
+/// Every creation path reports in (the list was once permanently empty
+/// because only replaying a row recorded one). But most
 /// creations are the boring default: a plain login shell in `$HOME`, which is
 /// what "new window" already does with no help from a recents list. Twenty of
 /// those would push out the one row the user actually wanted.
@@ -69,7 +68,7 @@ public enum RecentLaunchPolicy {
     /// `2.1.234`. Nothing on `PATH` is called that: replaying such a row opens a
     /// pane that exits the instant it appears. Nothing writes them any more (see
     /// `TerminalViewModel.recordActivePaneLaunch`), but users have them on disk
-    /// today, so `PaletteRecents` repairs the store when it loads it — the
+    /// today, so `LaunchRecents` repairs the store when it loads it — the
     /// directory is still good, so the row survives as a plain shell.
     ///
     /// Deliberately narrow: it rejects what CANNOT be a program name, not what
@@ -83,7 +82,7 @@ public enum RecentLaunchPolicy {
     }
 
     /// The subset worth offering as "start this agent again", most-recent
-    /// first. Pure so it can be tested without a store: `PaletteRecents` is a
+    /// first. Pure so it can be tested without a store: `LaunchRecents` is a
     /// UserDefaults-backed singleton, and a test that reached for it would be
     /// reading whatever the developer ran this morning.
     ///
@@ -114,33 +113,28 @@ public enum RecentLaunchPolicy {
     }
 }
 
-/// MRU store for the ⌘P palette: files you've previewed and (directory +
-/// command) launches you've spun up. UserDefaults JSON — small, per-user,
-/// survives relaunch. Lives in the core so the shared engine can record
-/// launches from every creation path; the macOS palette renders it.
-public final class PaletteRecents {
-    public static let shared = PaletteRecents()
+/// MRU store of (directory + command) launches — behind Recent Agents in the
+/// New and pane menus and the Dock menu's recent launches.
+/// UserDefaults JSON — small, per-user, survives relaunch. Lives in the core so
+/// the shared engine can record launches from every creation path.
+///
+/// The UserDefaults key keeps its old `palette_` name so existing lists survive.
+public final class LaunchRecents {
+    public static let shared = LaunchRecents()
 
-    public struct FileEntry: Codable, Equatable {
-        public let path: String
-        public let host: String
-    }
-    /// Backed by `LaunchRecord` (see its doc comment — it's the store's row
-    /// AND the launcher-wide value). This name stays for the call sites that
+    /// Backed by `LaunchRecord`. This name stays for the call sites that
     /// predate it.
     public typealias LaunchEntry = LaunchRecord
 
-    private let filesKey = "palette_recent_files"
     private let launchesKey = "palette_recent_launches"
     private let cap = 20
 
-    public private(set) var files: [FileEntry]
     public private(set) var launches: [LaunchEntry]
 
     private init() {
         let d = UserDefaults.standard
-        files = (try? JSONDecoder().decode([FileEntry].self,
-            from: d.data(forKey: filesKey) ?? Data())) ?? []
+        // Recent previewed files, from when the ⌘P palette listed them.
+        d.removeObject(forKey: "palette_recent_files")
         let stored = (try? JSONDecoder().decode([LaunchEntry].self,
             from: d.data(forKey: launchesKey) ?? Data())) ?? []
         launches = Self.repaired(stored)
@@ -166,23 +160,14 @@ public final class PaletteRecents {
         return out
     }
 
-    /// Most-recent-first, deduped on path.
-    public func recordFile(path: String, host: String) {
-        let entry = FileEntry(path: path, host: host)
-        files.removeAll { $0.path == path }
-        files.insert(entry, at: 0)
-        if files.count > cap { files.removeLast(files.count - cap) }
-        persist(files, key: filesKey)
-    }
-
     /// Remember a launch IF it's worth remembering (see `RecentLaunchPolicy` —
     /// a plain shell in `$HOME` is the default and carries no information).
     /// This is what the creation paths call; `recordLaunch` below is the
     /// unconditional store.
     ///
     /// Recording lives on the paths that CREATE something. It used to happen
-    /// only when the palette replayed a row it already had, which meant the
-    /// list could never gain a first entry and was empty for everyone, always.
+    /// only when a row was replayed, which meant the list could never gain a
+    /// first entry and was empty for everyone, always.
     public func recordLaunchIfUseful(dir: String?, command: String?, host: String? = nil) {
         guard let record = RecentLaunchPolicy.record(dir: dir, command: command, host: host)
         else { return }
