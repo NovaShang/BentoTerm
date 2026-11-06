@@ -67,6 +67,13 @@ extension TerminalViewModel {
             if switched {
                 modePreferenceLoaded = false
                 savedModePreference = nil
+                // The subscription survives switch-client, but tmux only reports
+                // a pane whose value CHANGED since it last told us — and
+                // refreshPanes is about to drop the old session's panes from
+                // `paneWorkingDirectories`. Coming back to a session would then
+                // leave its untouched panes with no directory. Re-subscribing
+                // resets tmux's memory, so every pane is reported afresh.
+                subscribeToWorkingDirectories()
             }
             Task {
                 await refreshWindows()
@@ -88,6 +95,9 @@ extension TerminalViewModel {
 
         case .pasteBufferChanged(let name):
             adoptPasteBuffer(named: name)
+
+        case .subscriptionChanged(let name, let pane, let value):
+            adoptSubscriptionValue(name: name, pane: pane, value: value)
 
         case .exit:
             usingTmux = false

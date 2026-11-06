@@ -1538,7 +1538,16 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // (⌘1..9) or selecting another tiled pane changes activePaneID, so
         // re-root the tree on it (fires immediately for the newly-active tab
         // too — its initial value seeds the first load).
+        //
+        // …and it follows `cd` inside that pane: tmux pushes each pane's
+        // directory (`paneWorkingDirectories`, a `refresh-client -B`
+        // subscription — nothing else would tell us, a process changing
+        // directory raises no event). Keyed on the (pane, directory) PAIR so a
+        // pane switch is one reload, not one per publisher. On a tmux too old
+        // to push, the directory stays nil and this is the pane switch alone.
         tab.viewModel.$activePaneID
+            .combineLatest(tab.viewModel.$paneWorkingDirectories)
+            .map { pane, dirs in PaneDirectoryKey(pane: pane, directory: pane.flatMap { dirs[$0] }) }
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self, weak tab] _ in
@@ -2320,4 +2329,11 @@ extension NSWindow {
             }
         }
     }
+}
+
+/// What the dock's directory tree is rooted on: the focused pane and the
+/// directory tmux last pushed for it (nil until pushed, or on tmux < 3.2).
+private struct PaneDirectoryKey: Equatable {
+    let pane: TmuxPaneID?
+    let directory: String?
 }

@@ -290,6 +290,13 @@ public final class TerminalViewModel: ObservableObject {
     /// Active tmux session name (used for kill-session etc).
     @Published public var activeTmuxSessionName: String?
 
+    /// Each pane's working directory as tmux last pushed it
+    /// (`%subscription-changed bento_cwd …`, see `subscribeToWorkingDirectories`).
+    /// Empty on a tmux older than 3.2, which cannot push — readers fall back to
+    /// asking (`display-message`) when they need a directory. Entries for panes
+    /// that closed are dropped in `refreshPanes`.
+    @Published public internal(set) var paneWorkingDirectories: [TmuxPaneID: String] = [:]
+
     /// Shell-output capture state (for `tmux ls` and similar commands run in
     /// raw shell mode before we hand off to either the terminal or tmux -CC).
     struct ShellCapture {

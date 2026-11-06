@@ -591,6 +591,7 @@ public final class TmuxControlMode: @unchecked Sendable {
         "%sessions-changed", "%pane-mode-changed ", "%client-session-changed",
         "%client-detached ", "%config-error", "%exit",
         "%paste-buffer-changed ", "%paste-buffer-deleted ",
+        "%subscription-changed ",
     ]
 
     /// Recognised `%` markers used to realign a line that arrives with
@@ -598,7 +599,7 @@ public final class TmuxControlMode: @unchecked Sendable {
     private static let realignPrefixes = ["%begin ", "%output ", "%end ", "%error ",
                                           "%session", "%layout-change ", "%window-", "%pane-",
                                           "%exit", "%unlinked-", "%client-", "%config-",
-                                          "%paste-buffer-"]
+                                          "%paste-buffer-", "%subscription-changed "]
 
     private func isOutOfBandNotification(_ line: String) -> Bool {
         for prefix in Self.notificationPrefixes where line.hasPrefix(prefix) { return true }
@@ -640,6 +641,7 @@ public final class TmuxControlMode: @unchecked Sendable {
         "%pane-mode-changed %", "%client-session-changed ", "%client-detached ",
         "%config-error ", "%exit",
         "%paste-buffer-changed ", "%paste-buffer-deleted ",
+        "%subscription-changed ",
     ]
 
     /// If `line` begins with a NON-PRINTABLE escape/control byte — stray DCS/CSI
@@ -899,6 +901,10 @@ public final class TmuxControlMode: @unchecked Sendable {
             let name = String(line.dropFirst("%paste-buffer-changed ".count))
                 .trimmingCharacters(in: .whitespaces)
             if !name.isEmpty { onNotification?(.pasteBufferChanged(name: name)) }
+        } else if line.hasPrefix("%subscription-changed ") {
+            if let sub = Self.parseSubscriptionChanged(line) {
+                onNotification?(.subscriptionChanged(name: sub.name, pane: sub.pane, value: sub.value))
+            }
         } else if line.hasPrefix("%client-detached ") {
             let client = String(line.dropFirst("%client-detached ".count))
                 .trimmingCharacters(in: .whitespaces)
@@ -920,6 +926,38 @@ public final class TmuxControlMode: @unchecked Sendable {
     }
 
     // MARK: - Notification Parsers
+
+    /// Parse `%subscription-changed name $session @window index %pane … : value`
+    /// (tmux ≥ 3.2, the push side of `refresh-client -B`).
+    ///
+    /// The five fixed fields come first; tmux says any further arguments "up
+    /// until a single ':' are for future use and should be ignored", so we skip
+    /// tokens until the first STANDALONE `:` and take everything after it — one
+    /// separating space dropped — verbatim. The value is an expanded format
+    /// (here a directory), so it can legitimately contain spaces, colons and
+    /// even ` : ` itself; only the first standalone colon after the fixed
+    /// fields is the separator. The pane field is `-` for a session- or
+    /// window-scoped subscription, which yields `pane == nil`.
+    static func parseSubscriptionChanged(_ line: String) -> (name: String, pane: TmuxPaneID?, value: String)? {
+        let prefix = "%subscription-changed "
+        guard line.hasPrefix(prefix) else { return nil }
+        var rest = Substring(line.dropFirst(prefix.count))
+        var fields: [Substring] = []
+        while true {
+            guard let space = rest.firstIndex(of: " ") else {
+                // Last token on the line. Only a bare ":" is acceptable here: an
+                // empty value whose trailing space was trimmed in transit.
+                guard rest == ":", fields.count >= 5 else { return nil }
+                return (String(fields[0]), TmuxPaneID(string: String(fields[4])), "")
+            }
+            let token = rest[rest.startIndex..<space]
+            rest = rest[rest.index(after: space)...]
+            if token == ":", fields.count >= 5 {
+                return (String(fields[0]), TmuxPaneID(string: String(fields[4])), String(rest))
+            }
+            fields.append(token)
+        }
+    }
 
     private func parseOutput(_ line: String) {
         let rest = String(line.dropFirst(8))

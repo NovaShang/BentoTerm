@@ -304,6 +304,9 @@ extension TerminalViewModel {
         // reconnect has to re-assert it — otherwise a pinned session silently
         // goes back to tracking the first client that touches it.
         restoreSizingMode(for: sessionName)
+        // A subscription belongs to the control client, so every attach —
+        // first connect and each reattach — is a new client that has none.
+        subscribeToWorkingDirectories()
         startStatePolling()
         // Warm the session list so Move-to-Session menus (which resolve
         // synchronously from this cache) have targets on their FIRST open —
