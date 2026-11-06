@@ -36,7 +36,6 @@ public enum PaneCommand: String, CaseIterable, Sendable {
     /// A tmux window seeded with the current pane's folder and command, in
     /// either mode (the New menu's row — same title, different action).
     case newTmuxWindowDuplicate
-    case newTmuxWindowAtPath
 
     public enum Surface: Sendable {
         /// Mac: the title bar's ⌄ and the surface's right-click menu.
@@ -61,12 +60,10 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case .splitDown: return "Split Down (-v)"
         case .splitDuplicate:
             switch surface {
-            case .macPalette: return "Duplicate Pane (dir + command)"
-            case .macNewMenu: return "New Pane"
+            case .macPalette, .macNewMenu: return "Split Pane"
             default: return "Split — Duplicate Current"
             }
-        case .splitPathCommand:
-            return surface == .macNewMenu ? "New Pane at a Path…" : "Split — Path & Command…"
+        case .splitPathCommand: return "Split — Path & Command…"
         case .zoom:
             switch surface {
             case .macPalette: return "Toggle Zoom"
@@ -80,13 +77,10 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case .nextPane: return "Select Next Pane"
         case .previousPane: return "Select Previous Pane"
         case .newTmuxWindow, .newTmuxWindowDuplicate: return "New tmux Window"
-        case .newTmuxWindowAtPath: return "New tmux Window at a Path…"
         }
     }
 
-    /// The SF Symbol on `surface`, or nil for a row drawn without one (the New
-    /// menu leaves a group's second row blank so the icon marks where the
-    /// group starts).
+    /// The SF Symbol on `surface`, or nil for a row drawn without one.
     public func symbol(on surface: Surface, zoomed: Bool = false) -> String? {
         switch self {
         case .find: return "magnifyingglass"
@@ -94,7 +88,7 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case .splitDown: return "rectangle.split.1x2"
         case .splitDuplicate:
             return surface == .macNewMenu ? "square.split.2x1" : "plus.square.on.square"
-        case .splitPathCommand: return surface == .macNewMenu ? nil : "terminal"
+        case .splitPathCommand: return "terminal"
         case .zoom:
             if surface == .macPalette { return "arrow.up.left.and.arrow.down.right" }
             return zoomed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
@@ -106,7 +100,6 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case .previousPane: return "arrow.left.square"
         case .newTmuxWindow: return "plus.rectangle.on.folder"
         case .newTmuxWindowDuplicate: return "macwindow"
-        case .newTmuxWindowAtPath: return nil
         }
     }
 
@@ -120,12 +113,8 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         switch self {
         case .newTmuxWindowDuplicate:
             return "A tmux window in this session, with the current pane's folder and command."
-        case .newTmuxWindowAtPath:
-            return "A tmux window, choosing the folder and what to run in it."
         case .splitDuplicate:
             return "Split the current pane, inheriting its folder and command."
-        case .splitPathCommand:
-            return "Split off a pane, choosing the folder and what to run in it."
         default: return nil
         }
     }
@@ -214,11 +203,12 @@ public enum PaneMenuLayout {
     }
 
     /// Mac `New ⌄` rows that need a session to create inside; dropped on a
-    /// launcher (no session) rather than disabled.
+    /// launcher (no session) rather than disabled. Picking a folder and command
+    /// is the pane menu's (splits) and the Focus sidebar's (windows) — New ⌄
+    /// is the quick path.
     public static func macNewMenuSessionRows(hasSession: Bool) -> [PaneMenuEntry] {
         guard hasSession else { return [] }
-        return [.separator, .command(.newTmuxWindowDuplicate), .command(.newTmuxWindowAtPath),
-                .separator, .command(.splitDuplicate), .command(.splitPathCommand),
+        return [.separator, .command(.newTmuxWindowDuplicate), .command(.splitDuplicate),
                 .recentAgents]
     }
 

@@ -1025,17 +1025,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             guard let self else { return }
             self.tab.paneHost?.presentCommandPalette(from: self.toolbar.searchAnchor)
         }
-        toolbar.onNewAgent = { BentoTerminalWindow.onNewAgentSession?() }
-        toolbar.onNewTerminal = { BentoTerminalWindow.newSessionTab() }
-        toolbar.onNewPlainShell = { BentoTerminalWindow.newWindowNoTmux() }
-        toolbar.onNewSSHHost = { BentoTerminalWindow.newSSHWindow(host: $0) }
-        // Picking the machine is half the question; the palette answers the
-        // other half (which session) with what is actually running there.
-        toolbar.onNewRemoteTmuxHost = { [weak self] host in
-            CommandPaletteController.shared.present(
-                fileContext: nil, hostLabel: host, staticSpecs: [],
-                from: self?.toolbar.searchAnchor, openingHost: host)
-        }
+        // ⌘N's behaviour: a launcher, which becomes the new session.
+        toolbar.onNewSession = { BentoTerminalWindow.newSessionWindow() }
         toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
         toolbar.onCloseWindow = { [weak self] in self?.activeTab?.viewModel.closeWindow() }
         toolbar.onSetSizingMode = { [weak self] mode in

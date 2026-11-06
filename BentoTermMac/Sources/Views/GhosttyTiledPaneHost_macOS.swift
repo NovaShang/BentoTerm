@@ -665,7 +665,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         case .previousPane: return BentoPaneAction.previousPane
         case .newTmuxWindow: return BentoPaneAction.newTmuxWindow
         case .newTmuxWindowDuplicate: return BentoPaneAction.newWindowDuplicate
-        case .newTmuxWindowAtPath: return BentoPaneAction.newWindowPathCommand
         case .find: return BentoPaneAction.findInPane
         case .exitCopyMode: return nil
         }
@@ -1145,29 +1144,14 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         // Recent (directory + command) launches → open that session again.
         // These used to spawn a pane in whatever window was front; a remembered
         // launch is a place you go back to WORK, so it gets its own session
-        // rather than grafting itself onto an unrelated one.
+        // rather than grafting itself onto an unrelated one. Each record shows
+        // once: splitting one into THIS window is the pane menu's and New ⌄'s
+        // Recent Agents, so the palette doesn't list the same rows again under
+        // a second verb.
         let launches = targets.recentTargets().map(row)
         if !launches.isEmpty {
             specs.append(PaletteSectionSpec(id: "launches", title: "Recent Launches",
                                             items: launches, limit: 6))
-        }
-
-        // The same remembered agents as the split menu, but searchable — which
-        // is the half a menu can't do once there are a dozen repos. Splits
-        // HERE, unlike Recent Launches above: same rows, different verb, so
-        // they say so in their titles rather than relying on the section
-        // header alone.
-        let splitRows = PaletteRecents.shared.agentLaunches(host: viewModel.launchHost).map { record in
-            PaletteItem(id: "split:\(record.command):\(record.dir)",
-                        title: "Split \(record.command)",
-                        subtitle: tildeAbbreviated(record.dir),
-                        systemImage: "rectangle.split.2x1",
-                        matchText: "split \(record.command) \(record.dir)",
-                        action: .run { [weak self] in self?.splitRecent(record) })
-        }
-        if !splitRows.isEmpty, viewModel.sessionMode != .list {
-            specs.append(PaletteSectionSpec(id: "splitRecents", title: "Split Here",
-                                            items: splitRows, limit: 6))
         }
 
         // Navigation across all three tmux levels. The palette is the one place
@@ -1262,7 +1246,9 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             }
         }
         return layouts + paneCommands + [
-            cmd("newWindow", "New Terminal Window", "macwindow.badge.plus") { BentoTerminalWindow.newWindow() },
+            cmd("newWindow", LaunchAction.emptySession.title, LaunchAction.emptySession.systemImage) {
+                BentoTerminalWindow.newWindow()
+            },
             cmd("fit", "Track Session Size to This Window", "arrow.up.left.and.down.right.magnifyingglass") { BentoTerminalWindow.trackActiveSessionSize() },
             cmd("toggleDock", "Toggle Preview Panel", "sidebar.trailing") { BentoTerminalWindow.togglePreviewDock() },
         ]
@@ -1452,18 +1438,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         Task { [viewModel] in await viewModel.newListWindow(.duplicateCurrent) }
     }
 
-    @objc func newWindowPathCommand(_ sender: Any?) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let cwd = await self.viewModel.activePaneWorkingDirectory()
-            presentNewPaneDirectoryPanel(
-                title: "New Window", prompt: "Create", initialDirectory: cwd
-            ) { [viewModel = self.viewModel] path, command in
-                Task { await viewModel.newListWindow(.custom(path: path, command: command)) }
-            }
-        }
-    }
-
     private func cyclePane(by step: Int) {
         let ids = orderedPaneIDs
         guard !ids.isEmpty else { return }
@@ -1494,7 +1468,6 @@ public enum BentoPaneAction {
     public static let splitPathCommand = #selector(GhosttyTiledPaneHost.splitWithPathCommand(_:))
     public static let splitRecent = #selector(GhosttyTiledPaneHost.splitRecentLaunch(_:))
     public static let newWindowDuplicate = #selector(GhosttyTiledPaneHost.newWindowDuplicate(_:))
-    public static let newWindowPathCommand = #selector(GhosttyTiledPaneHost.newWindowPathCommand(_:))
     public static let findInPane = #selector(GhosttyTiledPaneHost.findInPane(_:))
     public static let findNext = #selector(GhosttyTiledPaneHost.findNextMatch(_:))
     public static let findPrevious = #selector(GhosttyTiledPaneHost.findPreviousMatch(_:))

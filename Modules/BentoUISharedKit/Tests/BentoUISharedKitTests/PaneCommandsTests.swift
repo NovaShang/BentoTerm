@@ -42,19 +42,18 @@ struct PaneCommandsTests {
         #expect(PaneMenuLayout.macNewMenuSessionRows(hasSession: false).isEmpty)
         let rows = PaneMenuLayout.macNewMenuSessionRows(hasSession: true)
         #expect(titles(rows, .macNewMenu) == [
-            "—", "New tmux Window", "New tmux Window at a Path…",
-            "—", "New Pane", "New Pane at a Path…", "[recents]",
+            "—", "New tmux Window", "Split Pane", "[recents]",
         ])
         let symbols = rows.compactMap { row -> String?? in
             if case .command(let c) = row { return .some(c.symbol(on: .macNewMenu)) }
             return nil
         }
-        #expect(symbols == ["macwindow", nil, "square.split.2x1", nil])
+        #expect(symbols == ["macwindow", "square.split.2x1"])
     }
 
     @Test func macPaletteCommands() {
         #expect(PaneMenuLayout.macPalette.map { $0.title(on: .macPalette) } == [
-            "Split Right (-h)", "Split Down (-v)", "Duplicate Pane (dir + command)",
+            "Split Right (-h)", "Split Down (-v)", "Split Pane",
             "Close Pane", "Toggle Zoom", "Select Next Pane", "Select Previous Pane",
             "New tmux Window",
         ])

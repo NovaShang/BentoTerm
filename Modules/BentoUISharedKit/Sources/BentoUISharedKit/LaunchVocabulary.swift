@@ -221,7 +221,7 @@ public struct OpenTarget: Identifiable, Equatable, Sendable {
 public enum LaunchAction: String, CaseIterable, Identifiable, Sendable {
     /// A raw local pty, no tmux, gone when you close it.
     case plainTerminal
-    /// The agent wizard (name, folder, agent, layout).
+    /// The agent wizard (name, folder, agent).
     case agentSession
     /// A blank tmux session, auto-named `session-N`.
     case emptySession
@@ -248,8 +248,7 @@ public enum LaunchAction: String, CaseIterable, Identifiable, Sendable {
         case .plainTerminal:
             return "A quick local shell. Closing it discards it for good."
         case .agentSession:
-            return "A fresh tmux session running Claude, Codex or another agent, "
-                 + "optionally split into panes."
+            return "A fresh tmux session running Claude, Codex or another agent."
         case .emptySession:
             return "A blank tmux session on the host. It keeps running after you disconnect."
         }
