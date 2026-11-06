@@ -148,14 +148,14 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// New Window", or ⌥ held while picking.
     var onOpenSessionInNewWindow: ((String) -> Void)?
 
-    private let sessionsButton = NSButton()
+    let sessionsButton = NSButton()
     /// Tiled|List — the session's structural mode, next to the session button.
     /// Reflects the active tab's `sessionMode`; hidden for plain (no-tmux) tabs.
     private let modeSwitch = NSSegmentedControl()
     /// New ⌄ and the preview toggle: two plain toolbar buttons in adjacent
     /// items with no space between, which macOS 26+ draws as one glass capsule.
     /// Not a segmented control — that always draws a divider between segments.
-    private let newButton = NSButton()
+    let newButton = NSButton()
     /// Show/hide the preview dock (always present, like an inspector toggle).
     private let previewButton = NSButton()
     /// The take-over banner: present only while this window's grid differs from
@@ -169,7 +169,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// item, which macOS double-wraps in a group container. Rebuilt via the
     /// `titles:` convenience initializer (the same path Finder uses, which yields
     /// the real pill-selected segmented look) whenever the session set changes.
-    private(set) var tabsGroup = NSToolbarItemGroup(itemIdentifier: TerminalToolbarController.centerID)
+    var tabsGroup = NSToolbarItemGroup(itemIdentifier: TerminalToolbarController.centerID)
     var onSelectSegment: ((Int) -> Void)?
     /// Right-click on a window segment → that window's actions. The index is the
     /// segment the pointer is actually over; returning nil means "nothing there".
@@ -178,7 +178,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// The segmented control AppKit builds for the expanded item group. Found by
     /// traversal because `NSToolbarItemGroup` publishes no accessor — see
     /// `attachWindowMenu`.
-    private weak var segmentedRef: NSSegmentedControl?
+    weak var segmentedRef: NSSegmentedControl?
     /// The window this toolbar belongs to. Load-bearing, not a convenience:
     /// sessions are native tabs, so several windows carry an identical toolbar
     /// at once and a search that could wander into another one would hand this
@@ -187,20 +187,20 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         didSet { observeHostWidth(old: oldValue) }
     }
     /// The toolbar that owns `tabsGroup` — so we can swap the group in place.
-    private weak var toolbarRef: NSToolbar?
+    private(set) weak var toolbarRef: NSToolbar?
     /// Signature (title + dot) of the current segments. A group swap is needed
     /// whenever this changes — including a dot-only change, because mutating a
     /// live group's subitem images doesn't reliably re-render. Selection-only
     /// changes keep the same signature and just move `selectedIndex` in place.
-    private var currentSig: [String] = []
+    var currentSig: [String] = []
 
     fileprivate static let sessionsID = NSToolbarItem.Identifier("bento.sessions")
     fileprivate static let modeID = NSToolbarItem.Identifier("bento.mode")
     fileprivate static let newID = NSToolbarItem.Identifier("bento.new")
     fileprivate static let previewID = NSToolbarItem.Identifier("bento.preview")
-    fileprivate static let centerID = NSToolbarItem.Identifier("bento.center")
+    static let centerID = NSToolbarItem.Identifier("bento.center")
     fileprivate static let sizeID = NSToolbarItem.Identifier("bento.size")
-    fileprivate static let locationID = NSToolbarItem.Identifier("bento.location")
+    static let locationID = NSToolbarItem.Identifier("bento.location")
 
     /// The centre at rest: where the focused pane is (`claude · ~/proj`), as
     /// quiet status text. Not a control — it says where you are and does
@@ -214,7 +214,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// ~40% of the window: the location is the one variable-length item, and a
     /// deep path must truncate rather than shove the side items around.
     private var locationWidthCap: NSLayoutConstraint?
-    private var centerShowsTabs = true
+    var centerShowsTabs = true
 
     override init() {
         super.init()
@@ -291,7 +291,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     private var wantsModeItem = true
     /// The active tab's mode (nil = plain terminal) — the ＋ menu's first row
     /// says "New Pane" or "New tmux Window" after it.
-    private var sessionMode: TmuxSessionMode?
+    private(set) var sessionMode: TmuxSessionMode?
 
     @objc private func modeSwitched() {
         onSelectMode?(modeSwitch.selectedSegment == 1 ? .list : .tiled)
@@ -350,309 +350,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         guard let width = hostWindow?.frame.width, width > 0 else { return }
         locationWidthCap?.constant = (width * 0.4).rounded()
     }
-
-    /// Every session on the machine. Picking one moves this window onto it
-    /// (`switch-client`); one already open in another window comes forward
-    /// instead. The app is single-window by default, so a session pick is a
-    /// switch, not a new tab — "Open in New Window" (or ⌥) is the explicit
-    /// way to keep both.
-    private func sessionSwitchSection(_ menu: NSMenu) {
-        guard !sessions.isEmpty else { return }
-        let header = NSMenuItem(title: "Sessions", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
-        for session in sessions {
-            let item = NSMenuItem(title: sessionRowTitle(session),
-                                  action: #selector(selectSessionAction(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.representedObject = session.key
-            item.image = session.dot
-            item.keepingImageVisible()
-            item.state = (session.key == activeSessionKey) ? .on : .off
-            if let sub = sessionRowSubmenu(session) {
-                // An item with a submenu no longer fires its own action in
-                // AppKit (unlike the SwiftUI `Menu … primaryAction:` this shape
-                // came from), so the submenu leads with the action the row used
-                // to perform. Clicking the row still costs nothing extra — it
-                // opens the submenu, and the thing you wanted is the first item.
-                item.submenu = sub
-            }
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-    }
-
-    /// `name  ·  2 windows  ·  5m ago`, via the shared launcher phrasing so this
-    /// menu and the launcher describe a session the same way. A remote session
-    /// (no local poll info) is just its name — all we can honestly say about it.
-    private func sessionRowTitle(_ session: SessionRow) -> String {
-        if let subtitle = session.info?.subtitle() {
-            return "\(session.label)  ·  \(subtitle)"
-        }
-        return session.label
-    }
-
-    /// A session's own actions, reachable WITHOUT switching to it first — which
-    /// is the point: renaming or killing a session you are not in used to mean
-    /// opening it, acting, and closing it again.
-    ///
-    /// Windows are listed for other sessions only. For the ACTIVE session the
-    /// centre strip already owns its windows, and duplicating them here would
-    /// give the same thing two homes; for a session you are not in, nothing else
-    /// can reach them at all.
-    private func sessionRowSubmenu(_ session: SessionRow) -> NSMenu? {
-        // Local sessions only — see `SessionRow.info`.
-        guard let local = session.local, let info = session.info else { return nil }
-        let sub = NSMenu()
-        let isActive = session.key == activeSessionKey
-
-        let primary = NSMenuItem(
-            title: session.isOpen && !isActive ? "Show Its Window" : "Switch to This Session",
-            action: #selector(selectSessionAction(_:)), keyEquivalent: "")
-        primary.target = self
-        primary.representedObject = session.key
-        primary.isEnabled = !isActive
-        sub.addItem(primary)
-        // The explicit second window. Not offered where it would only front a
-        // window that is already there.
-        if !session.isOpen {
-            let newWindow = NSMenuItem(title: "Open in New Window",
-                                       action: #selector(openSessionInNewWindowAction(_:)),
-                                       keyEquivalent: "")
-            newWindow.target = self
-            newWindow.representedObject = session.key
-            sub.addItem(newWindow)
-        }
-
-        if !isActive, !info.windows.isEmpty {
-            sub.addItem(.separator())
-            let header = NSMenuItem(title: "Windows", action: nil, keyEquivalent: "")
-            header.isEnabled = false
-            sub.addItem(header)
-            for window in info.windows {
-                let it = NSMenuItem(title: window.label,
-                                    action: #selector(openSessionWindowAction(_:)),
-                                    keyEquivalent: "")
-                it.target = self
-                it.representedObject = [session.key, window.index] as [Any]
-                it.image = NSImage(systemSymbolName: window.isActive ? "circle.fill" : "circle",
-                                   accessibilityDescription: nil)
-                sub.addItem(it)
-            }
-        }
-
-        sub.addItem(.separator())
-        let rename = NSMenuItem(title: "Rename Session…",
-                                action: #selector(renameNamedSessionAction(_:)), keyEquivalent: "")
-        rename.target = self
-        rename.representedObject = local
-        sub.addItem(rename)
-        sub.addItem(.separator())
-        let kill = NSMenuItem(title: "Kill Session",
-                              action: #selector(killNamedSessionAction(_:)), keyEquivalent: "")
-        kill.target = self
-        kill.representedObject = local
-        kill.image = NSImage(systemSymbolName: "xmark.octagon", accessibilityDescription: nil)
-        kill.keepingImageVisible()
-        sub.addItem(kill)
-        return sub
-    }
-
-    @objc private func openSessionWindowAction(_ sender: NSMenuItem) {
-        guard let pair = sender.representedObject as? [Any], pair.count == 2,
-              let key = pair[0] as? String, let index = pair[1] as? Int,
-              let id = TmuxSessionID(key: key) else { return }
-        BentoTerminalWindow.focusOrOpen(id, windowIndex: index)
-    }
-
-    @objc private func renameNamedSessionAction(_ sender: NSMenuItem) {
-        guard let local = sender.representedObject as? LocalTmuxSessionName else { return }
-        guard let newName = promptRename(current: local.rawValue) else { return }
-        Task { try? await TmuxCLI.rename(session: local, to: newName) }
-    }
-
-    @objc private func killNamedSessionAction(_ sender: NSMenuItem) {
-        guard let local = sender.representedObject as? LocalTmuxSessionName else { return }
-        // Confirm here specifically. Everywhere else in Bento quitting or
-        // closing is a DETACH — the session survives — so this is the one action
-        // that actually destroys running processes, and from this menu it can be
-        // aimed at a session that isn't even on screen.
-        guard confirmKill(session: local.rawValue) else { return }
-        Task { try? await TmuxCLI.kill(session: local) }
-    }
-
-    @objc private func selectSessionAction(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String else { return }
-        if NSEvent.modifierFlags.contains(.option) {
-            onOpenSessionInNewWindow?(key)
-        } else {
-            onSelectSession?(key)
-        }
-    }
-
-    @objc private func openSessionInNewWindowAction(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String else { return }
-        onOpenSessionInNewWindow?(key)
-    }
-
-    /// The centre of the toolbar is shared: the window strip when the session
-    /// has more than one window, otherwise the focused pane's location title.
-    ///
-    /// A single-window session is the common case, and a one-item switcher is
-    /// chrome that says nothing.
-    func setCenterShowsTabs(_ showTabs: Bool) {
-        guard let tb = toolbarRef, showTabs != centerShowsTabs || tb.items.isEmpty else { return }
-        centerShowsTabs = showTabs
-        let want = showTabs ? Self.centerID : Self.locationID
-        if let idx = tb.items.firstIndex(where: {
-            $0.itemIdentifier == Self.centerID || $0.itemIdentifier == Self.locationID
-        }), tb.items[idx].itemIdentifier != want {
-            tb.removeItem(at: idx)
-            tb.insertItem(withItemIdentifier: want, at: idx)
-            tb.centeredItemIdentifiers = [want]
-        }
-    }
-
-    private func configureGroup(_ g: NSToolbarItemGroup) {
-        g.selectionMode = .selectOne
-        g.controlRepresentation = .expanded
-        g.target = self
-        g.action = #selector(tabsGroupAction)
-        g.label = "Windows"
-    }
-
-    /// Refresh the session segments (titles + agent dots) and the selection. The
-    /// segmented control is rebuilt (via the `titles:` convenience initializer —
-    /// the same path Finder uses, which renders the proper pill-selected segments)
-    /// whenever a title OR a dot changes; a selection-only change just moves the
-    /// `selectedIndex` in place.
-    func updateTabs(_ items: [(title: String, key: String, image: NSImage?)], selected: Int) {
-        let sig = items.map { "\($0.title)\u{1}\($0.key)" }
-        if sig != currentSig {
-            currentSig = sig
-            swapGroup(titles: items.map(\.title))
-        }
-        for (i, sub) in tabsGroup.subitems.enumerated() where i < items.count {
-            // Dot images are memoized upstream (same dot + appearance → same
-            // instance), so an identity match means nothing to update — skip the
-            // assignment rather than dirty the toolbar item every refresh. A
-            // fresh group after swapGroup has nil images and always assigns.
-            if sub.image !== items[i].image { sub.image = items[i].image }
-        }
-        if tabsGroup.subitems.indices.contains(selected) { tabsGroup.selectedIndex = selected }
-        // The control is rebuilt with the group, so re-find it after AppKit has
-        // laid the new one out. Cheap and idempotent (see attachWindowMenu).
-        DispatchQueue.main.async { [weak self] in self?.attachWindowMenu() }
-    }
-
-    // MARK: - Window segment context menu
-
-    /// Cache the segmented control AppKit renders for the expanded item group.
-    ///
-    /// It has to be found by walking the title bar's views: `NSToolbarItemGroup`
-    /// has no accessor for the control it builds, and the group is swapped
-    /// wholesale on every title/dot change. Idempotent; a miss just means no
-    /// context menu until the next refresh.
-    private func attachWindowMenu() {
-        guard centerShowsTabs, let host = hostWindow else { return }
-        if let seg = segmentedRef, seg.window === host,
-           seg.segmentCount == tabsGroup.subitems.count { return }
-        // The theme frame, so the search covers the title bar as well as content.
-        guard let root = host.contentView?.superview,
-              let seg = Self.findSegmented(in: root, count: tabsGroup.subitems.count)
-        else { return }
-        segmentedRef = seg
-    }
-
-    /// Right-click at `point` (window coordinates) — show that window tab's menu
-    /// if the click landed on one. Returns true when handled, so the window can
-    /// swallow the event.
-    ///
-    /// This is driven from `NSWindow.sendEvent` rather than the view's `menu`
-    /// property, which looks like the obvious hook and does not work: the
-    /// expanded group's control is SwiftUI-backed internally and consumes
-    /// `rightMouseDown` without ever consulting `.menu` (measured — an
-    /// NSEvent posted into the app's own queue never reached the delegate).
-    /// `sendEvent` sees events before dispatch, and `self` is by construction
-    /// the window that received the click — so unlike the global monitor this
-    /// replaces, there is no way to attribute it to another window.
-    func handleRightClick(atWindowPoint point: NSPoint) -> Bool {
-        attachWindowMenu()
-        guard centerShowsTabs, let seg = segmentedRef, seg.window === hostWindow else { return false }
-        guard seg.convert(seg.bounds, to: nil).contains(point) else { return false }
-        guard let host = hostWindow else { return false }
-        guard let index = segmentIndex(in: seg, screenPoint: host.convertPoint(toScreen: point)),
-              let items = onWindowMenu?(index), !items.isEmpty
-        else {
-            // Landed on the strip but not on a window (the overflow "…", or a
-            // strip mid-rebuild). Swallow it: the stock toolbar menu is not
-            // something to fall back to, and acting on a neighbouring window
-            // would be worse than doing nothing.
-            return true
-        }
-        let menu = NSMenu()
-        for item in items { menu.addItem(item) }
-        menu.popUp(positioning: nil, at: seg.convert(point, from: nil), in: seg)
-        return true
-    }
-
-    private static func findSegmented(in view: NSView, count: Int) -> NSSegmentedControl? {
-        if let s = view as? NSSegmentedControl, s.segmentCount == count, count > 1 { return s }
-        for sub in view.subviews {
-            if let found = findSegmented(in: sub, count: count) { return found }
-        }
-        return nil
-    }
-
-    /// Which segment the pointer is over, in screen coordinates.
-    ///
-    /// `NSSegmentedControl` publishes no point→segment API, and the three
-    /// obvious substitutes are all dead ends here (measured, not assumed):
-    /// `width(forSegment:)` reports 0 because the control is SwiftUI-backed
-    /// internally, the view's `accessibilityChildren` is just its cell, and
-    /// there is no `rectForSegment:`. The CELL, though, publishes one
-    /// `NSAccessibilitySegment` per segment carrying a real screen frame, in
-    /// order and non-overlapping — AppKit's own geometry rather than a
-    /// reconstruction of it.
-    ///
-    /// Every assumption is rechecked on each call and any mismatch returns nil.
-    /// This menu can close a window, and the last time something in the title
-    /// bar acted on a target the user hadn't pointed at, it killed a live
-    /// session — so guessing is not on the table.
-    private func segmentIndex(in seg: NSSegmentedControl, screenPoint: NSPoint) -> Int? {
-        guard let cell = seg.cell else { return nil }
-        let kids = (cell as AnyObject).accessibilityChildren?() ?? []
-        guard kids.count == seg.segmentCount else { return nil }
-        for (i, kid) in kids.enumerated() {
-            guard let frame = (kid as AnyObject).accessibilityFrame?() else { continue }
-            if frame.contains(screenPoint) { return i }
-        }
-        return nil
-    }
-
-    /// Rebuild the group with the convenience initializer and re-insert it into
-    /// the toolbar (the only way to get Finder's exact segmented appearance — a
-    /// hand-built `subitems` array renders as faint plain text instead).
-    private func swapGroup(titles: [String]) {
-        let g = NSToolbarItemGroup(
-            itemIdentifier: Self.centerID,
-            titles: titles.isEmpty ? [""] : titles,
-            selectionMode: .selectOne,
-            labels: nil,
-            target: self,
-            action: #selector(tabsGroupAction))
-        g.controlRepresentation = .expanded
-        g.label = "Windows"
-        tabsGroup = g
-        guard centerShowsTabs, let tb = toolbarRef,
-              let idx = tb.items.firstIndex(where: { $0.itemIdentifier == Self.centerID })
-        else { return }
-        tb.removeItem(at: idx)
-        tb.insertItem(withItemIdentifier: Self.centerID, at: idx)
-    }
-
-    @objc private func tabsGroupAction() { onSelectSegment?(tabsGroup.selectedIndex) }
 
     func makeToolbar() -> NSToolbar {
         let tb = NSToolbar(identifier: "BentoTerminalToolbar")
@@ -778,88 +475,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         return item
     }
 
-    // MARK: - Menus
-
-    /// Check for Updates… is greyed while the updater can't check (a debug
-    /// build has none; Sparkle is mid-check). Everything else is always on.
-    func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        if item.action == #selector(checkForUpdatesAction) { return AppUpdater.shared.canCheck }
-        return true
-    }
-
-    @objc private func sessionMenuTapped() {
-        pop(sessionActionsMenu(), from: sessionsButton)
-    }
-
-    /// The session switcher plus this session's actions, behind the named left
-    /// button. Window switching lives in the centre strip and window creation in
-    /// the New menu, so neither is duplicated here.
-    func sessionActionsMenu() -> NSMenu {
-        let menu = NSMenu()
-        // The tab bar switches between OPEN sessions; this list covers the rest
-        // — picking one moves this window onto it.
-        sessionSwitchSection(menu)
-        // A plain (no-tmux) terminal has no session/windows — just close it.
-        if activeTabIsPlain {
-            add(menu, "Close Terminal", #selector(closeTabAction))
-            appSection(menu)
-            return menu
-        }
-        add(menu, "Rename Session…", #selector(renameAction))
-        // Only when something has fixed the size: taking it over is the
-        // banner's job, and the default needs no row.
-        if sizingMode.offersRelease {
-            let release = NSMenuItem(title: TerminalSizingMode.releaseTitle,
-                                     action: #selector(releaseSizeAction), keyEquivalent: "")
-            release.target = self
-            release.image = NSImage(systemSymbolName: TerminalSizingMode.releaseSymbol,
-                                    accessibilityDescription: TerminalSizingMode.releaseTitle)
-            release.toolTip = sizingMode.releaseNote(owner: sizingOwner, ownerIsMe: sizingOwnerIsMe)
-            menu.addItem(release)
-        }
-        menu.addItem(.separator())
-        add(menu, "Detach (keep running)", #selector(detachAction))  // unload; session survives
-        // Destructive, and one row away from Detach — which is its harmless
-        // twin — so a separator keeps them from being adjacent targets.
-        menu.addItem(.separator())
-        add(menu, "Kill Session", #selector(killAction))
-        menu.items.last?.image = NSImage(systemSymbolName: "xmark.octagon", accessibilityDescription: nil)
-        menu.items.last?.keepingImageVisible()
-        // No "Close Window" here: next to ⇧⌘W (which closes the MAC window and
-        // leaves the session running) a row that killed the tmux window read
-        // as the same thing. Killing a window lives on the strip and the
-        // sidebar, beside the window it kills.
-        //
-        // No window SWITCH list here any more: windows own the centre strip, so
-        // duplicating them in this menu would give the same thing two homes and
-        // leave the user unsure which one is authoritative.
-        appSection(menu)
-        return menu
-    }
-
-    /// The app's own rows, last: this button is the one menu every window has
-    /// in the same place, so it doubles as the app menu for people who never
-    /// look at the menu bar.
-    ///
-    /// ⌘, is shown as a hint only. This menu is a popup, not part of the main
-    /// menu, so its key equivalent never competes with the real Settings item
-    /// (which `AppDelegate.openSettings` finds by that very shortcut).
-    private func appSection(_ menu: NSMenu) {
-        menu.addItem(.separator())
-        let settings = NSMenuItem(title: "Settings…", action: #selector(settingsAction),
-                                  keyEquivalent: ",")
-        settings.keyEquivalentModifierMask = .command
-        settings.target = self
-        settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
-        settings.keepingImageVisible()
-        menu.addItem(settings)
-        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesAction),
-                                 keyEquivalent: "")
-        updates.target = self
-        menu.addItem(updates)
-        add(menu, "About BentoTerm", #selector(aboutAction))
-    }
-
+    // MARK: - Session size banner
 
     /// Put the banner's copy on the button and add or drop its toolbar item.
     /// The button carries WHY the canvas looks wrong; the tooltip carries the
@@ -908,282 +524,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         } else {
             run(alert.runModal())
         }
-    }
-
-    /// Every way to make something new, in one menu: more of this session
-    /// (a pane or tmux window, an agent), then a new session, a plain shell, or
-    /// a host from `~/.ssh/config`.
-    ///
-    /// Rows that create INSIDE a tmux session (the first row and Recent Agents)
-    /// come from the shared catalog (`PaneMenuLayout.macNewMenuSessionRows`)
-    /// and are dropped on a plain terminal rather than disabled. The level is
-    /// spelled out in each title ("New tmux Window", "New Session"): a bare
-    /// "Window" reads as a Mac window everywhere else in the OS. Key
-    /// equivalents are the menu bar's, shown here as a reminder.
-    @objc private func newTapped() {
-        let menu = NSMenu()
-        let context = PaneMenuContext(isTmuxPane: !activeTabIsPlain,
-                                      sessionMode: sessionMode ?? .tiled)
-        let rows = PaneMenuLayout.macNewMenuSessionRows(context)
-        for row in rows {
-            guard case .command(let command) = row else { continue }
-            let item = plainItem(symbol: command.symbol(on: .macNewMenu),
-                                 title: command.title(on: .macNewMenu),
-                                 tip: command.tip(on: .macNewMenu) ?? "",
-                                 action: #selector(newPaneOrWindowAction))
-            item.keyEquivalent = "n"
-            item.keyEquivalentModifierMask = .command
-            menu.addItem(item.keepingImageVisible())
-        }
-        menu.addItem(plainItem(symbol: LaunchAction.agentSession.systemImage, title: "New Agent…",
-                               tip: LaunchAction.agentSession.detail,
-                               action: #selector(newAgentAction)).keepingImageVisible())
-        if rows.contains(.recentAgents) {
-            // The agent you already had open in that repo, split in beside this
-            // pane. Dispatched through the responder chain like the other pane
-            // actions, so it lands on the active tab's pane host.
-            let recents = GhosttyTiledPaneHost.recentAgentItems(
-                host: launchHost, target: self, action: #selector(splitRecentAction(_:)))
-            if !recents.isEmpty {
-                let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
-                header.isEnabled = false
-                menu.addItem(header)
-                recents.forEach { menu.addItem($0) }
-            }
-        }
-
-        menu.addItem(.separator())
-        let session = plainItem(symbol: LaunchAction.emptySession.systemImage, title: "New Session",
-                                tip: "A new tmux session in a window of its own.",
-                                action: #selector(newSessionAction))
-        session.keyEquivalent = "n"
-        session.keyEquivalentModifierMask = [.command, .shift]
-        menu.addItem(session.keepingImageVisible())
-        menu.addItem(plainItem(symbol: LaunchAction.plainTerminal.systemImage,
-                               title: "New Plain Terminal",
-                               tip: LaunchAction.plainTerminal.detail,
-                               action: #selector(newPlainTerminalAction)).keepingImageVisible())
-        menu.addItem(SSHHostMenu.item(target: self,
-                                      remoteTmux: #selector(remoteSessionAction(_:)),
-                                      shell: #selector(sshShellAction(_:))).keepingImageVisible())
-
-        pop(menu, from: newButton)
-    }
-
-    /// A one-line row: symbol, title, and the explanation on hover.
-    private func plainItem(symbol: String?, title: String, tip: String, action: Selector?) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        if let symbol {
-            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
-        }
-        if !tip.isEmpty { item.toolTip = tip }
-        return item
-    }
-
-
-
-    private func add(_ menu: NSMenu, _ title: String, _ action: Selector) {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
-    }
-
-
-    private func pop(_ menu: NSMenu, from button: NSView) {
-        if let event = NSApp.currentEvent {
-            NSMenu.popUpContextMenu(menu, with: event, for: button)
-        } else {
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height), in: button)
-        }
-    }
-
-    // MARK: - Actions
-
-    @objc private func newPaneOrWindowAction() { BentoTerminalWindow.newPaneOrWindow() }
-    @objc private func newAgentAction() { BentoTerminalWindow.onNewAgentSession?() }
-    @objc private func newSessionAction() { BentoTerminalWindow.newSessionWindow() }
-    @objc private func newPlainTerminalAction() { BentoTerminalWindow.newWindowNoTmux() }
-    @objc private func sshShellAction(_ sender: NSMenuItem) {
-        if let host = sender.representedObject as? String { BentoTerminalWindow.newSSHWindow(host: host) }
-    }
-    /// A session on an ssh host, or a new one there. A new one is numbered
-    /// against what the host was last seen running, so it can't silently
-    /// attach to a `bento-2` that already exists there.
-    @objc private func remoteSessionAction(_ sender: NSMenuItem) {
-        guard let pick = sender.representedObject as? SSHHostMenu.RemoteSessionPick else { return }
-        let name = pick.session ?? {
-            let there = (try? RemoteTmuxSessions.cached(pick.host)?.get())?.map(\.name) ?? []
-            return TmuxSessionNaming.numbered(BentoTerminalWindow.defaultSessionName, existing: Set(there))
-        }()
-        RemoteTmuxSessions.invalidate(pick.host)
-        BentoTerminalWindow.focusOrOpen(TmuxSessionID.ssh(host: pick.host, name: name))
-    }
-    @objc private func closeTabAction() { onCloseTab?() }
-    @objc private func settingsAction() { AppDelegate.openSettings() }
-    @objc private func checkForUpdatesAction() { AppUpdater.shared.checkForUpdates() }
-    @objc private func aboutAction() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(nil)
-    }
-    /// Forwarded with the menu item as the sender, because the record it
-    /// carries IS the argument.
-    @objc private func splitRecentAction(_ sender: Any?) {
-        BentoPaneAction.dispatch(BentoPaneAction.splitRecent, from: sender)
-    }
-    @objc private func renameAction() { onRenameSession?() }
-    @objc private func detachAction() { onDetach?() }
-    @objc private func releaseSizeAction() { onReleaseSize?() }
-    @objc private func killAction() { onKillSession?() }
-}
-
-// MARK: - Menu images
-
-extension NSMenuItem {
-    /// macOS 27 hides SF Symbol images in menus unless a row asks to keep its
-    /// image. Only the rows whose icon carries meaning ask: creation rows,
-    /// status dots, Settings, splits and destructive rows. Everything else is
-    /// text-only, which is the system's default for a reason.
-    @discardableResult
-    func keepingImageVisible() -> NSMenuItem {
-        preferredImageVisibility = .visible
-        return self
-    }
-}
-
-// MARK: - The ~/.ssh/config menu
-
-/// The ＋ menu's `SSH ▸`: one submenu per host from `~/.ssh/config`, each
-/// listing the tmux sessions running there, then New tmux Session and a plain
-/// shell.
-///
-/// Hosts are re-read from `~/.ssh/config` every time the ＋ menu is built, so
-/// edits show up without a relaunch; that read is one small local file. The
-/// one network read is a host's session list, fetched when its submenu opens
-/// (`RemoteSessionsMenuFiller`).
-@MainActor
-enum SSHHostMenu {
-    static let title = "SSH"
-    static let tip = "A host from your ~/.ssh/config: a tmux session on it, or a plain shell."
-
-    /// What a session row carries: `session` nil = a new session.
-    struct RemoteSessionPick {
-        let host: String
-        let session: String?
-    }
-
-    /// The submenus' delegates. `NSMenu.delegate` is weak, so something has to
-    /// hold them for as long as the menu can open; replaced per build.
-    private static var fillers: [RemoteSessionsMenuFiller] = []
-
-    /// The `SSH ▸` row. `remoteTmux` gets a `RemoteSessionPick` as
-    /// `representedObject`; `shell` gets the host alias.
-    static func item(target: AnyObject, remoteTmux: Selector, shell: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.image = NSImage(systemSymbolName: "network", accessibilityDescription: title)
-        item.toolTip = tip
-        let hosts = SSHConfigHosts.hosts()
-        let menu = NSMenu()
-        fillers = []
-        if hosts.isEmpty {
-            // A missing or unreadable config lands here too.
-            let none = NSMenuItem(title: "No hosts in ~/.ssh/config", action: nil, keyEquivalent: "")
-            none.isEnabled = false
-            menu.addItem(none)
-        }
-        for host in hosts {
-            let row = NSMenuItem(title: host, action: nil, keyEquivalent: "")
-            let filler = RemoteSessionsMenuFiller(host: host, target: target,
-                                                  pick: remoteTmux, shell: shell)
-            let sessions = NSMenu()
-            sessions.delegate = filler
-            fillers.append(filler)
-            row.submenu = sessions
-            menu.addItem(row)
-        }
-        item.submenu = menu
-        return item
-    }
-}
-
-/// Fills `SSH ▸ host ▸` when it opens: what is running on the host, then the
-/// two ways in that need no list.
-///
-/// The list comes over ssh (`RemoteTmuxSessions`, ~6s ceiling), so the menu
-/// opens at once with a "Listing…" row and is filled in place when the answer
-/// lands — the main actor still runs while a menu is tracking. New tmux Session
-/// and the plain shell are there from the first frame: a host you cannot list is
-/// still a host you can connect to.
-@MainActor
-final class RemoteSessionsMenuFiller: NSObject, NSMenuDelegate {
-    private let host: String
-    private weak var target: AnyObject?
-    private let pick: Selector
-    private let shell: Selector
-    private var loading = false
-
-    init(host: String, target: AnyObject, pick: Selector, shell: Selector) {
-        self.host = host
-        self.target = target
-        self.pick = pick
-        self.shell = shell
-    }
-
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        if let cached = RemoteTmuxSessions.cached(host) {
-            fill(menu, with: cached)
-            return
-        }
-        fill(menu, with: nil)
-        guard !loading else { return }
-        loading = true
-        Task { @MainActor [weak self, weak menu] in
-            guard let self else { return }
-            let result = await RemoteTmuxSessions.list(alias: self.host)
-            self.loading = false
-            if let menu { self.fill(menu, with: result) }
-        }
-    }
-
-    private func fill(_ menu: NSMenu,
-                      with result: Result<[RemoteTmuxSessions.Session], RemoteTmuxSessions.Failure>?) {
-        menu.removeAllItems()
-        switch result {
-        case nil:
-            menu.addItem(disabled("Listing sessions on \(host)…"))
-        case .success(let sessions) where sessions.isEmpty:
-            menu.addItem(disabled("No tmux sessions on \(host)"))
-        case .success(let sessions):
-            for session in sessions {
-                let item = NSMenuItem(title: session.name, action: pick, keyEquivalent: "")
-                item.target = target
-                item.representedObject = SSHHostMenu.RemoteSessionPick(host: host, session: session.name)
-                item.image = NSImage(systemSymbolName: session.attached ? "record.circle" : "rectangle.stack",
-                                     accessibilityDescription: nil)
-                let windows = session.windows == 1 ? "1 window" : "\(session.windows) windows"
-                item.subtitle = session.attached ? "\(windows) · attached" : windows
-                menu.addItem(item)
-            }
-        case .failure(let why):
-            menu.addItem(disabled(why.message))
-        }
-        menu.addItem(.separator())
-        let new = NSMenuItem(title: "New tmux Session", action: pick, keyEquivalent: "")
-        new.target = target
-        new.representedObject = SSHHostMenu.RemoteSessionPick(host: host, session: nil)
-        new.image = NSImage(systemSymbolName: "plus.rectangle.on.rectangle", accessibilityDescription: nil)
-        menu.addItem(new)
-        let plain = NSMenuItem(title: "Shell (no tmux)", action: shell, keyEquivalent: "")
-        plain.target = target
-        plain.representedObject = host
-        plain.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
-        menu.addItem(plain)
-    }
-
-    private func disabled(_ title: String) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        return item
     }
 }
 
