@@ -273,6 +273,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// has no tmux session (plain terminal) — the switch is meaningless there,
     /// so it goes away entirely.
     func setSessionMode(_ mode: TmuxSessionMode?) {
+        sessionMode = mode
         wantsModeItem = (mode != nil)
         syncToolbarItems()
         guard let mode else { return }
@@ -283,6 +284,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// because `setSessionMode` can run before `makeToolbar`, and the answer has
     /// to survive until there is a toolbar to apply it to.
     private var wantsModeItem = true
+    /// The active tab's mode (nil = plain terminal) — the ＋ menu's first row
+    /// says "New Pane" or "New tmux Window" after it.
+    private var sessionMode: TmuxSessionMode?
 
     @objc private func modeSwitched() {
         onSelectMode?(modeSwitch.selectedSegment == 1 ? .list : .tiled)
@@ -883,52 +887,62 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         }
     }
 
-    /// The quick creates, by tmux level: a session, a window, a pane, and the
-    /// agents you already had open.
+    /// Every way to make something new, in one menu: more of this session
+    /// (a pane or tmux window, an agent), then a new session, a plain shell, or
+    /// a host from `~/.ssh/config`.
     ///
-    /// The level is spelled out in each title ("New tmux Window", "Split
-    /// Pane"): a bare "Window" reads as a Mac window everywhere else in the OS.
+    /// Rows that create INSIDE a tmux session (the first row and Recent Agents)
+    /// come from the shared catalog (`PaneMenuLayout.macNewMenuSessionRows`)
+    /// and are dropped on a plain terminal rather than disabled. The level is
+    /// spelled out in each title ("New tmux Window", "New Session"): a bare
+    /// "Window" reads as a Mac window everywhere else in the OS. Key
+    /// equivalents are the menu bar's, shown here as a reminder.
     @objc private func newTapped() {
         let menu = NSMenu()
-
-        menu.addItem(plainItem(
-            symbol: "plus.rectangle", title: "New Session",
-            tip: "A new tmux session in a window of its own.",
-            action: #selector(newSessionAction)))
-
-        // Rows from the shared catalog (PaneMenuLayout.macNewMenuSessionRows).
-        // Creation goes through the responder chain, the same route the menu
-        // bar and the pane menu use, so it lands on the pane host of whichever
-        // tab is active.
-        for row in PaneMenuLayout.macNewMenuSessionRows(hasSession: !activeTabIsPlain) {
-            switch row {
-            case .command(let command):
-                menu.addItem(plainItem(
-                    symbol: command.symbol(on: .macNewMenu),
-                    title: command.title(on: .macNewMenu),
-                    tip: command.tip(on: .macNewMenu) ?? "",
-                    action: #selector(paneCommandAction(_:))))
-                menu.items.last?.representedObject = command.rawValue
-            case .separator:
-                menu.addItem(.separator())
-            case .recentAgents:
-                // The middle ground between "whatever this pane is running"
-                // and "type it all out": the agent you already had open in that
-                // repo. Rows carry their record and are dispatched through the
-                // responder chain like every other pane action here.
-                let recents = GhosttyTiledPaneHost.recentAgentItems(
-                    host: launchHost, target: self, action: #selector(splitRecentAction(_:)))
-                if !recents.isEmpty {
-                    menu.addItem(.separator())
-                    let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
-                    header.isEnabled = false
-                    menu.addItem(header)
-                    recents.forEach { menu.addItem($0) }
-                }
-            case .layouts, .moveToSession, .paste:
-                break   // not New-menu rows
+        let context = PaneMenuContext(isTmuxPane: !activeTabIsPlain,
+                                      sessionMode: sessionMode ?? .tiled)
+        let rows = PaneMenuLayout.macNewMenuSessionRows(context)
+        for row in rows {
+            guard case .command(let command) = row else { continue }
+            let item = plainItem(symbol: command.symbol(on: .macNewMenu),
+                                 title: command.title(on: .macNewMenu),
+                                 tip: command.tip(on: .macNewMenu) ?? "",
+                                 action: #selector(newPaneOrWindowAction))
+            item.keyEquivalent = "n"
+            item.keyEquivalentModifierMask = .command
+            menu.addItem(item)
+        }
+        menu.addItem(plainItem(symbol: LaunchAction.agentSession.systemImage, title: "New Agent…",
+                               tip: LaunchAction.agentSession.detail,
+                               action: #selector(newAgentAction)))
+        if rows.contains(.recentAgents) {
+            // The agent you already had open in that repo, split in beside this
+            // pane. Dispatched through the responder chain like the other pane
+            // actions, so it lands on the active tab's pane host.
+            let recents = GhosttyTiledPaneHost.recentAgentItems(
+                host: launchHost, target: self, action: #selector(splitRecentAction(_:)))
+            if !recents.isEmpty {
+                let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                menu.addItem(header)
+                recents.forEach { menu.addItem($0) }
             }
         }
+
+        menu.addItem(.separator())
+        let session = plainItem(symbol: LaunchAction.emptySession.systemImage, title: "New Session",
+                                tip: "A new tmux session in a window of its own.",
+                                action: #selector(newSessionAction))
+        session.keyEquivalent = "n"
+        session.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(session)
+        menu.addItem(plainItem(symbol: LaunchAction.plainTerminal.systemImage,
+                               title: "New Plain Terminal",
+                               tip: LaunchAction.plainTerminal.detail,
+                               action: #selector(newPlainTerminalAction)))
+        menu.addItem(SSHHostMenu.item(target: self,
+                                      remoteTmux: #selector(remoteSessionAction(_:)),
+                                      shell: #selector(sshShellAction(_:))))
 
         pop(menu, from: actionsControl)
     }
@@ -963,16 +977,26 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
     // MARK: - Actions
 
+    @objc private func newPaneOrWindowAction() { BentoTerminalWindow.newPaneOrWindow() }
+    @objc private func newAgentAction() { BentoTerminalWindow.onNewAgentSession?() }
     @objc private func newSessionAction() { BentoTerminalWindow.newSessionWindow() }
-    @objc private func closeTabAction() { onCloseTab?() }
-    /// A catalog row from the New menu, dispatched through the responder chain
-    /// to the active tab's pane host.
-    @objc private func paneCommandAction(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let command = PaneCommand(rawValue: raw),
-              let action = GhosttyTiledPaneHost.paneMenuSelector(command) else { return }
-        BentoPaneAction.dispatch(action)
+    @objc private func newPlainTerminalAction() { BentoTerminalWindow.newWindowNoTmux() }
+    @objc private func sshShellAction(_ sender: NSMenuItem) {
+        if let host = sender.representedObject as? String { BentoTerminalWindow.newSSHWindow(host: host) }
     }
+    /// A session on an ssh host, or a new one there. A new one is numbered
+    /// against what the host was last seen running, so it can't silently
+    /// attach to a `bento-2` that already exists there.
+    @objc private func remoteSessionAction(_ sender: NSMenuItem) {
+        guard let pick = sender.representedObject as? SSHHostMenu.RemoteSessionPick else { return }
+        let name = pick.session ?? {
+            let there = (try? RemoteTmuxSessions.cached(pick.host)?.get())?.map(\.name) ?? []
+            return TmuxSessionNaming.numbered(BentoTerminalWindow.defaultSessionName, existing: Set(there))
+        }()
+        RemoteTmuxSessions.invalidate(pick.host)
+        BentoTerminalWindow.focusOrOpen(TmuxSessionID.ssh(host: pick.host, name: name))
+    }
+    @objc private func closeTabAction() { onCloseTab?() }
     /// Forwarded with the menu item as the sender, because the record it
     /// carries IS the argument.
     @objc private func splitRecentAction(_ sender: Any?) {
@@ -986,29 +1010,20 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
 
 // MARK: - The ~/.ssh/config menu
 
-/// The two ways to reach an ssh host, and the host list under each.
+/// The ＋ menu's `SSH ▸`: one submenu per host from `~/.ssh/config`, each
+/// listing the tmux sessions running there, then New tmux Session and a plain
+/// shell.
 ///
-/// The launcher page's `SSH` row pops this. (The toolbar's `New ⌄` used to
-/// carry the same two rows; it now sends you to the launcher instead.)
-///
-/// Hosts are re-read from `~/.ssh/config` on every open, so edits to the file
-/// show up without a relaunch, and the read is a single small local file — the
-/// launcher's "never block on the network" rule holds here too. The one network
-/// read is a host's tmux session list, fetched when its submenu under
-/// `New Remote tmux Session` opens (see `RemoteSessionsMenuFiller`).
+/// Hosts are re-read from `~/.ssh/config` every time the ＋ menu is built, so
+/// edits show up without a relaunch; that read is one small local file. The
+/// one network read is a host's session list, fetched when its submenu opens
+/// (`RemoteSessionsMenuFiller`).
+@MainActor
 enum SSHHostMenu {
-    static let connectTitle = "New SSH Connection"
-    static let connectTip = "A terminal connected to a host from your ~/.ssh/config."
-    /// The same host list, but attaching a tmux session on the far end instead
-    /// of dropping into its shell — the remote equivalent of "New Terminal",
-    /// tiled panes and all. Its own row rather than a modifier on the one above
-    /// because the two differ in what SURVIVES: the plain connection dies with
-    /// the tab, the session doesn't.
-    static let remoteTmuxTitle = "New Remote tmux Session"
-    static let remoteTmuxTip = "A tiled tmux session running on a host from your ~/.ssh/config."
+    static let title = "SSH"
+    static let tip = "A host from your ~/.ssh/config: a tmux session on it, or a plain shell."
 
-    /// What a row under `New Remote tmux Session ▸ host ▸` carries:
-    /// `session` nil = a new session.
+    /// What a session row carries: `session` nil = a new session.
     struct RemoteSessionPick {
         let host: String
         let session: String?
@@ -1016,83 +1031,45 @@ enum SSHHostMenu {
 
     /// The submenus' delegates. `NSMenu.delegate` is weak, so something has to
     /// hold them for as long as the menu can open; replaced per build.
-    @MainActor private static var fillers: [RemoteSessionsMenuFiller] = []
+    private static var fillers: [RemoteSessionsMenuFiller] = []
 
-    /// The two rows, each with a host submenu. `connect` and `shell` get the
-    /// host alias as `representedObject`; `remoteTmux` gets a
-    /// `RemoteSessionPick`. Under the remote-tmux row each host is itself a
-    /// submenu: the sessions running there, then New Session and a plain shell.
-    @MainActor
-    private static func items(target: AnyObject, connect: Selector, remoteTmux: Selector,
-                              shell: Selector) -> [NSMenuItem] {
+    /// The `SSH ▸` row. `remoteTmux` gets a `RemoteSessionPick` as
+    /// `representedObject`; `shell` gets the host alias.
+    static func item(target: AnyObject, remoteTmux: Selector, shell: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: "network", accessibilityDescription: title)
+        item.toolTip = tip
         let hosts = SSHConfigHosts.hosts()
-        let ssh = row(symbol: "network", title: connectTitle, tip: connectTip)
-        ssh.submenu = hostSubmenu(hosts: hosts, target: target, action: connect)
-        // `nil` symbol on the second row: the icon marks where the group
-        // starts, and repeating it says nothing the eye did not already get.
-        let tmux = row(symbol: nil, title: remoteTmuxTitle, tip: remoteTmuxTip)
-        let hostMenu = hostSubmenu(hosts: hosts, target: target, action: nil)
+        let menu = NSMenu()
         fillers = []
-        for item in hostMenu.items {
-            guard let host = item.representedObject as? String else { continue }
+        if hosts.isEmpty {
+            // A missing or unreadable config lands here too.
+            let none = NSMenuItem(title: "No hosts in ~/.ssh/config", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        }
+        for host in hosts {
+            let row = NSMenuItem(title: host, action: nil, keyEquivalent: "")
             let filler = RemoteSessionsMenuFiller(host: host, target: target,
                                                   pick: remoteTmux, shell: shell)
             let sessions = NSMenu()
             sessions.delegate = filler
             fillers.append(filler)
-            item.submenu = sessions
+            row.submenu = sessions
+            menu.addItem(row)
         }
-        tmux.submenu = hostMenu
-        return [ssh, tmux]
-    }
-
-    /// The two rows as a standalone menu — what the launcher's `SSH` row pops.
-    @MainActor
-    static func menu(target: AnyObject, connect: Selector, remoteTmux: Selector,
-                     shell: Selector) -> NSMenu {
-        let menu = NSMenu()
-        for item in items(target: target, connect: connect, remoteTmux: remoteTmux, shell: shell) {
-            menu.addItem(item)
-        }
-        return menu
-    }
-
-    private static func row(symbol: String?, title: String, tip: String) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        if let symbol {
-            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
-        }
-        item.toolTip = tip
+        item.submenu = menu
         return item
-    }
-
-    /// One item per concrete host; a disabled hint when there are none —
-    /// including a missing or unreadable config.
-    private static func hostSubmenu(hosts: [String], target: AnyObject,
-                                    action: Selector?) -> NSMenu {
-        let menu = NSMenu()
-        guard !hosts.isEmpty else {
-            menu.addItem(NSMenuItem(title: "No hosts in ~/.ssh/config",
-                                    action: nil, keyEquivalent: ""))
-            return menu
-        }
-        for host in hosts {
-            let item = NSMenuItem(title: host, action: action, keyEquivalent: "")
-            item.target = target
-            item.representedObject = host
-            menu.addItem(item)
-        }
-        return menu
     }
 }
 
-/// Fills `New Remote tmux Session ▸ host ▸` when it opens: what is running on
-/// the host, then the two ways in that need no list.
+/// Fills `SSH ▸ host ▸` when it opens: what is running on the host, then the
+/// two ways in that need no list.
 ///
 /// The list comes over ssh (`RemoteTmuxSessions`, ~6s ceiling), so the menu
 /// opens at once with a "Listing…" row and is filled in place when the answer
-/// lands — the main actor still runs while a menu is tracking. New Session and
-/// the plain shell are there from the first frame: a host you cannot list is
+/// lands — the main actor still runs while a menu is tracking. New tmux Session
+/// and the plain shell are there from the first frame: a host you cannot list is
 /// still a host you can connect to.
 @MainActor
 final class RemoteSessionsMenuFiller: NSObject, NSMenuDelegate {
@@ -1150,7 +1127,7 @@ final class RemoteSessionsMenuFiller: NSObject, NSMenuDelegate {
             menu.addItem(disabled(why.message))
         }
         menu.addItem(.separator())
-        let new = NSMenuItem(title: "New Session", action: pick, keyEquivalent: "")
+        let new = NSMenuItem(title: "New tmux Session", action: pick, keyEquivalent: "")
         new.target = target
         new.representedObject = SSHHostMenu.RemoteSessionPick(host: host, session: nil)
         new.image = NSImage(systemSymbolName: "plus.rectangle.on.rectangle", accessibilityDescription: nil)

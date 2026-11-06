@@ -23,9 +23,11 @@ public enum PaneCommand: String, CaseIterable, Sendable {
     case zoom
     case exitCopyMode
     case closePane
-    /// A tmux window seeded with the current pane's folder and command, in
-    /// either mode (the New menu's row).
-    case newTmuxWindowDuplicate
+    /// ⌘N in Parallel: one more pane, split along the active pane's longer
+    /// side (the New menu's first row).
+    case newPane
+    /// ⌘N in Focus: one more tmux window (the same row, in Focus).
+    case newTmuxWindow
 
     public enum Surface: Sendable {
         /// Mac: the title bar's ⌄ and the surface's right-click menu.
@@ -44,16 +46,13 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case .find: return "Find…"
         case .splitRight: return "Split Right (-h)"
         case .splitDown: return "Split Down (-v)"
-        case .splitDuplicate:
-            switch surface {
-            case .macNewMenu: return "Split Pane"
-            default: return "Split — Duplicate Current"
-            }
+        case .splitDuplicate: return "Split — Duplicate Current"
         case .splitPathCommand: return "Split — Path & Command…"
         case .zoom: return zoomed ? "Unzoom" : "Zoom"
         case .exitCopyMode: return "Exit tmux copy-mode"
         case .closePane: return "Close Pane"
-        case .newTmuxWindowDuplicate: return "New tmux Window"
+        case .newPane: return "New Pane"
+        case .newTmuxWindow: return "New tmux Window"
         }
     }
 
@@ -63,14 +62,14 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case .find: return "magnifyingglass"
         case .splitRight: return "rectangle.split.2x1"
         case .splitDown: return "rectangle.split.1x2"
-        case .splitDuplicate:
-            return surface == .macNewMenu ? "square.split.2x1" : "plus.square.on.square"
+        case .splitDuplicate: return "plus.square.on.square"
         case .splitPathCommand: return "terminal"
         case .zoom:
             return zoomed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
         case .exitCopyMode: return "arrow.uturn.backward"
         case .closePane: return "xmark"
-        case .newTmuxWindowDuplicate: return "macwindow"
+        case .newPane: return "square.split.2x1"
+        case .newTmuxWindow: return "macwindow"
         }
     }
 
@@ -82,10 +81,10 @@ public enum PaneCommand: String, CaseIterable, Sendable {
     public func tip(on surface: Surface) -> String? {
         guard surface == .macNewMenu else { return nil }
         switch self {
-        case .newTmuxWindowDuplicate:
-            return "A tmux window in this session, with the current pane's folder and command."
-        case .splitDuplicate:
-            return "Split the current pane, inheriting its folder and command."
+        case .newPane:
+            return "Split the current pane along its longer side."
+        case .newTmuxWindow:
+            return "A new tmux window in this session."
         default: return nil
         }
     }
@@ -159,14 +158,14 @@ public enum PaneMenuLayout {
         return rows
     }
 
-    /// Mac `New ⌄` rows that need a session to create inside; dropped on a
-    /// plain terminal rather than disabled. Picking a folder and command
-    /// is the pane menu's (splits) and the Focus sidebar's (windows) — New ⌄
-    /// is the quick path.
-    public static func macNewMenuSessionRows(hasSession: Bool) -> [PaneMenuEntry] {
-        guard hasSession else { return [] }
-        return [.separator, .command(.newTmuxWindowDuplicate), .command(.splitDuplicate),
-                .recentAgents]
+    /// Mac ＋ menu rows that need a tmux session to create inside: one more of
+    /// what the session is made of (a pane in Parallel, a tmux window in
+    /// Focus — what ⌘N does), then the remembered agents. Dropped on a plain
+    /// terminal rather than disabled. The session-level rows (agent, session,
+    /// plain terminal, SSH) are the Mac's own and follow these.
+    public static func macNewMenuSessionRows(_ c: PaneMenuContext) -> [PaneMenuEntry] {
+        guard c.isTmuxPane else { return [] }
+        return [.command(c.sessionMode == .list ? .newTmuxWindow : .newPane), .recentAgents]
     }
 
     /// iOS pane menu, as its five sections. `find` and `paste` are always

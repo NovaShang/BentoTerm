@@ -38,16 +38,16 @@ struct PaneCommandsTests {
     }
 
     @Test func macNewMenuRows() {
-        #expect(PaneMenuLayout.macNewMenuSessionRows(hasSession: false).isEmpty)
-        let rows = PaneMenuLayout.macNewMenuSessionRows(hasSession: true)
-        #expect(titles(rows, .macNewMenu) == [
-            "—", "New tmux Window", "Split Pane", "[recents]",
+        let plain = PaneMenuContext(isTmuxPane: false, sessionMode: .tiled)
+        #expect(PaneMenuLayout.macNewMenuSessionRows(plain).isEmpty)
+        #expect(titles(PaneMenuLayout.macNewMenuSessionRows(parallel), .macNewMenu) == [
+            "New Pane", "[recents]",
         ])
-        let symbols = rows.compactMap { row -> String?? in
-            if case .command(let c) = row { return .some(c.symbol(on: .macNewMenu)) }
-            return nil
-        }
-        #expect(symbols == ["macwindow", "square.split.2x1"])
+        #expect(titles(PaneMenuLayout.macNewMenuSessionRows(focus), .macNewMenu) == [
+            "New tmux Window", "[recents]",
+        ])
+        #expect(PaneCommand.newPane.symbol(on: .macNewMenu) == "square.split.2x1")
+        #expect(PaneCommand.newTmuxWindow.symbol(on: .macNewMenu) == "macwindow")
     }
 
     @Test func iosPaneMenuForATmuxPane() {

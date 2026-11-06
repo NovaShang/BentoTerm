@@ -666,7 +666,8 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         case .splitPathCommand: return BentoPaneAction.splitPathCommand
         case .zoom: return BentoPaneAction.toggleZoom
         case .closePane: return BentoPaneAction.closePane
-        case .newTmuxWindowDuplicate: return BentoPaneAction.newWindowDuplicate
+        // ⌘N's route: `BentoTerminalWindow.newPaneOrWindow`, not a pane action.
+        case .newPane, .newTmuxWindow: return nil
         case .find: return BentoPaneAction.findInPane
         case .exitCopyMode: return nil
         }
@@ -1248,13 +1249,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         }
     }
 
-    /// New window seeded from the current pane — same two seeds a split offers,
-    /// so "another window" and "another pane" are created the same way and only
-    /// differ in where the thing lands.
-    @objc func newWindowDuplicate(_ sender: Any?) {
-        Task { [viewModel] in await viewModel.newListWindow(.duplicateCurrent) }
-    }
-
     private func cyclePane(by step: Int) {
         let ids = orderedPaneIDs
         guard !ids.isEmpty else { return }
@@ -1284,7 +1278,6 @@ public enum BentoPaneAction {
     public static let splitDuplicate = #selector(GhosttyTiledPaneHost.splitDuplicateCurrent(_:))
     public static let splitPathCommand = #selector(GhosttyTiledPaneHost.splitWithPathCommand(_:))
     public static let splitRecent = #selector(GhosttyTiledPaneHost.splitRecentLaunch(_:))
-    public static let newWindowDuplicate = #selector(GhosttyTiledPaneHost.newWindowDuplicate(_:))
     public static let findInPane = #selector(GhosttyTiledPaneHost.findInPane(_:))
     public static let findNext = #selector(GhosttyTiledPaneHost.findNextMatch(_:))
     public static let findPrevious = #selector(GhosttyTiledPaneHost.findPreviousMatch(_:))
