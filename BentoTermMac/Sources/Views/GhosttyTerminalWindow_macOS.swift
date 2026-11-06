@@ -1028,7 +1028,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // ⌘N's behaviour: a launcher, which becomes the new session.
         toolbar.onNewSession = { BentoTerminalWindow.newSessionWindow() }
         toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
-        toolbar.onCloseWindow = { [weak self] in self?.activeTab?.viewModel.closeWindow() }
         toolbar.onSetSizingMode = { [weak self] mode in
             self?.activeTab?.viewModel.setSizingMode(mode)
             self?.rebuildTabBar()

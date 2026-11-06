@@ -25,7 +25,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// (agent, empty, plain shell, ssh host, a remembered launch) is offered.
     var onNewSession: (() -> Void)?
     var onOpenSettings: (() -> Void)?
-    var onCloseWindow: (() -> Void)?
     var onRenameSession: (() -> Void)?
     var onDetach: (() -> Void)?
     var onKillSession: (() -> Void)?
@@ -827,8 +826,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // twin — so a separator keeps them from being adjacent targets.
         menu.addItem(.separator())
         add(menu, "Kill Session", #selector(killAction))
-        menu.addItem(.separator())
-        add(menu, "Close Window", #selector(closeWindowAction))
+        // No "Close Window" here: next to ⇧⌘W (which closes the MAC window and
+        // leaves the session running) a row that killed the tmux window read
+        // as the same thing. Killing a window lives on the strip and the
+        // sidebar, beside the window it kills.
+        //
         // No window SWITCH list here any more: windows own the centre strip, so
         // duplicating them in this menu would give the same thing two homes and
         // leave the user unsure which one is authoritative.
@@ -1014,7 +1016,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     // MARK: - Actions
 
     @objc private func newSessionAction() { onNewSession?() }
-    @objc private func closeWindowAction() { onCloseWindow?() }
     @objc private func closeTabAction() { onCloseTab?() }
     /// A catalog row from the New menu, dispatched through the responder chain
     /// to the active tab's pane host.
