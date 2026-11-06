@@ -6,12 +6,10 @@ import BentoSessionKit
 ///
 /// Five surfaces used to spell these out by hand: the Mac pane menu (title-bar
 /// ⌄ and right-click), the Mac command palette, the Mac toolbar's New ⌄ menu,
-/// the iOS pane menu, and the iOS ⋯ menu. They had already drifted — "Zoom" on
-/// the Mac is "Maximize" on iOS and "Toggle Zoom" in the palette; Close Pane is
-/// an `xmark` in one place and an `xmark.square` in another. The drift is
-/// reproduced here deliberately (whether the platforms should match is a
-/// product decision not taken yet); what changes is that it is now one table,
-/// so making them match is an edit to this file.
+/// the iOS pane menu, and the iOS ⋯ menu. They had drifted (iOS said
+/// "Maximize" for Zoom); one table is what keeps them from drifting again.
+/// Where a surface still words a row differently — the palette's verb-first
+/// "Toggle Zoom", a New-menu "Split Pane" — it is chosen here, in the open.
 ///
 /// Performing a command stays with each platform: the Mac routes through the
 /// responder chain to the focused pane host (`BentoPaneAction`), iOS through
@@ -65,7 +63,6 @@ public enum PaneCommand: String, CaseIterable, Sendable {
         case .zoom:
             switch surface {
             case .macPalette: return "Toggle Zoom"
-            case .iosPaneMenu, .iosOverflowMenu: return zoomed ? "Restore" : "Maximize"
             default: return zoomed ? "Unzoom" : "Zoom"
             }
         case .exitCopyMode: return "Exit tmux copy-mode"
@@ -209,7 +206,7 @@ public enum PaneMenuLayout {
     }
 
     /// Mac palette's pane commands, after the layout rows. (The palette's
-    /// window-level commands — new Mac window, session size, preview panel —
+    /// window-level commands — new empty session, preview panel —
     /// are the Mac's own.)
     public static let macPalette: [PaneCommand] = [
         .splitRight, .splitDown, .splitDuplicate, .closePane, .zoom,

@@ -190,14 +190,6 @@ public enum BentoTerminalWindow {
         frontmostManager()?.tab.viewModel.splitPane(horizontal: true)
     }
 
-    /// Menu-bar command: hand sizing back to this window. A one-shot re-fit
-    /// used to live here and looked broken — tmux recomputes a window's size
-    /// from its clients, so the push was undone as soon as any other client was
-    /// used. This sets the sticky policy instead (see `TerminalSizingMode`).
-    public static func trackActiveSessionSize() {
-        frontmostManager()?.tab.viewModel.setSizingMode(.tracking)
-    }
-
     /// ⌘P: open the command palette over the focused window's active pane.
     public static func presentCommandPalette() {
         // Over a launcher window there is no pane to hang the File / Pane
@@ -1028,8 +1020,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // ⌘N's behaviour: a launcher, which becomes the new session.
         toolbar.onNewSession = { BentoTerminalWindow.newSessionWindow() }
         toolbar.onOpenSettings = { BentoTerminalWindow.onOpenSettings?() }
-        toolbar.onSetSizingMode = { [weak self] mode in
-            self?.activeTab?.viewModel.setSizingMode(mode)
+        toolbar.onReleaseSize = { [weak self] in
+            self?.activeTab?.viewModel.releaseSessionSize()
             self?.rebuildTabBar()
         }
         toolbar.onClaimSessionSize = { [weak self] in

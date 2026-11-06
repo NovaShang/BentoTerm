@@ -100,4 +100,11 @@ extension TerminalViewModel {
         pendingSizeMismatch = nil
         sessionSizeMismatch = nil
     }
+
+    /// The menus' Release Size: hand the session back to tmux's default —
+    /// whichever device was used last sets the size. Clears any ownership
+    /// (ours or another device's) server-side, same as that device leaving.
+    public func releaseSessionSize() {
+        setSizingMode(.tracking)
+    }
 }

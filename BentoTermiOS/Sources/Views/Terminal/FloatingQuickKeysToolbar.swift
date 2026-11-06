@@ -27,7 +27,7 @@ final class FloatingQuickKeysToolbar: UIView {
     var onKeyTap: ((AccessoryKey) -> Void)?
 
     /// The pane-menu button — the host sets `.menu` to the active pane's menu
-    /// (Find / Maximize / Paste / Split / Profile / Close). Shown only when
+    /// (Find / Zoom / Paste / Split / Profile / Close). Shown only when
     /// `showsPaneActions`.
     let menuButton = UIButton(type: .system)
 

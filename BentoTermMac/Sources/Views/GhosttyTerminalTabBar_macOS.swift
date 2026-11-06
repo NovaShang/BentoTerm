@@ -28,12 +28,12 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     var onRenameSession: (() -> Void)?
     var onDetach: (() -> Void)?
     var onKillSession: (() -> Void)?
-    var onSetSizingMode: ((TerminalSizingMode) -> Void)?
-    /// The active session's current sizing policy (drives the checkmark).
+    /// Session ⌄ → Release Size: back to tmux's default policy.
+    var onReleaseSize: (() -> Void)?
+    /// The active session's current sizing policy (whether Release shows).
     var sizingMode: TerminalSizingMode = .tracking
-    /// Who owns the size under `.thisDevice`, and whether that's us — the menu
-    /// has to name the other device, since this window can't reflow the session
-    /// until that device hands it over (or leaves).
+    /// Who owns the size under `.thisDevice`, and whether that's us — Release
+    /// names the device it would take the size away from.
     var sizingOwner: TmuxSizingOwner?
     var sizingOwnerIsMe = false
     /// The take-over banner's state, or nil when this window's grid IS the
@@ -819,7 +819,17 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
             return menu
         }
         add(menu, "Rename Session…", #selector(renameAction))
-        menu.addItem(sizingMenuItem())
+        // Only when something has fixed the size: taking it over is the
+        // banner's job, and the default needs no row.
+        if sizingMode.offersRelease {
+            let release = NSMenuItem(title: TerminalSizingMode.releaseTitle,
+                                     action: #selector(releaseSizeAction), keyEquivalent: "")
+            release.target = self
+            release.image = NSImage(systemSymbolName: TerminalSizingMode.releaseSymbol,
+                                    accessibilityDescription: TerminalSizingMode.releaseTitle)
+            release.toolTip = sizingMode.releaseNote(owner: sizingOwner, ownerIsMe: sizingOwnerIsMe)
+            menu.addItem(release)
+        }
         menu.addItem(.separator())
         add(menu, "Detach (keep running)", #selector(detachAction))  // unload; session survives
         // Destructive, and one row away from Detach — which is its harmless
@@ -837,34 +847,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         return menu
     }
 
-
-    /// Who governs the window size — a checked pair, not a "do it now" button.
-    /// The old single "Fit Session to This Window" was a one-shot that tmux
-    /// undid as soon as any other client was used (see `TerminalSizingMode`).
-    private func sizingMenuItem() -> NSMenuItem {
-        let root = NSMenuItem(title: "Session Size", action: nil, keyEquivalent: "")
-        root.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right",
-                             accessibilityDescription: "Session Size")
-        let sub = NSMenu()
-        for mode in TerminalSizingMode.allCases {
-            let it = NSMenuItem(title: mode.title, action: #selector(sizingAction(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = mode.rawValue
-            it.state = (mode == sizingMode) ? .on : .off
-            it.image = NSImage(systemSymbolName: mode.symbol, accessibilityDescription: mode.title)
-            sub.addItem(it)
-        }
-        sub.addItem(.separator())
-        // Under `manual` the interesting fact is WHO owns the size, not which
-        // mode is checked — a device that can't reflow the session needs to be
-        // told which other device to go touch.
-        let noteText = sizingMode.ownerNote(owner: sizingOwner, ownerIsMe: sizingOwnerIsMe)
-        let note = NSMenuItem(title: noteText, action: nil, keyEquivalent: "")
-        note.isEnabled = false
-        sub.addItem(note)
-        root.submenu = sub
-        return root
-    }
 
     /// Put the banner's copy on the button and add or drop its toolbar item.
     /// The button carries WHY the canvas looks wrong; the tooltip carries the
@@ -913,12 +895,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         } else {
             run(alert.runModal())
         }
-    }
-
-    @objc private func sizingAction(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let mode = TerminalSizingMode(rawValue: raw) else { return }
-        onSetSizingMode?(mode)
     }
 
     /// The quick creates, by tmux level: a session (via the launcher), a
@@ -1033,6 +1009,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     @objc private func settingsAction() { onOpenSettings?() }
     @objc private func renameAction() { onRenameSession?() }
     @objc private func detachAction() { onDetach?() }
+    @objc private func releaseSizeAction() { onReleaseSize?() }
     @objc private func killAction() { onKillSession?() }
 }
 

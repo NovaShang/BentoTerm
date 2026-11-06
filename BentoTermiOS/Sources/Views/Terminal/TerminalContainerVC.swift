@@ -81,8 +81,8 @@ final class TerminalContainerVC: UIViewController {
     /// User asked to toggle zoom (maximize / restore) on this pane.
     var onToggleZoom: (() -> Void)?
 
-    /// Whether this pane is currently zoomed — the pane menu's Maximize /
-    /// Restore entry reads it at open time (deferred element), so the host
+    /// Whether this pane is currently zoomed — the pane menu's Zoom /
+    /// Unzoom entry reads it at open time (deferred element), so the host
     /// wires it once per active-pane change.
     var isZoomed: (() -> Bool)?
 

@@ -303,13 +303,6 @@ struct TerminalWrapperView: View {
         applyPhoneFocusDefault()
     }
 
-    private func setSizing(_ mode: TerminalSizingMode) {
-        // The view model owns the write: it puts `window-size` on the server and
-        // records/clears ownership. Nothing is stored here — a per-device copy
-        // of a shared decision is exactly the bug this replaced.
-        viewModel.setSizingMode(mode)
-    }
-
     /// Phones open a multi-pane tiling in Focus by default — an act-and-inform
     /// default instead of the old "Open in Focus Mode?" prompt. The transform
     /// is lossless and one toggle away from reversal, which is what makes the
@@ -783,7 +776,7 @@ struct TerminalWrapperView: View {
                 if !isRegularWidth || isFullscreen { modeSection }
                 splitSection
                 layoutSection
-                sessionSizeSection
+                releaseSizeButton
             }
             Button { showSettings = true } label: {
                 Label("Settings", systemImage: "gear")
@@ -907,29 +900,23 @@ struct TerminalWrapperView: View {
         }
     }
 
-    /// The sticky sizing policy (see `TerminalSizingMode`). Two states, checked
-    /// — not a "fit it now" button, because tmux recomputes a window's size
-    /// from its clients and a one-shot push is undone by the next client.
+    /// Release Size — only when something has fixed the session's size.
+    /// Taking it over is the banner's job; this hands it back to the default
+    /// (the device used last sets the size). The subtitle names who is being
+    /// released, which on a second device is the thing it can't otherwise see.
     @ViewBuilder
-    private var sessionSizeSection: some View {
-        Section {
-            ForEach(TerminalSizingMode.allCases, id: \.rawValue) { mode in
-                Button { setSizing(mode) } label: {
-                    if mode == viewModel.sizingMode {
-                        Label(mode.title, systemImage: "checkmark")
-                    } else {
-                        Label(mode.title, systemImage: mode.symbol)
+    private var releaseSizeButton: some View {
+        if viewModel.sizingMode.offersRelease {
+            Button { viewModel.releaseSessionSize() } label: {
+                Label {
+                    Text(TerminalSizingMode.releaseTitle)
+                    if let note = viewModel.sizingMode.releaseNote(
+                        owner: viewModel.sizingOwner, ownerIsMe: viewModel.sizingOwnerIsMe) {
+                        Text(note)
                     }
+                } icon: {
+                    Image(systemName: TerminalSizingMode.releaseSymbol)
                 }
-            }
-        } header: {
-            // Naming the owner is the whole point on a second device: without it
-            // the menu shows a checked mode that this device cannot act on.
-            if let owner = viewModel.sizingMode.foreignOwner(viewModel.sizingOwner,
-                                                             ownerIsMe: viewModel.sizingOwnerIsMe) {
-                Text("Session Size — set by \(owner.displayName)")
-            } else {
-                Text("Session Size")
             }
         }
     }
@@ -2217,7 +2204,7 @@ extension PaneContainerVC {
         // per-layout-pass calls don't churn UIKit's menu plumbing.
         if floatingToolbar.menuButton.menu !== activeVC.paneMenu {
             floatingToolbar.menuButton.menu = activeVC.paneMenu
-            // The menu's Maximize/Restore entry reads this live at open time
+            // The menu's Zoom/Unzoom entry reads this live at open time
             // (deferred element), so wiring it once per pane change is enough.
             activeVC.isZoomed = { [weak self] in self?.viewModel?.zoomedPaneID != nil }
         }

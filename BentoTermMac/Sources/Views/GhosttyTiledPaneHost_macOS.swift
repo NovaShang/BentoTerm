@@ -1247,7 +1247,6 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
             cmd("newWindow", LaunchAction.emptySession.title, LaunchAction.emptySession.systemImage) {
                 BentoTerminalWindow.newWindow()
             },
-            cmd("fit", "Track Session Size to This Window", "arrow.up.left.and.down.right.magnifyingglass") { BentoTerminalWindow.trackActiveSessionSize() },
             cmd("toggleDock", "Toggle Preview Panel", "sidebar.trailing") { BentoTerminalWindow.togglePreviewDock() },
         ]
     }

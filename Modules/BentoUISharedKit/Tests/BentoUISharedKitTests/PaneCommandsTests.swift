@@ -2,9 +2,8 @@ import Testing
 import BentoSessionKit
 @testable import BentoUISharedKit
 
-/// The menus as they shipped before the catalog existed, pinned row for row.
-/// The platforms differ on purpose until someone decides they shouldn't; a
-/// change here is a product change and should read like one in review.
+/// Every surface's rows, pinned row for row. A change here is a product
+/// change and should read like one in review.
 struct PaneCommandsTests {
     private let parallel = PaneMenuContext(sessionMode: .tiled, paneCount: 2)
     private let focus = PaneMenuContext(sessionMode: .list)
@@ -69,11 +68,11 @@ struct PaneCommandsTests {
             PaneMenuLayout.iosPaneMenu($0, parallel)
         }
         #expect(titles(rows, .iosPaneMenu) == [
-            "Find…", "Maximize", "[paste]", "Split Right (-h)", "Split Down (-v)",
+            "Find…", "Zoom", "[paste]", "Split Right (-h)", "Split Down (-v)",
             "[move]", "Close Pane",
         ])
         #expect(PaneCommand.closePane.role(on: .iosPaneMenu) == .destructive)
-        #expect(PaneCommand.zoom.title(on: .iosPaneMenu, zoomed: true) == "Restore")
+        #expect(PaneCommand.zoom.title(on: .iosPaneMenu, zoomed: true) == "Unzoom")
     }
 
     @Test func iosPaneMenuForAPlainShellKeepsFindAndPaste() {
