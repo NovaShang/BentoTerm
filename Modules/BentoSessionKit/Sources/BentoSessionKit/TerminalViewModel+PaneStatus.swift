@@ -2,11 +2,10 @@ import Foundation
 import SwiftUI
 import os
 import BentoTmuxKit
-import BentoAgentKit
 import BentoFoundationKit
 
 extension TerminalViewModel {
-    // MARK: - Agent State
+    // MARK: - Pane Status
 
     func startStatePolling() {
         // Idempotent: never stack a second poller — each leaked poller adds
@@ -44,16 +43,16 @@ extension TerminalViewModel {
         var awaitingCount = 0
         var sawNewAwaiting = false
         var latestPrompt = ""
-        var agentWorking = 0
-        var agentWaiting = 0
-        var agentDoneUnseen = 0
+        var statusWorking = 0
+        var statusAwaiting = 0
+        var statusDoneUnseen = 0
 
         var newStates: [TmuxPaneID: PaneState] = [:]
         var newDone: [TmuxPaneID: Bool] = [:]
 
         for paneVM in paneViewModels {
             let current = paneVM.paneState
-            let (newState, isAgent) = Self.classifyPane(paneVM.pane)
+            let (newState, hasStatus) = Self.classifyPane(paneVM.pane)
             newStates[paneVM.paneID] = newState
 
             if paneVM.paneState != newState {
@@ -67,21 +66,21 @@ extension TerminalViewModel {
                 changed = true
             }
 
-            if updateSeen(paneVM, from: current, to: newState, isAgent: isAgent) {
+            if updateSeen(paneVM, from: current, to: newState, hasStatus: hasStatus) {
                 changed = true
             }
-            newDone[paneVM.paneID] = paneVM.agentFinishedUnseen
+            newDone[paneVM.paneID] = paneVM.doneUnseen
 
             if case .awaitingInput = paneVM.paneState {
                 awaitingCount += 1
             }
 
-            // Tally agent activity for the toolbar's center summary.
-            if isAgent {
-                if paneVM.agentFinishedUnseen { agentDoneUnseen += 1 }
+            // Tally panes that report a status, for the session tab's dot.
+            if hasStatus {
+                if paneVM.doneUnseen { statusDoneUnseen += 1 }
                 switch paneVM.paneState {
-                case .working:       agentWorking += 1
-                case .awaitingInput: agentWaiting += 1
+                case .working:       statusWorking += 1
+                case .awaitingInput: statusAwaiting += 1
                 case .idle:          break
                 }
             }
@@ -95,11 +94,11 @@ extension TerminalViewModel {
         let live = Set(paneViewModels.map(\.paneID))
         for pane in sessionPanes where !live.contains(pane.id) {
             let current = paneStates[pane.id] ?? .idle
-            let (state, isAgent) = Self.classifyPane(pane)
+            let (state, hasStatus) = Self.classifyPane(pane)
             newStates[pane.id] = state
             if paneStates[pane.id] != state { changed = true }
 
-            let done = Self.doneUnseen(isAgent: isAgent, isFocused: false,
+            let done = Self.doneUnseen(hasStatus: hasStatus, isFocused: false,
                                        current: current, newState: state,
                                        prev: paneDoneUnseen[pane.id] ?? false)
             newDone[pane.id] = done
@@ -111,9 +110,9 @@ extension TerminalViewModel {
         if changed {
             stateVersion += 1
         }
-        if agentsWorking != agentWorking { agentsWorking = agentWorking }
-        if agentsWaiting != agentWaiting { agentsWaiting = agentWaiting }
-        if agentsDoneUnseen != agentDoneUnseen { agentsDoneUnseen = agentDoneUnseen }
+        if panesWorking != statusWorking { panesWorking = statusWorking }
+        if panesAwaiting != statusAwaiting { panesAwaiting = statusAwaiting }
+        if panesDoneUnseen != statusDoneUnseen { panesDoneUnseen = statusDoneUnseen }
         if sawNewAwaiting {
             environment.onAwaitingTriggered()
         }
@@ -123,34 +122,34 @@ extension TerminalViewModel {
     }
 
     /// THE per-pane state judgment — the single pipeline behind both the Tiled
-    /// pane chrome and the List window dots. It is only what the agent's hooks
-    /// wrote into the pane's `@bento_agent` / `@bento_state` options, which
-    /// ride along on the list-panes poll; a pane without them gets no dot.
-    static func classifyPane(_ pane: Pane) -> (state: PaneState, isAgent: Bool) {
-        AgentHookState.classify(agent: pane.agent, state: pane.agentState,
-                                command: pane.currentCommand)
+    /// pane chrome and the List window dots. It is only what the program in
+    /// the pane wrote into its `@bento_state` option, which rides along on the
+    /// list-panes poll; a pane without it gets no dot.
+    static func classifyPane(_ pane: Pane) -> (state: PaneState, hasStatus: Bool) {
+        PaneStatusOption.classify(value: pane.statusOption,
+                                  command: pane.currentCommand)
     }
 
-    /// Maintain the "done, unseen" flag. An agent pane that transitions into
+    /// Maintain the "done, unseen" flag. A pane with a status that transitions into
     /// .idle while unfocused becomes done(unseen); focusing it or leaving idle
     /// clears it. Returns true if the flag changed (so the UI repaints).
     @discardableResult
     func updateSeen(_ paneVM: PaneViewModel, from current: PaneState,
-                            to newState: PaneState, isAgent: Bool) -> Bool {
-        let want = Self.doneUnseen(isAgent: isAgent, isFocused: paneVM.isActive,
+                            to newState: PaneState, hasStatus: Bool) -> Bool {
+        let want = Self.doneUnseen(hasStatus: hasStatus, isFocused: paneVM.isActive,
                                    current: current, newState: newState,
-                                   prev: paneVM.agentFinishedUnseen)
-        guard paneVM.agentFinishedUnseen != want else { return false }
-        paneVM.agentFinishedUnseen = want
+                                   prev: paneVM.doneUnseen)
+        guard paneVM.doneUnseen != want else { return false }
+        paneVM.doneUnseen = want
         return true
     }
 
-    /// Pure "done, unseen" transition, shared by live and background panes: an
-    /// agent pane that goes idle while UNFOCUSED becomes done; staying idle
+    /// Pure "done, unseen" transition, shared by live and background panes: a
+    /// pane with a status that goes idle while UNFOCUSED becomes done; staying idle
     /// keeps the memory; focusing it or leaving idle clears it.
-    static func doneUnseen(isAgent: Bool, isFocused: Bool, current: PaneState,
+    static func doneUnseen(hasStatus: Bool, isFocused: Bool, current: PaneState,
                            newState: PaneState, prev: Bool) -> Bool {
-        guard isAgent, isIdle(newState), !isFocused else { return false }
+        guard hasStatus, isIdle(newState), !isFocused else { return false }
         return isIdle(current) ? prev : true
     }
 

@@ -2,7 +2,6 @@ import SwiftUI
 import BentoTmuxKit
 import Combine
 import BentoVoiceKit
-import BentoAgentKit
 import BentoSessionKit
 import BentoFilePreviewKit
 import BentoFoundationKit
@@ -61,7 +60,7 @@ extension PaneContainerVC {
                 vc.view.frame = CGRect(origin: .zero, size: page)
                 vc.titleBar.isActivePane = true
                 if let pvm = viewModel?.paneViewModels.first(where: { $0.paneID == focusID }) {
-                    vc.updatePaneState(pvm.paneState, doneUnseen: pvm.agentFinishedUnseen,
+                    vc.updatePaneState(pvm.paneState, doneUnseen: pvm.doneUnseen,
                                        active: true)
                 }
             }
@@ -82,7 +81,7 @@ extension PaneContainerVC {
         vc.surfaceInsetX = surfaceInsetX
         vc.fixedTerminalCellSize = fixedCellSize
         vc.view.frame = frame
-        vc.updatePaneState(pvm.paneState, doneUnseen: pvm.agentFinishedUnseen,
+        vc.updatePaneState(pvm.paneState, doneUnseen: pvm.doneUnseen,
                            active: pvm.paneID == activeID)
     }
 

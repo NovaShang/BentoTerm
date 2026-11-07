@@ -1,6 +1,6 @@
 import CoreGraphics
 import BentoFoundationKit
-import BentoAgentKit
+import BentoSessionKit
 
 #if canImport(AppKit)
 import AppKit

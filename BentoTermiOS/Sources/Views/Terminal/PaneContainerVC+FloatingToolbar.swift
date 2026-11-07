@@ -2,7 +2,6 @@ import SwiftUI
 import BentoTmuxKit
 import Combine
 import BentoVoiceKit
-import BentoAgentKit
 import BentoSessionKit
 import BentoFilePreviewKit
 import BentoFoundationKit

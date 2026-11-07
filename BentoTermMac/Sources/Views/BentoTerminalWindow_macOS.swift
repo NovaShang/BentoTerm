@@ -1,6 +1,5 @@
 import BentoFilePreviewKit
 import BentoFoundationKit
-import BentoAgentKit
 import BentoSessionKit
 import BentoUISharedKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)

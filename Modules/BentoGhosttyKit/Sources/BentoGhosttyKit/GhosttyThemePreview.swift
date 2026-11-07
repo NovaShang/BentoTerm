@@ -47,7 +47,7 @@ public struct GhosttyThemePreview: View {
 /// Without it the preview reads as a text field with monospaced text in it —
 /// it is a terminal, and what makes a Bento pane recognisable as one is the
 /// title strip with the state dot. It also puts the state colour in front of
-/// the user one page before the Agents panel explains it.
+/// the user one page before the Pane Status section explains it.
 struct PreviewTitleBar: View {
     /// The working blue — `PaneState.workingHex`, which this kit can't import.
     private static let working = Color(hex: 0x0A85FF)
@@ -78,7 +78,7 @@ struct PreviewTitleBar: View {
 
 /// The sample. Agent output rather than `git status`: it is what this app is
 /// for, and it puts a pane title bar with a live state color in front of the
-/// user one page before the Agents panel explains it.
+/// user one page before the Pane Status section explains it.
 enum GhosttyThemePreviewContent {
     static var bytes: Data {
         // Erase + home first: `applyTheme` may have rebuilt the surface, and a

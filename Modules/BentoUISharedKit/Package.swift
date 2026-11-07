@@ -18,7 +18,6 @@ let package = Package(
     dependencies: [
         .package(path: "../BentoTmuxKit"),
         .package(path: "../BentoFoundationKit"),
-        .package(path: "../BentoAgentKit"),
         .package(path: "../BentoSessionKit"),
         .package(path: "../BentoFilePreviewKit"),
     ],
@@ -28,7 +27,6 @@ let package = Package(
             dependencies: [
                 "BentoTmuxKit",
                 "BentoFoundationKit",
-                "BentoAgentKit",
                 "BentoSessionKit",
                 "BentoFilePreviewKit",
             ]

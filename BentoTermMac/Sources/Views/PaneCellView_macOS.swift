@@ -2,7 +2,7 @@ import BentoTmuxKit
 import BentoFoundationKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
-import BentoAgentKit
+import BentoSessionKit
 import BentoUISharedKit
 
 // MARK: - Pane container (title bar + terminal surface)
@@ -68,15 +68,15 @@ final class PaneCellView: NSView {
         didSet { titleBar.onModeBadge = onModeBadge }
     }
 
-    var agentFinishedUnseen: Bool = false {
-        didSet { titleBar.agentFinishedUnseen = agentFinishedUnseen; updateStateTint(); applyBorder() }
+    var doneUnseen: Bool = false {
+        didSet { titleBar.doneUnseen = doneUnseen; updateStateTint(); applyBorder() }
     }
 
     /// Translucent wash over the surface that mirrors the title-bar glyph
     /// (nil = idle = no wash) — the shared `PaneChrome.Status` table.
     private func stateTintColor() -> NSColor? {
         PaneChromeColors.wash(PaneChrome.Status(state: paneState,
-                                                agentFinishedUnseen: agentFinishedUnseen))
+                                                doneUnseen: doneUnseen))
     }
 
     private func updateStateTint() {
@@ -110,7 +110,7 @@ final class PaneCellView: NSView {
         // The border is purely the FOCUS cue: the window highlight color on the
         // pane you're interacting with, a near-invisible hairline on the rest.
         // Suppressed when there's only one pane visible (nothing to focus).
-        // Agent state stays on the title bar + status dot + body wash, so the
+        // Pane status stays on the title bar + status dot + body wash, so the
         // focus ring never competes with green/amber/blue. (Drop targets are
         // previewed by the host's PaneDropZoneOverlay, not the border.)
         let showFocus = isActivePane && !focusSuppressed

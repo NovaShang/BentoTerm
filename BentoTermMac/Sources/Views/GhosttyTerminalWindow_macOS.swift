@@ -6,7 +6,6 @@ import BentoGhosttyKit
 import AppKit
 import Combine
 import SwiftUI
-import BentoAgentKit
 import BentoSessionKit
 import BentoUISharedKit
 
@@ -85,7 +84,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// The auth sheet currently up, if any. One at a time: ssh asks its next
     /// question only after this one is answered.
     var authPromptAlert: NSAlert?
-    /// Per-tab subscriptions (agent dots + tab titles), keyed by tab identity.
+    /// Per-tab subscriptions (status dots + tab titles), keyed by tab identity.
     var tabCancellables: [ObjectIdentifier: Set<AnyCancellable>] = [:]
     /// Directory answered by the one-shot query, for the pane that was asked
     /// about — used only until the subscription reports that pane.

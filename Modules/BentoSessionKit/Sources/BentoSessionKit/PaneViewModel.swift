@@ -2,7 +2,6 @@ import Foundation
 import os
 import SwiftUI
 import BentoTmuxKit
-import BentoAgentKit
 import BentoFilePreviewKit
 
 /// ViewModel for a single tmux pane, managing its terminal output and input.
@@ -13,11 +12,11 @@ public final class PaneViewModel: ObservableObject, Identifiable {
     @Published public var isActive: Bool = false
     @Published public var paneState: PaneState = .idle
 
-    /// True when a coding-agent pane has finished (.idle) but the user hasn't
+    /// True when a pane with a status has finished (.idle) but the user hasn't
     /// looked at it yet — the "done, unseen" state (herdr's done vs idle). Set
-    /// when an agent pane goes idle while not focused; cleared when it's focused
+    /// when such a pane goes idle while not focused; cleared when it's focused
     /// or leaves idle. Drives the distinct "done" dot.
-    @Published public var agentFinishedUnseen: Bool = false
+    @Published public var doneUnseen: Bool = false
 
     /// Called when terminal output arrives for this pane. Setting this also
     /// replays the full history buffer so a freshly-bound surface (e.g.

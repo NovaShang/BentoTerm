@@ -7,22 +7,22 @@ English | [简体中文](README_CN.md)
 
 A terminal for running and supervising multiple CLI coding agents at once.
 Native macOS, iPhone and iPad clients on top of tmux control mode (`-CC`), with
-agent state reported by agent hooks, push-to-talk voice input, and libghostty
+pane status set through tmux, push-to-talk voice input, and libghostty
 rendering.
 
-<p align="center"><img src="docs/media/hero-parallel.webp" width="820" alt="Five agent panes tiled in one window, each title bar showing its agent's state"></p>
+<p align="center"><img src="docs/media/hero-parallel.webp" width="820" alt="Five agent panes tiled in one window, each title bar showing its pane status"></p>
 
 Website: [bentoai.dev/term](https://bentoai.dev/term/) · Install: `brew install --cask NovaShang/tap/bento-term` · iPhone/iPad: App Store review in progress
 
 ## What it does
 
 - **Attaches to real tmux sessions** via control mode. tmux is bundled for machines that don't have it; if you already run tmux, Bento attaches to your existing server and any other tmux client stays in sync — layouts, panes and scrollback live in tmux, not in the app.
-- **Shows each pane's agent state** — working / awaiting input / done-and-unread — as a color on the pane title bar and in the sidebar. The agent reports it through its own hooks, which set two tmux pane options on its pane ([setup below](#agent-hooks) for Claude Code and Codex). Nothing reads the screen, so the color doesn't break when an agent changes its UI; a pane whose agent has no hooks just has no color.
+- **Shows each pane's status** — working / awaiting input / done-and-unread — as a color on the pane title bar and in the sidebar. Whatever runs in the pane sets it with one tmux command, `tmux set -p @bento_state working` ([details below](#pane-status), with ready-made hooks for Claude Code and Codex). Nothing reads the screen, so the color doesn't break when a program changes its UI; a pane that doesn't set it just has no color.
 - **Two layouts over the same session:** Parallel tiles every pane; Focus gives one pane the window with the rest in a sidebar. Switching rearranges the actual tmux panes rather than maintaining a separate view state.
 - **Push-to-talk voice input.** Hold right-click on a pane and speak; the transcript lands in that pane's input. Recognition vocabulary is biased by on-screen text, so identifiers and file names from the visible scrollback transcribe correctly, including mixed Chinese/English. Engines: Apple on-device (default), plus Qwen and OpenAI realtime on your own API key. Speech can also be translated into a shell command.
 - **File tree and preview.** Every pane exposes the file tree of its working directory. Printed paths are clickable — resolved even when a TUI wrapped or truncated the line — and open with syntax highlighting and jump-to-line (`path:42`). PDFs, images and other documents open via Quick Look. The same tree works from iOS over the SSH connection.
 - **Pane management as tmux operations.** Splits, drag-to-dock between positions and across sessions, duplication — each is executed as a real tmux `split-window` / `move-pane`, so a plain `tmux attach` from elsewhere shows exactly the same layout.
-- **iOS/iPadOS client** attaches to the same sessions mid-run over SSH, with the same agent states (they live in tmux, so every client sees them).
+- **iOS/iPadOS client** attaches to the same sessions mid-run over SSH, with the same pane status (it lives in tmux, so every client sees it).
 
 ## Architecture
 
@@ -31,14 +31,14 @@ Website: [bentoai.dev/term](https://bentoai.dev/term/) · Install: `brew install
 | Terminal rendering | [libghostty](https://ghostty.org) — every pane is a real GPU-accelerated terminal surface (GhosttyKit xcframework), not a webview or a from-scratch emulator |
 | Multiplexing | tmux control mode (`-CC`), with tmux bundled and [`BentoTmuxKit`](Modules/BentoTmuxKit/) as our own strict, heavily-tested protocol client |
 | Apps | Native Swift end to end — AppKit/SwiftUI on macOS, UIKit/SwiftUI on iOS — as thin shells over the shared [`Modules/`](Modules/) packages |
-| Agent state | Agent hooks set tmux pane options (`@bento_agent`, `@bento_state`); the client reads them with its regular `list-panes` poll |
+| Pane status | A tmux pane option (`@bento_state`) that any program sets on its own pane; the client reads it with its regular `list-panes` poll |
 | SSH | macOS rides your system OpenSSH, so `~/.ssh/config`, ControlMaster, and jump hosts all just work; a remote host needs only `sshd` + `tmux` |
 | Voice | A `SpeechEngine` abstraction over Apple on-device, OpenAI, and Qwen realtime ASR, with on-screen-context vocabulary biasing |
 
 Two design rules shape everything:
 
 1. **tmux is the source of truth.** The app renders and edits tmux state; it never owns a private copy. That's why sessions outlive the app and why any other tmux client agrees with what Bento shows.
-2. **Transport is dumb, clients are smart.** Everything works over a plain local shell or vanilla SSH. Terminal intelligence lives in the client and never moves server-side, and nothing of Bento's is installed on the remote machine. Agent state is the one thing the client doesn't work out: the agent says it, through hook lines in its own config, and tmux carries it.
+2. **Transport is dumb, clients are smart.** Everything works over a plain local shell or vanilla SSH. Terminal intelligence lives in the client and never moves server-side, and nothing of Bento's is installed on the remote machine. Pane status is the one thing the client doesn't work out: the program in the pane says it, through a tmux pane option, and tmux carries it.
 
 ## Install
 
@@ -54,9 +54,22 @@ The app is self-contained (tmux bundled). A remote machine needs only `sshd` and
 `tmux`; reachability (NAT, VPN, Tailscale, jump hosts) is handled by your
 `~/.ssh/config` — there is no relay and no host-side component.
 
-## Agent hooks
+## Pane status
 
-Pane colors come from the agents themselves. A few hook lines in each agent's settings set two tmux pane options on the agent's own pane, `@bento_agent` (who) and `@bento_state` (`working` / `awaiting` / `done`), and Bento reads them on its pane poll. Bento never reads the screen to guess, so an agent without these hooks gets no color. Set them up on whichever machine runs the agent, the Mac or the remote host. Every command checks `$TMUX_PANE` first, so outside tmux it does nothing.
+A pane's color is what the program running in it says it is doing. Set it from inside the pane:
+
+```sh
+tmux set -p @bento_state working    # blue
+tmux set -p @bento_state awaiting   # amber: it needs you
+tmux set -p @bento_state done       # finished; green if you weren't looking at the pane
+tmux set -pu @bento_state           # clear
+```
+
+It works for any program: a build, a long test run, a deploy script, a coding agent. It's an ordinary tmux pane option, so it works the same on the Mac and on a remote host, and every tmux client sees it. Bento reads it on its pane poll and never reads the screen to guess, so a pane that doesn't set it has no color. While the pane sits at a bare shell prompt the option is ignored, so a program that exits without clearing it doesn't leave the pane tinted.
+
+### Example: Claude Code and Codex hooks
+
+These hooks set the status from the agent's own events. Set them up on whichever machine runs the agent, the Mac or the remote host. Every command checks `$TMUX_PANE` first, so outside tmux it does nothing.
 
 **Claude Code**, in `~/.claude/settings.json` (merge into an existing `hooks` block if you have one):
 
@@ -66,7 +79,7 @@ Pane colors come from the agents themselves. A few hook lines in each agent's se
     "SessionStart": [
       {
         "matcher": "startup|resume|clear",
-        "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -p -t \"$TMUX_PANE\" @bento_agent claude && tmux set -p -t \"$TMUX_PANE\" @bento_state done; true" }]
+        "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -p -t \"$TMUX_PANE\" @bento_state done; true" }]
       }
     ],
     "UserPromptSubmit": [
@@ -85,7 +98,7 @@ Pane colors come from the agents themselves. A few hook lines in each agent's se
       { "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -p -t \"$TMUX_PANE\" @bento_state done; true" }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -pu -t \"$TMUX_PANE\" @bento_agent && tmux set -pu -t \"$TMUX_PANE\" @bento_state; true" }] }
+      { "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -pu -t \"$TMUX_PANE\" @bento_state; true" }] }
     ]
   }
 }
@@ -101,7 +114,7 @@ Claude Code doesn't run a hook when you interrupt a turn with Esc, so the pane s
     "SessionStart": [
       {
         "matcher": "startup|resume|clear",
-        "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -p -t \"$TMUX_PANE\" @bento_agent codex && tmux set -p -t \"$TMUX_PANE\" @bento_state done; true" }]
+        "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -p -t \"$TMUX_PANE\" @bento_state done; true" }]
       }
     ],
     "UserPromptSubmit": [
@@ -120,7 +133,7 @@ Claude Code doesn't run a hook when you interrupt a turn with Esc, so the pane s
       { "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -p -t \"$TMUX_PANE\" @bento_state done; true" }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -pu -t \"$TMUX_PANE\" @bento_agent && tmux set -pu -t \"$TMUX_PANE\" @bento_state; true" }] }
+      { "hooks": [{ "type": "command", "command": "[ -n \"$TMUX_PANE\" ] && tmux set -pu -t \"$TMUX_PANE\" @bento_state; true" }] }
     ]
   }
 }
@@ -128,7 +141,7 @@ Claude Code doesn't run a hook when you interrupt a turn with Esc, so the pane s
 
 `Stop` prints `{}` because Codex expects JSON from that hook.
 
-The commands run whichever `tmux` comes first on the agent's `PATH`, and `$TMUX` points it at the server that pane belongs to. On a Mac without its own tmux, Bento adds its bundled one to every local pane's `PATH`, so the hooks find it there too.
+These commands run whichever `tmux` comes first on the program's `PATH`, and `$TMUX` points it at the server that pane belongs to. On a Mac without its own tmux, Bento adds its bundled one to every local pane's `PATH`, so `tmux set` finds it there too.
 
 ## Privacy
 
@@ -145,8 +158,7 @@ The commands run whichever `tmux` comes first on the agent's `PATH`, and `$TMUX`
 | `BentoTermiOS/` | iOS / iPadOS app — UIKit/SwiftUI shell |
 | `Modules/BentoTmuxKit/` | tmux control-mode (`-CC`) protocol client |
 | `Modules/BentoGhosttyKit/` | Terminal surfaces over libghostty |
-| `Modules/BentoAgentKit/` | Pane state from agent hooks |
-| `Modules/BentoSessionKit/` | Session, window and pane logic |
+| `Modules/BentoSessionKit/` | Session, window and pane logic, including pane status |
 | `Modules/BentoVoiceKit/` | Speech engines and the voice controller |
 | `Modules/BentoFilePreviewKit/` | Path resolution and rich file preview |
 | `Modules/BentoUISharedKit/` | UI shared across both platforms |

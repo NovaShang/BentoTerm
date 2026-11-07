@@ -1,6 +1,5 @@
 import BentoTmuxKit
 import BentoFoundationKit
-import BentoAgentKit
 import BentoSessionKit
 import BentoUISharedKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
@@ -123,12 +122,12 @@ extension TerminalWindowManager {
         toolbar.setLocation(text ?? displayTitle(for: tab))
     }
 
-    /// Each tab's agent activity + live session name drive its tab in the strip.
+    /// Each tab's pane status + live session name drive its tab in the strip.
     func subscribe(_ tab: SessionTab) {
         var bag = Set<AnyCancellable>()
-        tab.viewModel.$agentsWorking
-            .combineLatest(tab.viewModel.$agentsWaiting,
-                           tab.viewModel.$agentsDoneUnseen,
+        tab.viewModel.$panesWorking
+            .combineLatest(tab.viewModel.$panesAwaiting,
+                           tab.viewModel.$panesDoneUnseen,
                            tab.viewModel.$activeTmuxSessionName)
             .receive(on: RunLoop.main)
             .sink { [weak self, weak tab] _, _, _, name in
@@ -351,7 +350,7 @@ enum PaneLocationTitle {
                      sshHost: String?, home: String) -> String? {
         let program = command.flatMap { cmd -> String? in
             let trimmed = cmd.trimmingCharacters(in: .whitespaces)
-            return trimmed.isEmpty || AgentHookState.isInteractiveShell(trimmed) ? nil : trimmed
+            return trimmed.isEmpty || PaneStatusOption.isInteractiveShell(trimmed) ? nil : trimmed
         }
         var place: String?
         if let directory, !directory.isEmpty {

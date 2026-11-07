@@ -33,8 +33,6 @@ packages:
     from: "2.9.6"
   BentoTmuxKit:
     path: Modules/BentoTmuxKit
-  BentoAgentKit:
-    path: Modules/BentoAgentKit
   BentoVoiceKit:
     path: Modules/BentoVoiceKit
   BentoFoundationKit:
@@ -69,7 +67,6 @@ targets:
     dependencies:
       - package: Citadel
       - package: BentoTmuxKit
-      - package: BentoAgentKit
       - package: BentoVoiceKit
       - package: BentoFoundationKit
       - package: BentoFilePreviewKit
@@ -166,7 +163,6 @@ targets:
       - BentoTermMac/Resources/Fonts
     dependencies:
       - package: BentoTmuxKit
-      - package: BentoAgentKit
       - package: BentoVoiceKit
       - package: BentoFoundationKit
       - package: BentoFilePreviewKit
@@ -251,7 +247,6 @@ targets:
       # here explicitly so the imports resolve independently of the host app's
       # transitive graph.
       - package: BentoTmuxKit
-      - package: BentoAgentKit
       - package: BentoVoiceKit
       - package: BentoFoundationKit
       - package: BentoFilePreviewKit

@@ -1,6 +1,5 @@
 import Foundation
 import BentoTmuxKit
-import BentoAgentKit
 import BentoFoundationKit
 
 /// Bento's two-mode model. The user thinks in exactly two shapes:
@@ -41,9 +40,9 @@ public enum TmuxSessionStructure: Equatable, Sendable {
 /// "done, unseen" layer that isn't a `PaneState`. See `windowStatus`.
 public enum WindowDisplayStatus: Equatable, Sendable {
     case idle       // nothing running / seen — no accent
-    case working    // an agent is running — blue
-    case awaiting   // an agent needs input — amber
-    case doneUnseen // an agent finished while unfocused — green (✓)
+    case working    // a pane reports working — blue
+    case awaiting   // a pane reports it needs input — amber
+    case doneUnseen // a pane finished while unfocused — green (✓)
 
     /// Stable signature for the toolbar strip: the segment group is rebuilt
     /// whenever a title OR a dot changes, and mutating a live group's images
@@ -240,13 +239,13 @@ public extension TerminalViewModel {
 
     /// One pass over a window's panes, aggregating the two layers its rows
     /// show: the richest `PaneState` (awaiting wins outright, else any pane
-    /// working), plus whether any pane is marked "done, unseen" — an agent
-    /// finished its turn in a window nobody was looking at, which isn't a
+    /// working), plus whether any pane is marked "done, unseen" — a pane
+    /// finished in a window nobody was looking at, which isn't a
     /// `PaneState`. Reads the `paneStates` / `paneDoneUnseen` caches the one
     /// state pipeline fills for every session pane — the SAME judgment
     /// that colors the Tiled pane chrome, never a separate re-run. Background
     /// windows keep reporting because the session-wide list-panes carries
-    /// every pane's hook options.
+    /// every pane's `@bento_state`.
     private func aggregateWindowStatus(_ windowID: TmuxWindowID)
         -> (state: PaneState?, doneUnseen: Bool) {
         var sawWorking = false
@@ -263,9 +262,9 @@ public extension TerminalViewModel {
         return (sawWorking ? .working : nil, sawDone)
     }
 
-    /// A window's display status for its row/tab: the panes' aggregate agent
-    /// state PLUS the green "done, unseen" layer, which isn't a PaneState (an
-    /// agent finished its turn in a window you weren't looking at). Priority:
+    /// A window's display status for its row/tab: the panes' aggregate status
+    /// PLUS the green "done, unseen" layer, which isn't a PaneState (a pane
+    /// finished in a window you weren't looking at). Priority:
     /// awaiting → working → done → idle.
     func windowStatus(_ windowID: TmuxWindowID) -> WindowDisplayStatus {
         let aggregate = aggregateWindowStatus(windowID)

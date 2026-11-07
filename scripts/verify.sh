@@ -36,7 +36,7 @@ step "terminology" ./scripts/check-terminology.sh
 # All kits, in dependency order. (The old swift-tmux / bento-terminal-core
 # packages were folded into Modules/ on 2026-08-02.) BentoUISharedKit has no
 # test target — `swift test` would error "no tests found", so it builds only.
-for kit in BentoTmuxKit BentoFoundationKit BentoAgentKit \
+for kit in BentoTmuxKit BentoFoundationKit \
            BentoFilePreviewKit BentoSessionKit BentoVoiceKit \
            BentoGhosttyKit BentoUISharedKit; do
     if [ -d "Modules/$kit/Tests" ]; then

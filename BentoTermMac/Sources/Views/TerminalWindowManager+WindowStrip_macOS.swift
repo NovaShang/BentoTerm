@@ -1,6 +1,5 @@
 import BentoTmuxKit
 import BentoFoundationKit
-import BentoAgentKit
 import BentoSessionKit
 import BentoUISharedKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
@@ -145,7 +144,7 @@ extension TerminalWindowManager {
     ///     machine but not opened here (dormant). This is OUR own connection
     ///     state, not tmux's `session_attached` (which also counts Terminal.app /
     ///     iPhone clients and lags behind the poll).
-    ///   • color (filled only) — agent activity, highest priority first:
+    ///   • color (filled only) — pane status, highest priority first:
     ///     awaiting (amber) → done-unseen (green) → working (blue) → idle (gray).
     fileprivate enum SessionDot: String { case awaiting, doneUnseen, working, idle, dormant }
 
@@ -160,7 +159,7 @@ extension TerminalWindowManager {
 
     /// Put the session name and its status on the native tab.
     ///
-    /// A tab title is a plain string, so the dot rides IN it: an agent waiting
+    /// A tab title is a plain string, so the dot rides IN it: a pane waiting
     /// on you has to be visible from a background tab, which is the whole point
     /// of the colour language. `NSWindow.tab.attributedTitle` lets it be a real
     /// coloured glyph rather than a letter standing in for one.
@@ -183,7 +182,7 @@ extension TerminalWindowManager {
     /// ordinary title rather than wearing a grey dot that means "nothing".
     private func tabDotColor(_ dot: SessionDot) -> NSColor? {
         switch dot {
-        case .awaiting:   return PaneState.awaitingInput(profile: "").nsColor
+        case .awaiting:   return PaneState.awaitingInput.nsColor
         case .doneUnseen: return PaneTitleBar.doneColor
         case .working:    return PaneState.working.nsColor
         case .idle, .dormant: return nil
@@ -201,20 +200,20 @@ extension TerminalWindowManager {
         let vm = tab.viewModel
         // Same priority as a window's status (`windowStatus`): something still
         // running outranks something that finished while you were away.
-        if vm.agentsWaiting > 0    { return .awaiting }
-        if vm.agentsWorking > 0    { return .working }
-        if vm.agentsDoneUnseen > 0 { return .doneUnseen }
-        return .idle           // open, no agent activity → filled gray
+        if vm.panesAwaiting > 0   { return .awaiting }
+        if vm.panesWorking > 0    { return .working }
+        if vm.panesDoneUnseen > 0 { return .doneUnseen }
+        return .idle           // open, no pane status → filled gray
     }
 
     /// Render a session-dot (memoized). Neutral grays use semantic label colors
-    /// so they adapt to light/dark; the agent colors are fixed.
+    /// so they adapt to light/dark; the status colors are fixed.
     private func dotImage(for dot: SessionDot) -> NSImage {
         let key = "\(dot.rawValue)-\(window.effectiveAppearance.name.rawValue)"
         if let cached = dotImageCache[key] { return cached }
         let img: NSImage
         switch dot {
-        case .awaiting:   img = dotImage(PaneState.awaitingInput(profile: "").nsColor, style: .filled) // yellow
+        case .awaiting:   img = dotImage(PaneState.awaitingInput.nsColor, style: .filled) // yellow
         case .doneUnseen: img = dotImage(PaneTitleBar.doneColor, style: .filled)                       // green
         case .working:    img = dotImage(PaneState.working.nsColor, style: .filled)                    // blue
         case .idle:       img = dotImage(.secondaryLabelColor, style: .filled)                         // attached, idle

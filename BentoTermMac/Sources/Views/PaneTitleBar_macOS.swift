@@ -2,7 +2,7 @@ import BentoTmuxKit
 import BentoFoundationKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
-import BentoAgentKit
+import BentoSessionKit
 import BentoUISharedKit
 
 /// The thin label strip atop each pane, with zoom + menu buttons on the right.
@@ -59,9 +59,9 @@ final class PaneTitleBar: NSView {
         didSet { updateStateIcon(); updateChrome() }
     }
 
-    /// A coding-agent pane that finished but hasn't been looked at → "done"
+    /// A pane that reported done but hasn't been looked at → "done"
     /// (green ✓ glyph + green band), distinct from a plain idle/seen pane.
-    var agentFinishedUnseen: Bool = false {
+    var doneUnseen: Bool = false {
         didSet { updateStateIcon(); updateChrome() }
     }
 
@@ -73,7 +73,7 @@ final class PaneTitleBar: NSView {
     /// What this pane's chrome is announcing — the shared mapping the iOS strip
     /// and the List sidebar rows also render.
     private var status: PaneChrome.Status {
-        PaneChrome.Status(state: paneState, agentFinishedUnseen: agentFinishedUnseen)
+        PaneChrome.Status(state: paneState, doneUnseen: doneUnseen)
     }
 
     /// The leading glyph + tint for the current state.
@@ -99,7 +99,7 @@ final class PaneTitleBar: NSView {
 
     /// Recompute the band background + label/button ink from (state, active).
     private func updateChrome() {
-        // Agent state wins the band color; otherwise a focused-but-idle pane takes
+        // Pane status wins the band color; otherwise a focused-but-idle pane takes
         // the window highlight color, so focus reads from the title bar too — not
         // just the border (the border alone is too quiet for an idle gray pane).
         let accent = chromeAccent() ?? (isActive ? GhosttyPaneColors.focusAccent() : nil)
@@ -236,7 +236,7 @@ enum GhosttyPaneColors {
 
     /// Focus outline for the pane border: the window highlight color on the active
     /// pane, a near-invisible hairline otherwise — so the focused tile reads at a
-    /// glance regardless of its agent state (which the title bar / dot / wash carry).
+    /// glance regardless of its status (which the title bar / dot / wash carry).
     static func focusBorder(active: Bool) -> NSColor {
         active ? focusAccent() : PaneChromeColors.idleBorder()
     }

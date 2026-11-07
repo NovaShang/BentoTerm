@@ -1,7 +1,6 @@
 import UIKit
 import SwiftUI
 import Combine
-import BentoAgentKit
 import BentoSessionKit
 import BentoTmuxKit
 import BentoFilePreviewKit
@@ -58,12 +57,12 @@ final class PaneTitleBar: UIView {
         didSet { updateStateVisuals(); updateChrome() }
     }
 
-    /// An agent that finished while you were looking elsewhere → the green ✓, a
+    /// A pane that reported done while you were looking elsewhere → the green ✓, a
     /// display state that sits beside `paneState` rather than inside it (the
     /// same split the macOS chrome and the sidebar rows make).
-    var agentFinishedUnseen: Bool = false {
+    var doneUnseen: Bool = false {
         didSet {
-            guard oldValue != agentFinishedUnseen else { return }
+            guard oldValue != doneUnseen else { return }
             updateStateVisuals(); updateChrome()
         }
     }
@@ -141,7 +140,7 @@ final class PaneTitleBar: UIView {
     /// What this pane's chrome is announcing — the shared mapping the macOS
     /// title bar and the window sidebar rows also render.
     private var status: PaneChrome.Status {
-        PaneChrome.Status(state: paneState, agentFinishedUnseen: agentFinishedUnseen)
+        PaneChrome.Status(state: paneState, doneUnseen: doneUnseen)
     }
 
     /// The leading glyph for the current state.

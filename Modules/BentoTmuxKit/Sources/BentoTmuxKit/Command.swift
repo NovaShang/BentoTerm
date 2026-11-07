@@ -284,10 +284,10 @@ public enum TmuxCommand: Sendable {
 
         case .listPanes(let target, let allWindows, let sessionWide):
             // pane_title goes last: the title may itself contain colons, so
-            // every fixed field must precede it. `@bento_agent`/`@bento_state`
-            // are pane options an agent's hooks set on their own pane (see
-            // README "Agent hooks"); unset expands to empty.
-            var cmd = "list-panes -F '#{pane_id}:#{pane_width}:#{pane_height}:#{pane_left}:#{pane_top}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}:#{mouse_any_flag}:#{mouse_sgr_flag}:#{alternate_on}:#{window_active}:#{window_id}:#{pane_in_mode}:#{@bento_agent}:#{@bento_state}:#{pane_title}'"
+            // every fixed field must precede it. `@bento_state` is the pane
+            // option any program sets on its own pane to report its status
+            // (see README "Pane status"); unset expands to empty.
+            var cmd = "list-panes -F '#{pane_id}:#{pane_width}:#{pane_height}:#{pane_left}:#{pane_top}:#{pane_active}:#{window_zoomed_flag}:#{pane_current_command}:#{mouse_any_flag}:#{mouse_sgr_flag}:#{alternate_on}:#{window_active}:#{window_id}:#{pane_in_mode}:#{@bento_state}:#{pane_title}'"
             if allWindows { cmd += " -a" }
             else if sessionWide {
                 cmd += " -s"

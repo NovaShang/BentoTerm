@@ -7,7 +7,7 @@ import BentoFoundationKit
 /// A session with exactly ONE pane in total (one window, one pane) is a plain
 /// terminal as far as the user can tell, so it should look like one: no
 /// Parallel/Focus switch (there is nothing to arrange) and no pane title bar
-/// (there is nothing to tell apart). Agent state still shows — through the
+/// (there is nothing to tell apart). Pane status still shows — through the
 /// pane's background wash, which never depended on the title bar.
 ///
 /// "In total" is the point. Focus mode puts one pane in each of several

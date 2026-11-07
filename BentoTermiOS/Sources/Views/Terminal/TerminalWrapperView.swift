@@ -2,7 +2,6 @@ import SwiftUI
 import BentoTmuxKit
 import Combine
 import BentoVoiceKit
-import BentoAgentKit
 import BentoSessionKit
 import BentoFilePreviewKit
 import BentoFoundationKit
@@ -115,7 +114,7 @@ struct TerminalWrapperView: View {
         if let signal = foregroundPaneSignal {
             return Color(uiColor: PaneChromeColors.washed(
                 bg, status: PaneChrome.Status(state: signal.state,
-                                              agentFinishedUnseen: signal.doneUnseen)))
+                                              doneUnseen: signal.doneUnseen)))
         }
         return Color(uiColor: bg)
     }
@@ -129,7 +128,7 @@ struct TerminalWrapperView: View {
             ?? (viewModel.paneViewModels.count == 1 ? viewModel.paneViewModels.first?.paneID : nil)
             ?? viewModel.activePaneID
         guard let id, let pvm = viewModel.paneViewModels.first(where: { $0.paneID == id }) else { return nil }
-        return (pvm.paneState, pvm.agentFinishedUnseen)
+        return (pvm.paneState, pvm.doneUnseen)
     }
 
     /// Persistence key for the sizing choice (per host + tmux session).

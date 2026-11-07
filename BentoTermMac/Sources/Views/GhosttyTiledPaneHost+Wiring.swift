@@ -4,7 +4,6 @@ import BentoFoundationKit
 import BentoGhosttyKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
-import BentoAgentKit
 import Combine
 import BentoSessionKit
 import BentoUISharedKit
@@ -176,18 +175,18 @@ extension GhosttyTiledPaneHost {
         var bag = Set<AnyCancellable>()
 
         // Drive the title-bar status dot from the pane's state (what its
-        // agent's hooks report, via PaneViewModel.paneState).
+        // `@bento_state` option reports, via PaneViewModel.paneState).
         container.paneState = paneVM.paneState
         paneVM.$paneState
             .receive(on: RunLoop.main)
             .sink { [weak container] state in container?.paneState = state }
             .store(in: &bag)
 
-        // "Done, unseen" badge (agent finished while you weren't looking).
-        container.agentFinishedUnseen = paneVM.agentFinishedUnseen
-        paneVM.$agentFinishedUnseen
+        // "Done, unseen" badge (the pane finished while you weren't looking).
+        container.doneUnseen = paneVM.doneUnseen
+        paneVM.$doneUnseen
             .receive(on: RunLoop.main)
-            .sink { [weak container] v in container?.agentFinishedUnseen = v }
+            .sink { [weak container] v in container?.doneUnseen = v }
             .store(in: &bag)
 
         cellBags[paneID] = bag
