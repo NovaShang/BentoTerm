@@ -246,7 +246,7 @@ final class PaneContainerVC: UIViewController {
         guard let viewModel,
               let target = focusedOrActiveVC,
               let provider = target.pathPreviewContext else { return }
-        // The pane the sheet browses — nil for a plain (non-tmux) shell.
+        // The pane the sheet browses.
         let paneID = paneControllers.first(where: { $0.value === target })?.key
         let browser = PaneFileTreeBrowser(viewModel: viewModel, paneID: paneID,
                                           contextProvider: provider) { [weak self, weak target] path, _ in
@@ -279,13 +279,13 @@ final class PaneContainerVC: UIViewController {
 
     // MARK: - Non-tmux single pane
 
+    /// One surface bound straight to the view model: a plain shell, or a tmux
+    /// session that hasn't attached yet. No file context — path preview and
+    /// the file browser root at a tmux pane, so there is nothing to offer here.
     func setupSinglePane() {
         guard let viewModel else { return }
         let vc = makeContainerVC()
         vc.bindToTerminalVM(viewModel)
-        vc.pathPreviewContext = { [weak self, weak vc] in
-            self?.makePathPreviewContext(paneVM: nil, vc: vc)
-        }
         vc.linkOriginProvider = { [weak self] in self?.makeLinkOrigin(paneID: nil) }
         vc.titleBar.isActivePane = true
         vc.onFindRequested = { [weak self] prefill in self?.showFindBar(prefill: prefill) }
@@ -443,7 +443,7 @@ final class PaneContainerVC: UIViewController {
     /// Path preview: build the fetch context at tap time — the transport can
     /// reconnect and swap its underlying client, so nothing is cached here.
     /// cwd = the pane's live tmux path, falling back to the surface's OSC 7
-    /// report (non-tmux sessions).
+    /// report when tmux can't say.
     private func makePathPreviewContext(paneVM: PaneViewModel?,
                                         vc: TerminalContainerVC?) -> PathPreviewContext? {
         guard let viewModel,

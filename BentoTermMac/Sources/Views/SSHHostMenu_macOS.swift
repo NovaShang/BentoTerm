@@ -1,5 +1,6 @@
 import BentoSessionKit
 import BentoFoundationKit
+import BentoUISharedKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 
@@ -116,6 +117,9 @@ final class RemoteSessionsMenuFiller: NSObject, NSMenuDelegate {
                 item.subtitle = session.attached ? "\(windows) · attached" : windows
                 menu.addItem(item)
             }
+        case .failure(.noTmux):
+            fillMissingTmux(menu)
+            return
         case .failure(let why):
             menu.addItem(disabled(why.message))
         }
@@ -125,11 +129,39 @@ final class RemoteSessionsMenuFiller: NSObject, NSMenuDelegate {
         new.representedObject = SSHHostMenu.RemoteSessionPick(host: host, session: nil)
         new.image = NSImage(systemSymbolName: "plus.rectangle.on.rectangle", accessibilityDescription: nil)
         menu.addItem(new)
-        let plain = NSMenuItem(title: "Shell (no tmux)", action: shell, keyEquivalent: "")
+        menu.addItem(plainShellItem(title: "Shell (no tmux)"))
+    }
+
+    /// The host answered, and it has no tmux: nothing here can be attached
+    /// and New tmux Session would fail the same way. Say so, offer the install
+    /// commands to copy (one per row — which one applies is the user's to
+    /// know), and lead with the way in that works.
+    private func fillMissingTmux(_ menu: NSMenu) {
+        menu.addItem(disabled(MissingTmuxCopy.title))
+        for command in MissingTmuxCopy.installCommands {
+            let copy = NSMenuItem(title: "Copy “\(command)”",
+                                  action: #selector(copyCommand(_:)), keyEquivalent: "")
+            copy.target = self
+            copy.representedObject = command
+            copy.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
+            menu.addItem(copy)
+        }
+        menu.addItem(.separator())
+        menu.addItem(plainShellItem(title: MissingTmuxCopy.connectPlain))
+    }
+
+    @objc private func copyCommand(_ sender: NSMenuItem) {
+        guard let command = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
+    }
+
+    private func plainShellItem(title: String) -> NSMenuItem {
+        let plain = NSMenuItem(title: title, action: shell, keyEquivalent: "")
         plain.target = target
         plain.representedObject = host
         plain.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
-        menu.addItem(plain)
+        return plain
     }
 
     private func disabled(_ title: String) -> NSMenuItem {

@@ -100,15 +100,8 @@ extension TerminalViewModel {
         // `isTmuxReady` reports on, and independently of whether it succeeds.
         // That is the whole point: chrome that asks "is this tmux" gets an
         // answer while the session is still connecting.
-        kind = (choice == .noTmux) ? .plain : .tmux
+        kind = .tmux
         switch choice {
-        case .noTmux:
-            // Move into shell-only mode: subsequent SSH data flows to the
-            // single-pane terminal. Send a `clear` so the screen starts fresh
-            // (the previous `tmux ls` output that we silently captured won't
-            // appear on screen, but the cursor state is well-defined).
-            phase = .shellReady
-            transport.write("clear\n")
         case .createOrAttach(let name):
             // Only force the tmux client viewport to the phone screen when
             // we're CREATING a brand-new session — i.e. the name wasn't in

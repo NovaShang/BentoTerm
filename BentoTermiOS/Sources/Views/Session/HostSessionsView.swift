@@ -34,6 +34,8 @@ struct HostSessionsView: View {
     /// Connect failures surface HERE, in the sheet — the terminal never
     /// exists yet, so the sheet is the only place that can say what happened.
     @State private var connectError: String?
+    /// The install command last copied, for the row's checkmark.
+    @State private var copiedCommand: String?
 
     init(host: Host,
          onSessionReady: @escaping (SessionKey) -> Void) {
@@ -70,8 +72,12 @@ struct HostSessionsView: View {
                 activeSection
             }
 
-            otherSessionsSection
-            newSection
+            if lister.tmuxMissing {
+                missingTmuxSection
+            } else {
+                otherSessionsSection
+                newSection
+            }
         }
         .bentoForm()
         .disabled(isStartingNew)
@@ -275,7 +281,7 @@ struct HostSessionsView: View {
             }
 
             Button {
-                startNewSession(.noTmux)
+                startPlainShell()
             } label: {
                 Label(LaunchAction.plainTerminal.title,
                       systemImage: LaunchAction.plainTerminal.systemImage)
@@ -293,6 +299,48 @@ struct HostSessionsView: View {
             return "A plain-shell session is already open — see Active."
         }
         return "Empty session is a blank single-pane tmux session. Without tmux is a plain shell — no split panes or session persistence."
+    }
+
+    /// The host answered and has no tmux: nothing can be listed or created
+    /// here. Say so, offer the install commands to copy (which one applies is
+    /// the user's to know), and lead with the way in that works.
+    @ViewBuilder
+    private var missingTmuxSection: some View {
+        Section {
+            Text(MissingTmuxCopy.installPrompt)
+                .font(.callout)
+                .foregroundStyle(Color.bentoInkDim)
+            ForEach(MissingTmuxCopy.installCommands, id: \.self) { command in
+                HStack {
+                    Text(command)
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundStyle(Color.bentoInk)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button {
+                        UIPasteboard.general.string = command
+                        copiedCommand = command
+                    } label: {
+                        Image(systemName: copiedCommand == command ? "checkmark" : "doc.on.doc")
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Copy \(command)")
+                }
+            }
+        } header: {
+            BentoFormHeader(MissingTmuxCopy.title)
+        }
+        .bentoSectionStyle()
+
+        Section {
+            Button {
+                startPlainShell()
+            } label: {
+                Label(MissingTmuxCopy.connectPlain,
+                      systemImage: LaunchAction.plainTerminal.systemImage)
+            }
+        }
+        .bentoSectionStyle()
     }
 
     // MARK: - Helpers
@@ -321,12 +369,12 @@ struct HostSessionsView: View {
 
     // MARK: - Pick
 
-    /// Open a fresh VM (new SSH) for the picked choice, then hand the ready
-    /// session to the parent — the sheet dismisses, the terminal is pushed.
+    /// Open a fresh VM (new SSH) for the picked tmux session, then hand the
+    /// ready session to the parent — the sheet dismisses, the terminal is
+    /// pushed.
     private func startNewSession(_ choice: TmuxStartChoice) {
         let name: String
         switch choice {
-        case .noTmux: name = ""
         case .createOrAttach(let n): name = n
         case .shareWithDesktop(let target): name = "\(target)-mobile"
         }
@@ -356,12 +404,43 @@ struct HostSessionsView: View {
             }
             await vm.applyTmuxChoice(choice)
             isStartingNew = false
+            if vm.tmuxIsMissing {
+                // Not a connection failure: the sheet already has the answer
+                // for this (install it, or connect without tmux).
+                sessionManager.disconnect(key: key)
+                lister.noteTmuxMissing()
+                return
+            }
             // The attach moment — this is what earns a Recent row (macOS
             // records the same moment: a session you actually entered).
             RecentLaunchStore.shared.record(host: host, sessionName: name)
             // Refresh the lister so the new session appears in the sheet
             // next time and keeps our attached/unattached split correct.
             await lister.refresh()
+            readyAndClose(key)
+        }
+    }
+
+    /// A plain shell on this host: no tmux, no session name, nothing recorded
+    /// to come back to. At most one per host (its key is the empty name).
+    private func startPlainShell() {
+        let key = SessionKey(hostID: host.id, tmuxSessionName: "")
+        if sessionManager.existingViewModel(for: key) != nil {
+            readyAndClose(key)
+            return
+        }
+        hostStore.markConnected(host)
+        let vm = sessionManager.viewModel(for: host, tmuxSessionName: "")
+        isStartingNew = true
+        Task {
+            await vm.connectPlainShell()
+            isStartingNew = false
+            guard case .connected = vm.connectionState else {
+                connectError = vm.errorMessage
+                    ?? "Couldn't reach \(host.displayName) — check the host and your SSH credentials."
+                sessionManager.disconnect(key: key)
+                return
+            }
             readyAndClose(key)
         }
     }

@@ -53,7 +53,7 @@ extension TerminalWindowManager {
             }
         toolbar.activeSessionKey = tab.sessionKey
 
-        let tmuxWindows = tab.isPlain ? [] : tab.viewModel.windows
+        let tmuxWindows = tab.viewModel.windows
         let maxVisible = computeMaxVisible()
         var visible = Array(tmuxWindows.prefix(maxVisible))
         // Keep the current window visible even if it would land in the overflow.
@@ -91,7 +91,6 @@ extension TerminalWindowManager {
             let name = displayTitle(for: active)
             window.title = name
             toolbar.setSessionTitle(name)
-            toolbar.activeTabIsPlain = active.isPlain
             toolbar.sizingMode = active.viewModel.sizingMode
             toolbar.sizingOwner = active.viewModel.sizingOwner
             toolbar.sizingOwnerIsMe = active.viewModel.sizingOwnerIsMe
@@ -147,14 +146,13 @@ extension TerminalWindowManager {
     ///     iPhone clients and lags behind the poll).
     ///   • color (filled only) — pane status, highest priority first:
     ///     awaiting (amber) → done-unseen (green) → working (blue) → idle (gray).
-    fileprivate enum SessionDot: String { case awaiting, doneUnseen, working, idle, dormant, plain }
+    fileprivate enum SessionDot: String { case awaiting, doneUnseen, working, idle, dormant }
 
     /// What the window, its native tab, and the toolbar's session button call
     /// this session. A remote one reads `name — host`, so two tabs on
     /// same-named sessions on different machines are tellable apart at a
     /// glance, rather than only after clicking one.
     func displayTitle(for tab: SessionTab) -> String {
-        if tab.isPlain { return tab.windowTitle }
         let live = tab.viewModel.activeTmuxSessionName ?? tab.id.name
         return TmuxSessionID(server: tab.id.server, name: live).displayName
     }
@@ -180,14 +178,14 @@ extension TerminalWindowManager {
         window.tab.attributedTitle = text
     }
 
-    /// nil = nothing worth colouring (idle / plain), so the tab keeps its
+    /// nil = nothing worth colouring (idle), so the tab keeps its
     /// ordinary title rather than wearing a grey dot that means "nothing".
     private func tabDotColor(_ dot: SessionDot) -> NSColor? {
         switch dot {
         case .awaiting:   return PaneState.awaitingInput.nsColor
         case .doneUnseen: return PaneTitleBar.doneColor
         case .working:    return PaneState.working.nsColor
-        case .idle, .dormant, .plain: return nil
+        case .idle, .dormant: return nil
         }
     }
 
@@ -199,7 +197,6 @@ extension TerminalWindowManager {
     }
 
     fileprivate func sessionDot() -> SessionDot {
-        if tab.isPlain { return .plain }   // no tmux → a terminal glyph, not a dot
         let vm = tab.viewModel
         // Same priority as a window's status (`windowStatus`): something still
         // running outranks something that finished while you were away.
@@ -221,27 +218,8 @@ extension TerminalWindowManager {
         case .working:    img = dotImage(PaneState.working.nsColor, style: .filled)                    // blue
         case .idle:       img = dotImage(.secondaryLabelColor, style: .filled)                         // attached, idle
         case .dormant:    img = dotImage(.tertiaryLabelColor, style: .ring)                            // not attached
-        case .plain:      img = glyphImage("apple.terminal")                                           // no-tmux terminal
         }
         dotImageCache[key] = img
-        return img
-    }
-
-    /// A small SF Symbol used in place of the status dot (e.g. the plain-terminal
-    /// tab's terminal glyph), tinted to the label color and appearance-resolved.
-    private func glyphImage(_ symbol: String) -> NSImage {
-        let cfg = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
-        let base = NSImage(systemSymbolName: symbol, accessibilityDescription: "Terminal")?
-            .withSymbolConfiguration(cfg) ?? NSImage()
-        let img = NSImage(size: base.size)
-        img.lockFocus()
-        window.effectiveAppearance.performAsCurrentDrawingAppearance {
-            NSColor.secondaryLabelColor.set()
-            base.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
-            NSRect(origin: .zero, size: base.size).fill(using: .sourceAtop)
-        }
-        img.unlockFocus()
-        img.isTemplate = false
         return img
     }
 
@@ -300,9 +278,9 @@ extension TerminalWindowManager {
     /// The actions for the tmux window under the pointer in the toolbar strip —
     /// the same set the Focus sidebar's rows carry, because it is the same
     /// thing in a different place. nil when that segment holds no window (the
-    /// overflow "…" segment, a plain tab, or a strip mid-rebuild).
+    /// overflow "…" segment, or a strip mid-rebuild).
     func windowMenuItems(forSegment index: Int) -> [NSMenuItem]? {
-        guard !tab.isPlain, visibleWindows.indices.contains(index) else { return nil }
+        guard visibleWindows.indices.contains(index) else { return nil }
         let id = visibleWindows[index]
         let vm = tab.viewModel
         // Name the target at the top. A segment is a small thing to have aimed

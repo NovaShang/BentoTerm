@@ -38,8 +38,12 @@ extension TerminalViewModel {
         // lost" would describe a session that never started.
         var fallback = message
         switch phase {
-        case .tmuxReady, .shellReady:
+        case .tmuxReady:
             recoverable = true
+        case .shellReady:
+            // A plain shell died with its connection; there is nothing on the
+            // far side to reattach to, so it is reported, never revived.
+            recoverable = false
         case .starting:
             // `.starting` means the session has not come up yet. For a login
             // shell that is a blip during launch and worth retrying — the shell
@@ -110,6 +114,9 @@ extension TerminalViewModel {
         let remote = tmuxService.outputBeforeControlMode
             .trimmingCharacters(in: .whitespacesAndNewlines)
         dlog("session bring-up failed: \(fallback) | remote said: \(remote.isEmpty ? "<nothing>" : remote)")
+        // Read by the window/sheet to offer the way out (install it, or open a
+        // plain shell instead) rather than only the transcript below.
+        tmuxIsMissing = TmuxSessionListing.saysTmuxIsMissing(remote)
         // Order: our summary, then what the far side actually said, then what to
         // check. The remote's own words are the most specific thing on screen
         // and must not be buried under a suggestion.

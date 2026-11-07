@@ -98,10 +98,17 @@ struct BentoApp: App {
                         case .terminal(let key):
                             if let entry = sessionManager.activeSessions
                                 .first(where: { $0.key == key }) {
-                                TerminalWrapperView(viewModel: entry.viewModel)
-                                    // The terminal supplies its own back item;
-                                    // only the default button is hidden.
-                                    .navigationBarBackButtonHidden()
+                                // Plain or tmux is decided here, once: each
+                                // gets its own screen, so neither has to ask.
+                                // The terminal supplies its own back item;
+                                // only the default button is hidden.
+                                if entry.viewModel.isPlainSession {
+                                    PlainShellView(viewModel: entry.viewModel, sessionKey: key)
+                                        .navigationBarBackButtonHidden()
+                                } else {
+                                    TerminalWrapperView(viewModel: entry.viewModel)
+                                        .navigationBarBackButtonHidden()
+                                }
                             }
                         }
                     }

@@ -128,6 +128,21 @@ struct SessionListingTests {
         let silent = "\(probe.startMarker)\r\n\(probe.endMarker)"
         #expect(probe.result(of: silent) == .failure(.noSessions))
     }
+
+    /// What a failed `tmux -CC` launch leaves behind, read for "no tmux here" —
+    /// the one bring-up failure that gets its own way out (install / plain).
+    @Test func aLaunchTranscriptSaysWhenTmuxIsMissing() {
+        #expect(TmuxSessionListing.saysTmuxIsMissing("zsh:1: command not found: tmux"))
+        #expect(TmuxSessionListing.saysTmuxIsMissing("bash: line 1: tmux: command not found"))
+        #expect(TmuxSessionListing.saysTmuxIsMissing("sh: 1: tmux: not found"))
+        // A missing binary that isn't tmux is someone else's problem.
+        #expect(!TmuxSessionListing.saysTmuxIsMissing("zsh: command not found: nvm"))
+        // An auth failure mentioning tmux in the echoed command is still auth.
+        #expect(!TmuxSessionListing.saysTmuxIsMissing(
+            "tmux -CC new-session -A -s bento\r\nPermission denied (publickey)."))
+        #expect(!TmuxSessionListing.saysTmuxIsMissing("ssh: Could not resolve hostname box"))
+        #expect(!TmuxSessionListing.saysTmuxIsMissing(""))
+    }
 }
 
 /// The same parser, fed by a real tmux: the format string has to survive

@@ -17,10 +17,7 @@ extension TerminalWrapperView {
     @ViewBuilder
     var sessionTitle: some View {
         let label = VStack(spacing: 1) {
-            // A plain session has no tmux name to show, and falling back to the
-            // host printed it twice — once as the title, once under it. Name the
-            // kind instead, the way the session list already does.
-            Text(viewModel.activeTmuxSessionName ?? (isPlain ? "Shell" : host.displayName))
+            Text(viewModel.activeTmuxSessionName ?? host.displayName)
                 .font(.headline).lineLimit(1)
             HStack(spacing: 4) {
                 connectionDot

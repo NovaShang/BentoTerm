@@ -274,6 +274,13 @@ extension TerminalViewModel {
             dlog("resume: probe failed — socket died during suspension")
         }
         phaseBeforeSuspend = nil
+        guard kind == .tmux else {
+            // A plain shell's process died with the connection; a new one
+            // would be a different shell, not this one back.
+            dlog("Resume: plain shell on \(self.host.hostname) lost its connection — ending")
+            failWithRemoteDiagnosis(fallback: "The connection to \(host.name) closed.")
+            return
+        }
         dlog("Resuming session for \(self.host.hostname) (\(String(describing: self.phase)) → reconnect)")
         scheduleReconnect()
     }
@@ -322,14 +329,12 @@ extension TerminalViewModel {
         let service = tmuxService
         tmuxParseQueue.async { service.reset() }
 
+        // Only a tmux session is ever reattached (a plain shell is reported,
+        // not revived — see `handleUnexpectedFailure`), so there is always a
+        // name to reattach to; without one there is nothing to come back to.
+        guard let name = activeTmuxSessionName else { return false }
         guard await bringUpTransport() != nil else { return false }
 
-        guard let name = activeTmuxSessionName else {
-            // Raw-shell session: the fresh shell already streams to the
-            // surface once the phase is live again.
-            phase = .shellReady
-            return !failedDuringReattach
-        }
         // Skip session discovery entirely — we know the session name, and
         // `tmux -CC new-session -A` attaches-or-creates in one step.
         // resizeToScreen:false preserves the session's server-side geometry.

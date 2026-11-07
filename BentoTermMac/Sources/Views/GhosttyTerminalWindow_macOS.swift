@@ -32,19 +32,23 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// overflow the strip). Sessions moved to the named button on the left.
     var visibleWindows: [TmuxWindowID] = []
 
-    let toolbar = TerminalToolbarController()
+    let toolbar: TerminalToolbarController
     /// The window's content is the SYSTEM sidebar arrangement — an
     /// `NSSplitViewController` whose first item is a real sidebar split item.
     /// Material, full-height layout, animated collapse, drag-to-resize, and
     /// width persistence are all AppKit's; we only decide WHEN it shows
     /// (Focus mode) and WHAT it hosts (the shared SwiftUI `WindowSidebar`).
+    ///
+    /// A plain terminal's window has neither the sidebar nor the dock: both
+    /// items are nil there, and everything that would open them belongs to
+    /// the session toolbar, which a plain window doesn't build.
     private let splitVC = NSSplitViewController()
-    private var sidebarItem: NSSplitViewItem!
-    private var sidebarHosting: NSHostingController<AnyView>!
+    private var sidebarItem: NSSplitViewItem?
+    private var sidebarHosting: NSHostingController<AnyView>?
     /// Trailing "pin previews here" dock — a collapsed split item that expands
     /// on the first pin. One model per window, persists across tab switches.
     let previewDock = PreviewDockModel()
-    private var dockItem: NSSplitViewItem!
+    private var dockItem: NSSplitViewItem?
     /// Content column root. With `.fullSizeContentView` the column extends
     /// under the toolbar, so the terminal container is pinned below the chrome
     /// (see `installContentConstraints`).
@@ -96,20 +100,72 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     init(tab: SessionTab) {
         self.tab = tab
+        self.toolbar = TerminalToolbarController(isPlain: tab.isPlain)
         super.init()
         let win = TerminalSessionWindow.makeShell()
         win.delegate = self
 
-        // Content = the system sidebar arrangement. The sidebar split item
-        // brings the native material, full-height layout, animated collapse,
-        // divider drag, and width autosave — no hand-rolled chrome.
         contentRoot.autoresizesSubviews = false
         topFill.wantsLayer = true
         contentRoot.addSubview(topFill)
         contentRoot.addSubview(container)
 
-        sidebarHosting = NSHostingController(rootView: AnyView(EmptyView()))
-        let sidebar = NSSplitViewItem(sidebarWithViewController: sidebarHosting)
+        let contentVC = NSViewController()
+        contentVC.view = contentRoot
+        if tab.isPlain {
+            // One surface, nothing beside it: no sidebar, no dock.
+            win.contentViewController = contentVC
+            win.setContentSize(Self.defaultContentSize)
+        } else {
+            installSessionColumns(around: contentVC, in: win)
+        }
+        applyWindowBackground(to: win)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(themeChanged),
+            name: .terminalThemeChanged, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(surfaceBackgroundChanged(_:)),
+            name: .ghosttySurfaceBackgroundChanged, object: nil)
+
+        // A plain tab vanishes with its window — there's nothing to reconnect.
+        toolbar.onCloseTab = { [weak self] in self?.window.close() }
+        toolbar.hostWindow = win
+        if !tab.isPlain { wireSessionToolbar(in: win) }
+        win.toolbar = toolbar.makeToolbar()
+        win.toolbarStyle = .unified
+        // Restore size + position, but only for the window that opens into an
+        // empty screen — the rest join its tab group (which shares one frame) or
+        // cascade beside it, and AppKit refuses a duplicate autosave name anyway.
+        if !BentoTerminalWindow.hasOpenWindows, BentoWindowFrame.claim(win) {
+            if !win.setFrameUsingName(BentoWindowFrame.name) { win.center() }
+        }
+        self.window = win
+        installContentConstraints(in: win)
+
+        // Bring the session up. This used to live in `loadTab`, which ran when a
+        // tab was added to the old multi-tab window; with one session per window
+        // it belongs to construction — a window without these is a titled box
+        // with nothing connected behind it.
+        if tab.isPlain {
+            var bag = Set<AnyCancellable>()
+            subscribeFailure(tab, into: &bag)
+            tabCancellables[ObjectIdentifier(tab)] = bag
+        } else {
+            subscribe(tab)
+        }
+        tab.connect()
+        show(tab)
+        if !tab.isPlain { BentoTerminalWindow.recordSessionInUse(tab.id) }
+    }
+
+    /// The session window's columns: the system sidebar arrangement — an
+    /// `NSSplitViewController` whose first item is a real sidebar split item
+    /// (native material, full-height layout, animated collapse, divider drag,
+    /// width autosave) — plus the trailing preview dock.
+    private func installSessionColumns(around contentVC: NSViewController, in win: NSWindow) {
+        let hosting = NSHostingController(rootView: AnyView(EmptyView()))
+        sidebarHosting = hosting
+        let sidebar = NSSplitViewItem(sidebarWithViewController: hosting)
         sidebar.minimumThickness = 180
         sidebar.maximumThickness = 340
         sidebar.allowsFullHeightLayout = true
@@ -117,11 +173,9 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // The item's first-layout thickness comes from its view's frame — set
         // it to the new 50%-wider default (1.5× the 180 minimum) BEFORE the
         // split view ever lays out, or the window opens with the stale width.
-        sidebarHosting.view.frame = NSRect(x: 0, y: 0, width: 270, height: 640)
+        hosting.view.frame = NSRect(x: 0, y: 0, width: 270, height: 640)
         sidebarItem = sidebar
 
-        let contentVC = NSViewController()
-        contentVC.view = contentRoot
         let contentItem = NSSplitViewItem(viewController: contentVC)
         // The terminal's floor. The dock has no ceiling (see below), so this is
         // what stops a dock drag from squeezing the terminal to nothing and
@@ -179,24 +233,19 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // only: re-assert emptiness after the restoration that the
         // contentViewController assignment just applied (and once more next
         // runloop turn, in case restoration lands on first display).
-        dockItem.isCollapsed = true
+        dock.isCollapsed = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.dockItem.isCollapsed = self.previewDock.tabs.isEmpty
+            self.dockItem?.isCollapsed = self.previewDock.tabs.isEmpty
         }
-        applyWindowBackground(to: win)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(themeChanged),
-            name: .terminalThemeChanged, object: nil)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(surfaceBackgroundChanged(_:)),
-            name: .ghosttySurfaceBackgroundChanged, object: nil)
+    }
 
-        // Toolbar: <session> ⌄ | [window tabs] | New ⌄ | ⋯ — the centre hosts the
-        // current session's tmux WINDOWS as a Finder-style segmented
-        // `NSToolbarItemGroup`; sessions live in the named button's menu on the
-        // left. That gives tmux's three levels three fixed places (session /
-        // window / pane) instead of leaving the middle one homeless.
+    /// Toolbar: <session> ⌄ | [window tabs] | New ⌄ | ⋯ — the centre hosts the
+    /// current session's tmux WINDOWS as a Finder-style segmented
+    /// `NSToolbarItemGroup`; sessions live in the named button's menu on the
+    /// left. That gives tmux's three levels three fixed places (session /
+    /// window / pane) instead of leaving the middle one homeless.
+    private func wireSessionToolbar(in win: TerminalSessionWindow) {
         toolbar.onSelectSegment = { [weak self] idx in self?.segmentPicked(idx) }
         // Picking a session moves THIS window onto it (switch-client); one
         // already up in another window comes forward instead. ⌥ / the row's
@@ -216,33 +265,11 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         toolbar.onSelectMode = { [weak self] mode in self?.requestMode(mode) }
         toolbar.onKillSession = { [weak self] in self?.killActiveSession() }
         toolbar.onDetach = { [weak self] in self?.detachActiveSession() }
-        // A plain tab vanishes with its window — there's nothing to reconnect.
-        toolbar.onCloseTab = { [weak self] in self?.window.close() }
         toolbar.onRenameSession = { [weak self] in self?.presentRenameSheet() }
         toolbar.onWindowMenu = { [weak self] index in self?.windowMenuItems(forSegment: index) }
-        toolbar.hostWindow = win
         win.onRightClick = { [weak toolbar] point in
             toolbar?.handleRightClick(atWindowPoint: point) ?? false
         }
-        win.toolbar = toolbar.makeToolbar()
-        win.toolbarStyle = .unified
-        // Restore size + position, but only for the window that opens into an
-        // empty screen — the rest join its tab group (which shares one frame) or
-        // cascade beside it, and AppKit refuses a duplicate autosave name anyway.
-        if !BentoTerminalWindow.hasOpenWindows, BentoWindowFrame.claim(win) {
-            if !win.setFrameUsingName(BentoWindowFrame.name) { win.center() }
-        }
-        self.window = win
-        installContentConstraints(in: win)
-
-        // Bring the session up. This used to live in `loadTab`, which ran when a
-        // tab was added to the old multi-tab window; with one session per window
-        // it belongs to construction — a window without these is a titled box
-        // with nothing connected behind it.
-        subscribe(tab)
-        tab.connect()
-        show(tab)
-        BentoTerminalWindow.recordSessionInUse(tab)
     }
 
     /// The size a session window opens at when nothing is remembered.
@@ -252,6 +279,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     /// Open a preview in the side dock (expanding it) and bring the window front.
     func openPreview(path: String, line: Int?, context: PathPreviewContext) {
+        guard dockItem != nil else { return }
         previewDock.open(path: path, line: line, context: context)
         dockItem?.animator().isCollapsed = false
         window?.makeKeyAndOrderFront(nil)
@@ -267,7 +295,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     /// Show/hide the dock without touching its tabs.
     func togglePreviewDock() {
-        dockItem.animator().isCollapsed.toggle()
+        dockItem?.animator().isCollapsed.toggle()
     }
 
     // MARK: Sidebar (Focus mode's window switcher)
@@ -320,16 +348,16 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     /// The sidebar is MODE-driven, never user-toggled: it appears exactly when
     /// the active tab is a tmux session in Focus mode (there it IS the window
-    /// management surface) and hides in Parallel / plain tabs.
+    /// management surface) and hides in Parallel.
     private var shouldShowSidebar: Bool {
-        guard let tab = activeTab, !tab.isPlain else { return false }
-        return tab.viewModel.sessionMode == .list
+        activeTab?.viewModel.sessionMode == .list
     }
 
     /// Create / swap / remove the hosted `WindowSidebar` to match the active
     /// tab and its mode, then re-derive the two content frames. Called on tab
     /// switch, mode change, and the toolbar toggle.
     func updateSidebar() {
+        guard let sidebarItem, let sidebarHosting else { return }
         let showing = shouldShowSidebar
         if showing, let tab = activeTab {
             if sidebarHostKey != tab.sessionKey {
@@ -392,7 +420,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// mixed external structure into List can't be exactly restored, so
     /// `setMode` declines and we warn before forcing.
     private func requestMode(_ mode: TmuxSessionMode) {
-        guard let tab = activeTab, !tab.isPlain else { return }
+        guard let tab = activeTab else { return }
         let vm = tab.viewModel
         Task { [weak self] in
             let switched = await vm.requestMode(mode)
@@ -439,7 +467,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// there is nothing to arrange and the window should read as a plain
     /// terminal (`SessionChrome`). nil hides it.
     private func toolbarMode(for tab: SessionTab) -> TmuxSessionMode? {
-        guard !tab.isPlain else { return nil }
         let vm = tab.viewModel
         guard SessionChrome.showsModeSwitch(paneCount: vm.sessionPanes.count,
                                             windowCount: vm.windows.count) else { return nil }
@@ -491,7 +518,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     func sessionListChanged(generation: Int, names: [String]) {
         guard generation != lastSessionListGeneration else { return }
         lastSessionListGeneration = generation
-        guard !tab.isPlain, !names.isEmpty else { return }
+        guard !names.isEmpty else { return }
         if !names.contains(tab.id.name) {
             absentPolls += 1
             // One transient miss must not close a live tab — a busy server can
@@ -511,7 +538,12 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         content.frame = container.bounds
         content.autoresizingMask = [.width, .height]
         container.addSubview(content)
-        window.makeFirstResponder(content)
+        window.makeFirstResponder(tab.initialResponder)
+        if tab.isPlain {
+            window.title = tab.windowTitle
+            toolbar.setSessionTitle(tab.windowTitle)
+            return
+        }
         window.title = displayTitle(for: tab)
         rebindActiveToolbar(tab)
         toolbar.setSessionMode(toolbarMode(for: tab))
@@ -588,7 +620,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// The window you are in is the session in use — the one launch and the
     /// Dock icon bring back — and its mode decides what ⌘N is called.
     func windowDidBecomeKey(_ notification: Notification) {
-        BentoTerminalWindow.recordSessionInUse(tab)
+        if !tab.isPlain { BentoTerminalWindow.recordSessionInUse(tab.id) }
         BentoTerminalWindow.refreshNewItemTitle()
     }
 
@@ -598,7 +630,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         activeCancellables.removeAll()
         tabCancellables.removeAll()
         // Drop the sidebar's SwiftUI observation before the VMs are torn down.
-        sidebarHosting.rootView = AnyView(EmptyView())
+        sidebarHosting?.rootView = AnyView(EmptyView())
         sidebarHostKey = nil
         tab.contentView.removeFromSuperview()
         tab.teardown()

@@ -6,10 +6,9 @@ import BentoFoundationKit
 
 let log = Logger(subsystem: "com.novashang.bento", category: "TerminalVM")
 
-/// User's choice for how to start a session on the host.
+/// How to start a TMUX session on the host. A plain shell is not one of these:
+/// it is decided before anything tmux-shaped exists (`connectPlainShell`).
 public enum TmuxStartChoice: Hashable {
-    /// Don't use tmux — plain shell.
-    case noTmux
     /// Create or attach to a session by name (no grouping).
     case createOrAttach(name: String)
     /// Create a grouped session that mirrors `target` (shared with desktop).
@@ -60,6 +59,10 @@ public final class TerminalViewModel: ObservableObject {
     @Published public var connectionState: TerminalConnectionState = .disconnected
     @Published public var errorMessage: String?
     @Published public var showError = false
+    /// The failure behind `showError` is the host having no tmux at all —
+    /// the one bring-up failure with a better answer than "try again": install
+    /// it, or open a plain shell there instead.
+    @Published public internal(set) var tmuxIsMissing = false
     /// True while an auto-reconnect loop is in flight (after a drop, or on
     /// foreground resume). Drives a "Reconnecting…" banner so the UI is never
     /// silently frozen — distinct from `phase`, which churns through
