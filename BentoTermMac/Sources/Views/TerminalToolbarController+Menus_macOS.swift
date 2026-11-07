@@ -23,15 +23,15 @@ extension TerminalToolbarController {
     /// the New menu, so neither is duplicated here.
     func sessionActionsMenu() -> NSMenu {
         let menu = NSMenu()
-        // The tab bar switches between OPEN sessions; this list covers the rest
-        // — picking one moves this window onto it.
-        sessionSwitchSection(menu)
-        // A plain (no-tmux) terminal has no session/windows — just close it.
-        if activeTabIsPlain {
+        // A plain (no-tmux) terminal has no session to act on or switch.
+        if isPlain {
             add(menu, "Close Terminal", #selector(closeTabAction))
             appSection(menu)
             return menu
         }
+        // The tab bar switches between OPEN sessions; this list covers the rest
+        // — picking one moves this window onto it.
+        sessionSwitchSection(menu)
         add(menu, "Rename Session…", #selector(renameAction))
         // Only when something has fixed the size: taking it over is the
         // banner's job, and the default needs no row.
@@ -244,7 +244,7 @@ extension TerminalToolbarController {
     /// equivalents are the menu bar's, shown here as a reminder.
     @objc func newTapped() {
         let menu = NSMenu()
-        let context = PaneMenuContext(isTmuxPane: !activeTabIsPlain,
+        let context = PaneMenuContext(isTmuxPane: !isPlain,
                                       sessionMode: sessionMode ?? .tiled)
         let rows = PaneMenuLayout.macNewMenuSessionRows(context)
         for row in rows {

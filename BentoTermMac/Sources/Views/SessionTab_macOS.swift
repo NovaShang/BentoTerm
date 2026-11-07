@@ -9,76 +9,71 @@ import AppKit
 
 // MARK: - SessionTab (a live, self-managed session)
 
-/// One session: its view model, pane host, and lifecycle. Kept alive while it's
-/// a background tab — the tmux -CC client keeps streaming so the surfaces stay
-/// current; only the active tab's `paneHost` is in the window.
+/// One window's terminal: its view model, its content view, and lifecycle.
+///
+/// Two shapes, decided by which initializer built it and never revisited:
+///   - a tmux tab tiles panes (`paneHost`) and carries every session feature;
+///   - a plain tab (no tmux) is one surface (`plainHost`) that offers typing,
+///     voice, copy/paste, find and close — and nothing else. Its window builds
+///     a minimal toolbar for it, so no tmux feature has to ask "am I plain?".
 @MainActor
 final class SessionTab {
     let viewModel: TerminalViewModel
-    /// A tmux tab tiles panes; a plain (no-tmux) tab is a single raw surface.
     /// Exactly one of these is non-nil — `contentView` is whichever the window
     /// should host.
     let paneHost: GhosttyTiledPaneHost?
-    let plainSurface: GhosttyTerminalSurface?
+    let plainHost: PlainTerminalHost?
     /// The session's identity everywhere (strip order, active selection,
     /// persistence). A tmux rename changes that identity, so the manager
     /// migrates it to follow (`migrateSessionKey`) — the SERVER never changes,
-    /// only the name on it.
+    /// only the name on it. A plain tab has no session; its id is only a
+    /// unique key for its window (see `BentoTerminalWindow.openPlain`).
     var id: TmuxSessionID
     /// String form of `id`, for the places identity has to travel as text.
     var sessionKey: String { id.key }
-    let choice: TmuxStartChoice
+    /// How the tmux session is started; nil for a plain tab.
+    let choice: TmuxStartChoice?
     let windowTitle: String
     /// The ssh control socket this session keeps open, so a clicked
     /// `localhost:5173` can be tunnelled without a second login. Released in
     /// `teardown` — a forward never outlives the session that carries it.
     private var controlSocket: (alias: String, path: String?)?
 
-    /// A plain tab has no tmux behind it: no panes/windows/agents, and closing it
-    /// destroys it (it isn't persisted or reconnected).
-    var isPlain: Bool { plainSurface != nil }
-    var contentView: NSView { paneHost ?? plainSurface! }
+    /// A plain tab has no tmux behind it: closing it destroys it, and it is
+    /// never persisted, restored or reconnected.
+    var isPlain: Bool { plainHost != nil }
+    var contentView: NSView { paneHost ?? plainHost! }
+    /// What should hold the keyboard when the window comes up.
+    var initialResponder: NSView { plainHost?.surface ?? paneHost! }
 
-    /// The focused pane's file context (tmux host → its active pane; plain
-    /// tab → its surface) — what the dock's directory tree roots itself at.
-    var previewContext: PathPreviewContext? {
-        paneHost?.activePathPreviewContext ?? plainSurface?.pathPreviewContext
-    }
+    /// The focused pane's file context — what the dock's directory tree roots
+    /// itself at. Plain tabs have no dock.
+    var previewContext: PathPreviewContext? { paneHost?.activePathPreviewContext }
 
-    /// `command` overrides the plain (no-tmux) tab's login shell — a
-    /// quick-connect `["ssh", host]`.
+    /// A tmux-backed tab.
     ///
-    /// A tmux-backed tab must leave `command` nil for the LOCAL server (the VM
-    /// types the tmux line into a login shell). For a session on an ssh host it
-    /// is the opposite: the command is built here, below, and carries the
-    /// `tmux -CC` invocation as ssh's own argument.
-    init(choice: TmuxStartChoice, server: TmuxServer, title: String,
-         key: String? = nil, command: [String]? = nil) {
+    /// For the LOCAL server the VM types the tmux line into a login shell. For
+    /// a session on an ssh host the command is built here, below, and carries
+    /// the `tmux -CC` invocation as ssh's own argument.
+    init(choice: TmuxStartChoice, server: TmuxServer, title: String) {
         self.choice = choice
         self.windowTitle = title
-        self.id = key.flatMap(TmuxSessionID.init(key:)) ?? Self.id(for: choice, on: server)
-        let theme = ThemeStore.shared.makeTerminalTheme()
+        self.id = Self.id(for: choice, on: server)
         let storedKey = id.key
-        let env = TerminalEnvironment(
-            idealTerminalSize: { (120, 30) },
-            // What `ssh` asks for, when the user asked us to remember it.
-            loadKeychainPassword: { key in MacKeychain.load(key) },
-            saveKeychainPassword: { key, value in MacKeychain.save(key, value) },
-            onSessionUpdate: { _, session, awaiting, prompt in
-                // The VM reports the session NAME; the notifier keys on
-                // IDENTITY. On a remote session those differ, and passing the
-                // bare name would let an agent waiting in `bento` on a build
-                // box overwrite the notification for the local `bento`.
-                let key = session.isEmpty
-                    ? storedKey
-                    : TmuxSessionID(server: server, name: session).key
-                MacAwaitingNotifier.shared.update(
-                    sessionKey: key, awaiting: awaiting, prompt: prompt)
-            }
-        )
+        let env = Self.environment(onSessionUpdate: { _, session, awaiting, prompt in
+            // The VM reports the session NAME; the notifier keys on
+            // IDENTITY. On a remote session those differ, and passing the
+            // bare name would let an agent waiting in `bento` on a build
+            // box overwrite the notification for the local `bento`.
+            let key = session.isEmpty
+                ? storedKey
+                : TmuxSessionID(server: server, name: session).key
+            MacAwaitingNotifier.shared.update(
+                sessionKey: key, awaiting: awaiting, prompt: prompt)
+        })
         let transport: LocalPtyTransport
         var adopted: (alias: String, path: String?)?
-        if let sshHost = server.sshHost, choice != .noTmux {
+        if let sshHost = server.sshHost {
             // The tmux invocation goes in as ssh's ARGUMENT rather than being
             // typed at a shell afterwards.
             //
@@ -103,16 +98,8 @@ final class SessionTab {
                 command: ["ssh", "-t"] + socket.options + [sshHost, launch],
                 isLocalLink: false,
                 startsInTmuxControlMode: true)
-        } else if let command, command.first == "ssh", command.count >= 2 {
-            // Quick-connect (`ssh <alias>`, no tmux) gets the same treatment —
-            // it is still a machine whose ports a link can point at.
-            let alias = command[1]
-            let socket = SSHControlSockets.adopt(alias: alias)
-            adopted = (alias, socket.controlPath)
-            transport = LocalPtyTransport(
-                command: ["ssh"] + socket.options + Array(command.dropFirst()))
         } else {
-            transport = LocalPtyTransport(command: command)
+            transport = LocalPtyTransport(command: nil)
         }
         let vm = TerminalViewModel(
             host: Host(name: server.sshHost ?? "Local"),
@@ -120,60 +107,58 @@ final class SessionTab {
             environment: env)
         self.viewModel = vm
         self.controlSocket = adopted
+        let tiled = GhosttyTiledPaneHost(viewModel: vm, theme: ThemeStore.shared.makeTerminalTheme())
         // Computed from the local `adopted` rather than from `self.linkHost`:
-        // the surfaces below are stored properties that are not set yet, so
-        // `self` is still off limits here.
-        let tabLinkHost: LinkHost = adopted
+        // `self` is not fully initialised yet.
+        tiled.linkHost = adopted
             .map { LinkHost(remoteID: $0.alias, label: $0.alias) }
             ?? .local(label: "This Mac")
-        if choice == .noTmux {
-            // No tmux → a single raw surface (no tiling host); the VM streams
-            // bytes straight to/from it.
-            let surface = GhosttyTerminalSurface(theme: theme)
-            surface.onInput = { [weak vm] data in vm?.sendData(data) }
-            surface.onSizeChanged = { [weak vm] size in
-                vm?.resizeTerminal(cols: size.columns, rows: size.rows)
-            }
-            // Path preview: a plain tab is a local shell; cwd comes from the
-            // shell's OSC 7 report (ghostty shell integration). A quick-connect
-            // `ssh <host>` tab is remote for its whole life (it dies when ssh
-            // exits) — refuse local browsing/preview honestly.
-            let block = PathPreviewContext.localSourceBlock(sessionHost: nil,
-                                                            foregroundCommand: command?.first)
-            surface.pathPreviewContext = PathPreviewContext(
-                source: LocalFileSource(),
-                cwd: { [weak surface] in surface?.reportedPwd },
-                hostLabel: "This Mac",
-                isLocal: true,
-                remoteBlock: block.map { reason in { @Sendable @MainActor in reason } })
-            surface.onOpenPreview = { path, line, context in
-                BentoTerminalWindow.openPreview(path: path, line: line, context: context)
-            }
-            vm.onRawDataReceived = { [weak surface] data in
-                Task { @MainActor [weak surface] in surface?.feed(data) }
-            }
-            self.plainSurface = surface
-            self.paneHost = nil
-            surface.linkOriginProvider = { LinkOrigin(paneID: nil, host: tabLinkHost) }
-        } else {
-            let tiled = GhosttyTiledPaneHost(viewModel: vm, theme: theme)
-            tiled.linkHost = tabLinkHost
-            self.paneHost = tiled
-            self.plainSurface = nil
-        }
+        self.paneHost = tiled
+        self.plainHost = nil
+    }
+
+    /// A plain tab: the login shell, or `command` in its place (a quick-connect
+    /// `["ssh", host]`). `key` is its unique window key.
+    init(plainTitle title: String, key: String, command: [String]? = nil) {
+        self.choice = nil
+        self.windowTitle = title
+        self.id = TmuxSessionID(key: key) ?? .local(key)
+        let vm = TerminalViewModel(
+            host: Host(name: command.flatMap { $0.count >= 2 ? $0[1] : nil } ?? "Local"),
+            transport: LocalPtyTransport(command: command),
+            environment: Self.environment(onSessionUpdate: { _, _, _, _ in }))
+        self.viewModel = vm
+        self.controlSocket = nil
+        self.plainHost = PlainTerminalHost(viewModel: vm, theme: ThemeStore.shared.makeTerminalTheme())
+        self.paneHost = nil
+    }
+
+    private static func environment(
+        onSessionUpdate: @escaping (UUID, String, Int, String) -> Void
+    ) -> TerminalEnvironment {
+        TerminalEnvironment(
+            idealTerminalSize: { (120, 30) },
+            // What `ssh` asks for, when the user asked us to remember it.
+            loadKeychainPassword: { key in MacKeychain.load(key) },
+            saveKeychainPassword: { key, value in MacKeychain.save(key, value) },
+            onSessionUpdate: onSessionUpdate)
     }
 
     func connect() {
         Task { [weak self] in
             guard let self else { return }
+            guard let choice = self.choice else {
+                await self.viewModel.connectPlainShell()
+                return
+            }
             await self.viewModel.connect()
-            await self.viewModel.applyTmuxChoice(self.choice)
+            await self.viewModel.applyTmuxChoice(choice)
         }
     }
 
     func teardown() {
         paneHost?.teardown()
-        plainSurface?.teardown()
+        plainHost?.teardown()
         viewModel.disconnect()
         MacAwaitingNotifier.shared.clear(sessionKey: sessionKey)
         if let controlSocket {
@@ -194,9 +179,6 @@ final class SessionTab {
         switch choice {
         case .createOrAttach(let name): return TmuxSessionID(server: server, name: name)
         case .shareWithDesktop(let target): return TmuxSessionID(server: server, name: target)
-        // A plain tab has no session behind it; it is deduped by title instead
-        // (see `openPlain`), and this is only its starting point.
-        case .noTmux: return .local("local")
         }
     }
 
@@ -210,7 +192,7 @@ final class SessionTab {
         case .shareWithDesktop(let target):
             return TmuxControlMode.remoteLaunchCommandLine(
                 sessionName: "\(target)-mobile", groupWith: target)
-        case .createOrAttach, .noTmux:
+        case .createOrAttach:
             return TmuxControlMode.remoteLaunchCommandLine(sessionName: name)
         }
     }

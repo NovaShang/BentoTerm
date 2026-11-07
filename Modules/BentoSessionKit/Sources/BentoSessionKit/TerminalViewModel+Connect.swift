@@ -28,6 +28,36 @@ extension TerminalViewModel {
             return
         }
 
+        await settleShell(startedAt: startedSize)
+
+        // Move to choosing-session phase and load the session list.
+        phase = .choosingSession
+        await refreshTmuxSessions()
+    }
+
+    /// Open a plain shell: no tmux, now or later.
+    ///
+    /// Plain is decided HERE, once, before anything tmux-shaped happens — no
+    /// `tmux ls` probe, no start choice, no reattach later. Everything above
+    /// the view model routes on `kind` at the point where the window or screen
+    /// is built, so nothing downstream has to ask again.
+    public func connectPlainShell() async {
+        userInitiatedDisconnect = false
+        rawHistory.removeAll(keepingCapacity: true)
+        kind = .plain
+        guard let startedSize = await bringUpTransport() else { return }
+        await settleShell(startedAt: startedSize)
+        // Output is dropped until `.shellReady` (see `routeIncomingData`), so
+        // the login banner and anything typed above never reach the screen.
+        // `clear` gives the surface a clean first frame and a fresh prompt.
+        phase = .shellReady
+        transport.write("clear\n")
+    }
+
+    /// The shell-side steps every non-control-mode connect takes before it is
+    /// handed anything to run: let the prompt settle, put the PTY at the
+    /// rendered grid, and unlock the remote keychain when asked to.
+    private func settleShell(startedAt startedSize: (cols: Int, rows: Int)) async {
         // Wait briefly for the shell prompt to settle.
         try? await Task.sleep(for: .milliseconds(500))
 
@@ -42,15 +72,11 @@ extension TerminalViewModel {
             transport.resize(cols: s.cols, rows: s.rows)
         }
 
-        // Optional: unlock keychain BEFORE listing sessions, so the next
-        // command sees a stable shell.
+        // Optional: unlock keychain BEFORE anything else is typed, so the
+        // next command sees a stable shell.
         if host.unlockMacKeychain {
             await unlockMacKeychain()
         }
-
-        // Move to choosing-session phase and load the session list.
-        phase = .choosingSession
-        await refreshTmuxSessions()
     }
 
     /// Bring the transport up and start the PTY at the rendered size. Shared
@@ -60,6 +86,7 @@ extension TerminalViewModel {
     func bringUpTransport() async -> (cols: Int, rows: Int)? {
         errorMessage = nil
         showError = false
+        tmuxIsMissing = false
         phase = .sshConnecting
         dlog("Connecting to \(self.host.hostname):\(self.host.port)")
         await transport.connect(host: host)

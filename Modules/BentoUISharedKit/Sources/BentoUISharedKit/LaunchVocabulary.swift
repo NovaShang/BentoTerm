@@ -274,3 +274,17 @@ public enum LaunchAction: String, CaseIterable, Identifiable, Sendable {
         }
     }
 }
+
+// MARK: - A host with no tmux
+
+/// What both platforms say when the host has no tmux at all: what's wrong,
+/// how to install it, and the way in that doesn't need it. The install
+/// commands are offered for copying, not run — which package manager the host
+/// has is the user's to know.
+public enum MissingTmuxCopy {
+    public static let title = "This host doesn’t have tmux"
+    public static let installPrompt = "Install it, then try again:"
+    /// macOS (Homebrew) first, then Debian/Ubuntu.
+    public static let installCommands = ["brew install tmux", "sudo apt install tmux"]
+    public static let connectPlain = "Connect without tmux"
+}

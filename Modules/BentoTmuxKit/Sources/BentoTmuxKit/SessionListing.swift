@@ -122,6 +122,15 @@ public enum TmuxSessionListing {
         return .failure(.unreachable(firstLine.isEmpty ? "Couldn’t reach this host" : firstLine))
     }
 
+    /// Whether what a failed tmux launch printed says the binary isn't there
+    /// (`zsh: command not found: tmux`, `sh: tmux: not found`, …). Same
+    /// reading as a listing, plus the word itself: a launch transcript can
+    /// carry other "not found"s that have nothing to do with tmux.
+    public static func saysTmuxIsMissing(_ output: String) -> Bool {
+        guard output.lowercased().contains("tmux") else { return false }
+        return result(status: nil, stdout: "", stderr: output) == .failure(.noTmux)
+    }
+
     // MARK: - Over a shell
 
     /// The listing typed into a shell before tmux is attached, bracketed by

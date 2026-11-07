@@ -365,9 +365,19 @@ final class TmuxLister: ObservableObject {
     @Published private(set) var sessions: [String] = []
     @Published private(set) var isLoading = false
     @Published private(set) var error: String?
+    /// The host answered and has no tmux at all — not an error to dismiss, a
+    /// state the sheet is built around.
+    @Published private(set) var tmuxMissing = false
 
     /// Dismissing the error alert clears the error so it doesn't re-present.
     func clearError() { error = nil }
+
+    /// A tmux start found no tmux after all (the listing raced an uninstall,
+    /// or never got that far): same state as a listing that said so.
+    func noteTmuxMissing() {
+        sessions = []
+        tmuxMissing = true
+    }
 
     private let host: Host
     private let sshService = SSHService()
@@ -393,6 +403,7 @@ final class TmuxLister: ObservableObject {
     func refresh() async {
         isLoading = true
         error = nil
+        tmuxMissing = false
         defer {
             isLoading = false
             sshService.disconnect()
@@ -450,9 +461,10 @@ final class TmuxLister: ObservableObject {
             sessions = found.map(\.name)
         case .failure(.noTmux):
             // Not an empty host: nothing listed here can ever be attached, and
-            // "New Session" would fail the same way. Say what to fix.
+            // "New Session" would fail the same way. The sheet says so and
+            // offers the way in that works (`HostSessionsView.missingTmuxSection`).
             sessions = []
-            error = TmuxSessionListing.Failure.noTmux.message
+            tmuxMissing = true
         case .failure:
             sessions = []
         }
@@ -494,9 +506,9 @@ final class RecentLaunchStore: ObservableObject {
 
     init() { load() }
 
-    /// Raw shells (empty name) are skipped here: `new-session -A` on an
-    /// empty name leaves nothing on the server to come back to, so a plain
-    /// shell earns no Recent row.
+    /// Only tmux sessions are recorded (a plain shell leaves nothing on the
+    /// server to come back to, and its start path never calls this); a blank
+    /// name is ignored rather than stored as an unopenable row.
     func record(host: Host, sessionName: String) {
         let trimmed = sessionName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }

@@ -14,6 +14,10 @@ import AppKit
 /// Layout (left → right):
 ///   [▢ <session> ⌄] [Parallel│Focus]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋ ▤]
 ///
+/// A plain (no-tmux) terminal gets the minimal version, decided at
+/// construction (`isPlain`): its name button (Close + the app's rows) and ＋.
+/// No mode switch, no window strip, no file panel, no size banner.
+///
 /// The named left button carries the session (its switcher today, its actions
 /// once sessions become native window tabs); the centre strip is the current
 /// session's tmux WINDOWS, labelled `index:name` the way `list-windows` labels
@@ -53,24 +57,23 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     var onSelectMode: ((TmuxSessionMode) -> Void)?
     var onTogglePreview: (() -> Void)?
 
-    /// The active tab is a plain (no-tmux) terminal — its menu is just "Close".
-    var activeTabIsPlain = false
+    /// This toolbar belongs to a plain (no-tmux) terminal: the minimal set of
+    /// items, and its name button's menu is just Close plus the app's rows.
+    let isPlain: Bool
 
     /// Which items belong in the toolbar right now.
     ///
     /// - **Sessions** names the active session and lists the others.
-    /// - **Parallel|Focus** reshapes a tmux session — on a plain terminal there
-    ///   are no panes to arrange.
-    /// - **Preview** shows the focused pane's folder, so it needs a pane. A
-    ///   PLAIN terminal keeps it: it has a real working directory (the shell's
-    ///   OSC 7 report), which is exactly what the dock browses.
+    /// - **Parallel|Focus** reshapes the session, once there is something to
+    ///   arrange.
     /// - New survives every state — creating is what a window with nothing in
     ///   it is FOR.
     ///
     /// The window strip is not here: it is a variable-width list, and its slot
-    /// is already shared with the location by `setCenterShowsTabs`.
+    /// is already shared with the location by `setCenterShowsTabs`. A plain
+    /// toolbar's items are fixed (`toolbarDefaultItemIdentifiers`).
     private func syncToolbarItems() {
-        guard let tb = toolbarRef else { return }
+        guard !isPlain, let tb = toolbarRef else { return }
         setItem(Self.sessionsID, visible: true, insertAt: 0)
         let afterSessions = tb.items.firstIndex { $0.itemIdentifier == Self.sessionsID }
             .map { $0 + 1 } ?? 0
@@ -210,12 +213,13 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     private var locationWidthCap: NSLayoutConstraint?
     var centerShowsTabs = true
 
-    override init() {
+    init(isPlain: Bool) {
+        self.isPlain = isPlain
         super.init()
         // The left button is the CURRENT session's menu (named with the session,
         // like a document-title menu) — the discoverable home for per-session
         // actions. Its text is updated by the manager via `setSessionTitle`.
-        configureMenu(sessionsButton, symbol: "macwindow", text: "Session",
+        configureMenu(sessionsButton, symbol: isPlain ? "terminal" : "macwindow", text: "Session",
                       action: #selector(sessionMenuTapped))
         // Tiled|List: the structure IS the mode, so this reads as a view switch
         // (lossless, instant) — the manager confirms only the mixed→List case.
@@ -268,9 +272,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         setMenuText(sessionsButton, sessionsText)
     }
 
-    /// Reflect the active tab's mode on the Tiled|List switch. nil = the tab
-    /// has no tmux session (plain terminal) — the switch is meaningless there,
-    /// so it goes away entirely.
+    /// Reflect the active tab's mode on the Tiled|List switch. nil = nothing to
+    /// arrange (a single pane), so the switch goes away entirely.
     func setSessionMode(_ mode: TmuxSessionMode?) {
         sessionMode = mode
         wantsModeItem = (mode != nil)
@@ -283,7 +286,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// because `setSessionMode` can run before `makeToolbar`, and the answer has
     /// to survive until there is a toolbar to apply it to.
     private var wantsModeItem = true
-    /// The active tab's mode (nil = plain terminal) — the ＋ menu's first row
+    /// The active tab's mode (nil = no switch shown) — the ＋ menu's first row
     /// says "New Pane" or "New tmux Window" after it.
     private(set) var sessionMode: TmuxSessionMode?
 
@@ -359,7 +362,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         // Pin the session strip to the WINDOW's center, independent of the side
         // items' widths — so the session-name button can size to its text without
         // ever nudging the tabs (the native alternative to hardcoding widths).
-        tb.centeredItemIdentifiers = [Self.centerID]
+        if !isPlain { tb.centeredItemIdentifiers = [Self.centerID] }
         toolbarRef = tb
         // State decided before the toolbar existed still has to land.
         syncToolbarItems()
@@ -433,11 +436,13 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        // Plain: <name> ⌄ | ⸺flex⸺ | ＋
+        if isPlain { return [Self.sessionsID, .flexibleSpace, Self.newID] }
         // ◧ | Sessions ⌄ | Tiled|List | ⸺flex⸺ | [session tabs] | ⸺flex⸺ | ＋ ▤
         // ＋ and ▤ are adjacent items with nothing between them, so the system
         // groups them into one capsule.
-        [Self.sessionsID, Self.modeID, .flexibleSpace, Self.centerID,
-         .flexibleSpace, Self.newID, Self.previewID]
+        return [Self.sessionsID, Self.modeID, .flexibleSpace, Self.centerID,
+                .flexibleSpace, Self.newID, Self.previewID]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // The centre swaps between the window strip and the location, so both
@@ -445,7 +450,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         // The size banner is never in the DEFAULT set — it exists only while the
         // canvas is someone else's — but an item can't be inserted unless it is
         // allowed.
-        toolbarDefaultItemIdentifiers(toolbar) + [Self.locationID, Self.sizeID]
+        if isPlain { return toolbarDefaultItemIdentifiers(toolbar) }
+        return toolbarDefaultItemIdentifiers(toolbar) + [Self.locationID, Self.sizeID]
     }
 
     @objc private func previewTapped() { onTogglePreview?() }

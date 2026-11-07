@@ -63,16 +63,6 @@ struct TerminalWrapperView: View {
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .detailOnly
     /// Reaches the live pane container (see PaneContainerBridge).
     @StateObject var paneBridge = PaneContainerBridge()
-    /// Keyboard top edge in global (screen) coordinates; nil while hidden.
-    /// Tracked ONCE here and shared by both floating keyboard bars (compose +
-    /// quick-keys) so they move with the same animated value.
-    @State private var keyboardTopGlobal: CGFloat?
-
-    /// The quick-keys bar floats whenever the raw keyboard is up and nothing
-    /// else owns the bottom strip (compose bar, find bar).
-    private var showRawKeyboardBar: Bool {
-        keyboardTopGlobal != nil && !voiceController.showPreview && !paneBridge.findBarActive
-    }
 
     var host: Host { viewModel.host }
 
@@ -158,18 +148,9 @@ struct TerminalWrapperView: View {
         viewModel.isTmuxReady && viewModel.sessionMode == .list && !isRegularWidth
     }
 
-    /// A plain shell — no tmux, so nothing phrased in tmux vocabulary belongs
-    /// on screen. Distinct from `!isTmuxReady`, which is also true of a tmux
-    /// session that is merely still connecting.
-    var isPlain: Bool { viewModel.isPlainSession }
-
-    /// The file browser needs a live SSH connection and a working directory —
-    /// not tmux. It was gated on `isTmuxReady` and so vanished on plain
-    /// sessions, which is exactly where a phone has no other way to reach a
-    /// remote file.
-    var showsFileBrowser: Bool {
-        viewModel.isTmuxReady || viewModel.phase == .shellReady
-    }
+    /// The file browser roots at a tmux pane's working directory. (A plain
+    /// shell never reaches this screen — it gets `PlainShellView`.)
+    var showsFileBrowser: Bool { viewModel.isTmuxReady }
 
     var body: some View {
         terminalChrome
@@ -248,48 +229,10 @@ struct TerminalWrapperView: View {
             .onChange(of: verticalSizeClass) { _, _ in syncFullscreenToOrientation() }
             .onChange(of: horizontalSizeClass) { _, _ in restoreFullscreenPreference() }
             .overlay(alignment: .top) { reconnectingBanner }
-            .overlay { voiceOverlay }
-            // The managed input surface: an inline bar riding the keyboard's top
-            // edge (NOT a modal — the terminal stays visible and pans clear, so
-            // you compose while watching output). Both keyboard bars float
-            // through FloatingKeyboardBar, sharing the keyboard top tracked
-            // above — switching modes is a pure overlay swap, the keyboard
-            // never collapses. The hit target is just the bar, the rest of the
-            // overlay passes touches through to the panes.
-            .overlay(alignment: .bottom) {
-                if showRawKeyboardBar,
-                   let row = paneBridge.container?.focusedOrActiveVC?.accessoryView.makeRow() {
-                    FloatingKeyboardBar(keyboardTopGlobal: keyboardTopGlobal,
-                                        onHeightChanged: { _ in }) {
-                        row
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                if voiceController.showPreview {
-                    ComposeBar(controller: voiceController, keyboardTopGlobal: keyboardTopGlobal)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .animation(.easeInOut(duration: 0.2), value: voiceController.showPreview)
-            .animation(.easeInOut(duration: 0.2), value: showRawKeyboardBar)
-            .onReceive(NotificationCenter.default.publisher(
-                for: UIResponder.keyboardWillChangeFrameNotification)) { note in
-                guard let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
-                else { return }
-                let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey]
-                    as? Double ?? 0.25
-                // Off-screen frame (hide / undock) → treat as no keyboard.
-                let top: CGFloat? = end.minY >= UIScreen.main.bounds.maxY ? nil : end.minY
-                withAnimation(.easeOut(duration: max(duration, 0.1))) {
-                    keyboardTopGlobal = top
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(
-                for: UIResponder.keyboardWillHideNotification)) { _ in
-                withAnimation(.easeOut(duration: 0.25)) {
-                    keyboardTopGlobal = nil
-                }
-            }
+            // Voice compass, quick-keys bar, compose bar — shared with the
+            // plain shell screen.
+            .modifier(TerminalInputOverlays(voiceController: voiceController,
+                                            paneBridge: paneBridge))
             .overlay(alignment: .top) { tipToastView }
     }
 
@@ -580,45 +523,6 @@ struct TerminalWrapperView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(mismatch.summary) \(mismatch.actionTitle).")
-    }
-
-    @ViewBuilder
-    private var voiceOverlay: some View {
-        if voiceController.showOverlay {
-            GeometryReader { geo in
-                let anchor = compassAnchor(in: geo)
-                VoiceCompassView(controller: voiceController,
-                                 placement: .resolve(anchor: anchor,
-                                                     in: geo.frame(in: .local),
-                                                     insets: compassInsets(in: geo)))
-                .position(anchor)
-            }
-            .ignoresSafeArea()
-            // No transition here on purpose: the compass choreographs its own
-            // entrance and exit internally (macOS can't use a transition at all
-            // — it keeps one hosting view around — so the animation had to live
-            // in the shared view). `showOverlay` only drops once the outro has
-            // finished, by which point there is nothing left to fade.
-        }
-    }
-
-    /// Edges the compass cannot use: the safe areas, plus the floating quick-keys
-    /// toolbar at the bottom (the down target has to clear it).
-    private func compassInsets(in geo: GeometryProxy) -> EdgeInsets {
-        let safe = geo.safeAreaInsets
-        return EdgeInsets(top: safe.top,
-                          leading: safe.leading,
-                          bottom: safe.bottom + FloatingQuickKeysToolbar.reservedBand,
-                          trailing: safe.trailing)
-    }
-
-    /// Keep the compass on screen when the press starts near an edge — only
-    /// as far as the ring needs, inside the safe areas and above the quick-keys
-    /// band (`VoiceCompassView.Placement.clampedAnchor`).
-    private func compassAnchor(in geo: GeometryProxy) -> CGPoint {
-        VoiceCompassView.Placement.clampedAnchor(voiceController.fingerScreenPosition,
-                                                 in: geo.frame(in: .local),
-                                                 insets: compassInsets(in: geo))
     }
 
     // MARK: - Notice toast

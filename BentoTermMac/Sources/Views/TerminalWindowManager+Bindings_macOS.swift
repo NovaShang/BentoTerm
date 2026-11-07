@@ -2,6 +2,7 @@ import BentoTmuxKit
 import BentoFoundationKit
 import BentoAgentKit
 import BentoSessionKit
+import BentoUISharedKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Combine
@@ -23,8 +24,8 @@ extension TerminalWindowManager {
             }
             .store(in: &activeCancellables)
         // Mode drives the toolbar's Tiled|List switch and the sidebar (List
-        // only). Plain tabs have no mode — the switch hides — and neither does
-        // a single-pane session (`SessionChrome`), so the switch also follows
+        // only). A single-pane session has no switch (`SessionChrome`), so it
+        // also follows
         // the session's pane and window counts. The values are taken from the
         // publishers rather than re-read: `@Published` emits BEFORE the
         // property is assigned.
@@ -38,7 +39,7 @@ extension TerminalWindowManager {
             .receive(on: RunLoop.main)
             .sink { [weak self, weak tab] mode in
                 guard let self, let tab, tab === self.activeTab else { return }
-                self.toolbar.setSessionMode(tab.isPlain ? nil : mode)
+                self.toolbar.setSessionMode(mode)
                 self.updateSidebar()
                 BentoTerminalWindow.refreshNewItemTitle()
             }
@@ -149,23 +150,7 @@ extension TerminalWindowManager {
                     generation: generation, names: tab.viewModel.availableTmuxSessions)
             }
             .store(in: &bag)
-        // A session that could not be brought up at all.
-        //
-        // `showError` has existed on the view model for as long as iOS has had
-        // an alert bound to it; on macOS nothing was ever bound, so the flag
-        // was raised into a void. The visible result was a window that simply
-        // sat there — most reliably when the ssh host had no tmux, where the
-        // remote's own `tmux: command not found` was already in hand and still
-        // nobody was told. Reported as "the app crashed", because a window that
-        // does nothing forever is indistinguishable from one.
-        tab.viewModel.$showError
-            .removeDuplicates()
-            .receive(on: RunLoop.main)
-            .sink { [weak self, weak tab] show in
-                guard show, let self, let tab else { return }
-                self.presentSessionFailure(tab: tab)
-            }
-            .store(in: &bag)
+        subscribeFailure(tab, into: &bag)
         // `ssh` asking for something. Until this existed, the question went into
         // the control-mode stream where nothing rendered it and nothing could
         // answer it, so a password-authenticated host simply timed out after
@@ -179,6 +164,27 @@ extension TerminalWindowManager {
             }
             .store(in: &bag)
         tabCancellables[ObjectIdentifier(tab)] = bag
+    }
+
+    /// A session that could not be brought up at all — the one subscription a
+    /// plain window has too.
+    ///
+    /// `showError` has existed on the view model for as long as iOS has had
+    /// an alert bound to it; on macOS nothing was ever bound, so the flag
+    /// was raised into a void. The visible result was a window that simply
+    /// sat there — most reliably when the ssh host had no tmux, where the
+    /// remote's own `tmux: command not found` was already in hand and still
+    /// nobody was told. Reported as "the app crashed", because a window that
+    /// does nothing forever is indistinguishable from one.
+    func subscribeFailure(_ tab: SessionTab, into bag: inout Set<AnyCancellable>) {
+        tab.viewModel.$showError
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self, weak tab] show in
+                guard show, let self, let tab else { return }
+                self.presentSessionFailure(tab: tab)
+            }
+            .store(in: &bag)
     }
 
     /// Ask for the password / passphrase / code that `ssh` is waiting on, and
@@ -233,6 +239,10 @@ extension TerminalWindowManager {
     private func presentSessionFailure(tab: SessionTab) {
         guard let window, !failureAlertShown else { return }
         failureAlertShown = true
+        if tab.viewModel.tmuxIsMissing {
+            presentMissingTmux(tab: tab, in: window)
+            return
+        }
         let alert = NSAlert()
         alert.messageText = "Couldn’t open “\(tab.id.displayName)”"
         // The view model puts the remote's own stderr in here when it has it
@@ -244,6 +254,37 @@ extension TerminalWindowManager {
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window) { [weak self] _ in
             self?.window?.close()
+        }
+    }
+
+    /// The host has no tmux: say so, give the install commands as selectable
+    /// text (one per line — which one applies is the user's to know, so
+    /// nothing copies both at once), and offer the way in that doesn't need
+    /// it: a plain shell on the same host.
+    private func presentMissingTmux(tab: SessionTab, in window: NSWindow) {
+        let alert = NSAlert()
+        alert.messageText = MissingTmuxCopy.title
+        alert.informativeText = MissingTmuxCopy.installPrompt
+        alert.alertStyle = .warning
+        let commands = NSTextField(wrappingLabelWithString:
+            MissingTmuxCopy.installCommands.joined(separator: "\n"))
+        commands.isSelectable = true
+        commands.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        commands.frame = NSRect(x: 0, y: 0, width: 260, height: 40)
+        alert.accessoryView = commands
+        alert.addButton(withTitle: MissingTmuxCopy.connectPlain)
+        alert.addButton(withTitle: "Cancel")
+        let sshHost = tab.id.server.sshHost
+        alert.beginSheetModal(for: window) { [weak self] response in
+            // Close this window first: the plain shell opens as a window of
+            // its own, and a dead session window has nothing left to show.
+            self?.window?.close()
+            guard response == .alertFirstButtonReturn else { return }
+            if let sshHost {
+                BentoTerminalWindow.newSSHWindow(host: sshHost)
+            } else {
+                BentoTerminalWindow.newWindowNoTmux()
+            }
         }
     }
 
@@ -280,7 +321,7 @@ extension TerminalWindowManager {
         // session in use. One in a background window changes nothing about
         // what you were looking at.
         if window.isKeyWindow || window.isMainWindow {
-            BentoTerminalWindow.recordSessionInUse(tab)
+            BentoTerminalWindow.recordSessionInUse(tab.id)
         }
         // The pane host keys the sidebar by session; a switched session gets a
         // fresh one bound to the same view model.
