@@ -30,7 +30,7 @@ extension TerminalToolbarController {
         g.label = "Windows"
     }
 
-    /// Refresh the session segments (titles + agent dots) and the selection. The
+    /// Refresh the session segments (titles + status dots) and the selection. The
     /// segmented control is rebuilt (via the `titles:` convenience initializer —
     /// the same path Finder uses, which renders the proper pill-selected segments)
     /// whenever a title OR a dot changes; a selection-only change just moves the

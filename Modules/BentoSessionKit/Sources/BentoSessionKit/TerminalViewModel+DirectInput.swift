@@ -2,7 +2,6 @@ import Foundation
 import SwiftUI
 import os
 import BentoTmuxKit
-import BentoAgentKit
 import BentoFoundationKit
 
 extension TerminalViewModel {

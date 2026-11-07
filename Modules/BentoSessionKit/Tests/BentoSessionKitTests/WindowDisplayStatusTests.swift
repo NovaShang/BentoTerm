@@ -1,5 +1,4 @@
 import XCTest
-import BentoAgentKit
 @testable import BentoSessionKit
 
 /// Every window surface (sidebar row, iPhone tab, Mac strip) renders a window's

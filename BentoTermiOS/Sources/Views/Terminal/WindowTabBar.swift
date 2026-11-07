@@ -2,7 +2,6 @@ import SwiftUI
 import BentoTmuxKit
 import Combine
 import BentoVoiceKit
-import BentoAgentKit
 import BentoSessionKit
 import BentoFilePreviewKit
 import BentoFoundationKit
@@ -14,7 +13,7 @@ import BentoUISharedKit
 /// Bottom tab strip for List mode on phones: one tab per tmux window,
 /// browser-tab style, horizontally scrollable, with a trailing "+" that offers
 /// the two creation seeds. Each tab shows the window's LIVE display name
-/// (derived from what's running — never renamed), its aggregate agent-state
+/// (derived from what's running — never renamed), its aggregate pane-status
 /// dot (`windowStatus`), and a pane-count badge when the window holds several
 /// panes (external structures). Tapping a tab is select-window ONLY — zero
 /// zoom, zero resize — the terminal above simply starts mirroring that window.

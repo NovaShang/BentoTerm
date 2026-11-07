@@ -2,7 +2,6 @@ import Foundation
 import SwiftUI
 import os
 import BentoTmuxKit
-import BentoAgentKit
 import BentoFoundationKit
 
 let log = Logger(subsystem: "com.novashang.bento", category: "TerminalVM")
@@ -74,7 +73,7 @@ public final class TerminalViewModel: ObservableObject {
     @Published public var windows: [TmuxWindow] = []
     /// Every pane in the session across ALL windows (session-wide `list-panes
     /// -s`), refreshed together with `paneViewModels`. Powers the hierarchical
-    /// structure model: window list items, per-window agent status, and the
+    /// structure model: window list items, per-window pane status, and the
     /// spread/merge structure ops. `paneViewModels` stays scoped to the current
     /// window (only its panes have live surfaces).
     @Published public var sessionPanes: [Pane] = []
@@ -216,22 +215,22 @@ public final class TerminalViewModel: ObservableObject {
     /// `stateVersion`.
     var paneStates: [TmuxPaneID: PaneState] = [:]
 
-    /// Session-wide "done, unseen" flag per pane (an agent that finished its
-    /// turn while its window was unfocused → the blue "done" check). Mirrors
-    /// `PaneViewModel.agentFinishedUnseen` for the current window's live panes
+    /// Session-wide "done, unseen" flag per pane (a pane that reported done
+    /// while its window was unfocused → the blue "done" check). Mirrors
+    /// `PaneViewModel.doneUnseen` for the current window's live panes
     /// and extends the same rule to background-window panes, so the List sidebar
     /// can flag a window you're not looking at. Filled by `updatePaneStates`.
     var paneDoneUnseen: [TmuxPaneID: Bool] = [:]
 
-    /// Live agent activity across the current window's panes — drives the macOS
-    /// toolbar's center summary ("N working · M waiting"). Counts only recognized
-    /// coding-agent panes (claude/codex/…), not plain shells. (tmux -CC streams
+    /// Live pane status across the current window's panes — drives the macOS
+    /// session tab's dot. Counts only panes that report a status
+    /// (`@bento_state`), not plain shells. (tmux -CC streams
     /// the active window only, so background windows aren't included yet.)
-    @Published public var agentsWorking: Int = 0
-    @Published public var agentsWaiting: Int = 0
-    /// Agent panes that finished their turn while unfocused (the "done, unseen"
+    @Published public var panesWorking: Int = 0
+    @Published public var panesAwaiting: Int = 0
+    /// Panes that reported done while unfocused (the "done, unseen"
     /// blue state) — drives the session tab's blue status dot.
-    @Published public var agentsDoneUnseen: Int = 0
+    @Published public var panesDoneUnseen: Int = 0
 
     // Qualified: the deprecated Foundation `NSHost` leaks into the bare-name
     // lookup on macOS now that `Host` lives in BentoFoundationKit (it was

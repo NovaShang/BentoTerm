@@ -7,7 +7,6 @@ import BentoVoiceKit   // VoiceCompassView.Metrics / .Placement for the overlay'
 import AppKit
 import Combine
 import SwiftUI
-import BentoAgentKit
 import BentoSessionKit
 import BentoUISharedKit
 
