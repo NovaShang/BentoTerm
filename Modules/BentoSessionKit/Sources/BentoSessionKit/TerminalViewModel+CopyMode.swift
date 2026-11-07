@@ -57,8 +57,8 @@ extension TerminalViewModel {
         for vm in paneViewModels {
             vm.isActive = (vm.paneID == paneID)
             // Focusing a pane = seeing it → clear the "done, unseen" badge.
-            if vm.paneID == paneID, vm.agentFinishedUnseen {
-                vm.agentFinishedUnseen = false
+            if vm.paneID == paneID, vm.doneUnseen {
+                vm.doneUnseen = false
             }
         }
     }

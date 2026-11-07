@@ -1,7 +1,6 @@
 import UIKit
 import SwiftUI
 import Combine
-import BentoAgentKit
 import BentoSessionKit
 import BentoTmuxKit
 import BentoFilePreviewKit
@@ -476,7 +475,7 @@ final class TerminalContainerVC: UIViewController {
 
     func updatePaneState(_ state: PaneState, doneUnseen: Bool, active: Bool) {
         titleBar.paneState = state
-        titleBar.agentFinishedUnseen = doneUnseen
+        titleBar.doneUnseen = doneUnseen
         titleBar.isActivePane = active
         applyPaneBorder(active: active)
 

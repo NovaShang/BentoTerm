@@ -1,7 +1,6 @@
 import UIKit
 import SwiftUI
 import Combine
-import BentoAgentKit
 import BentoSessionKit
 import BentoTmuxKit
 import BentoFilePreviewKit

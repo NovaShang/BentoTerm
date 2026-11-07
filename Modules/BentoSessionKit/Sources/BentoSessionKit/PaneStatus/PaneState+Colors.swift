@@ -7,13 +7,13 @@ import UIKit
 #endif
 
 // View-facing color/tint language for `PaneState` (the enum lives in this
-// module with the detection domain that produces it). Platform-specific
+// module with the pane-status pipeline that produces it). Platform-specific
 // NSColor/UIColor members are guarded per platform.
 
 public extension PaneState {
     /// The canonical state palette as 0xRRGGBB — ONE source of truth for every
     /// surface (Tiled pane chrome, List window rows, iOS dots). `doneUnseenHex`
-    /// (green) isn't a PaneState case — an agent that finished its turn while
+    /// (green) isn't a PaneState case — a pane that reported done while
     /// unfocused — but it lives here with the rest so nothing re-hardcodes it.
     static var workingHex: UInt32    { 0x0A85FF }   // blue  — in progress / active
     static var idleHex: UInt32       { 0x8E8E93 }   // gray

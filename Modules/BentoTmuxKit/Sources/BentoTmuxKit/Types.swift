@@ -161,12 +161,10 @@ public struct Pane: Identifiable, Sendable, Hashable {
     /// `send-keys` are consumed by tmux's mode handler instead of reaching the
     /// program, and the pane will not scroll on its own.
     public var inMode: Bool
-    /// Which agent says it runs here (`@bento_agent` pane option, set by the
-    /// agent's own hook). nil = unset.
-    public var agent: String?
-    /// What that agent says it is doing (`@bento_state`: working / awaiting /
-    /// done). nil = unset. Only ever written by hooks — Bento never guesses.
-    public var agentState: String?
+    /// The pane's status as the program in it reports it (`@bento_state` pane
+    /// option: working / awaiting / done). nil = unset. Only ever written from
+    /// inside the pane (`tmux set -p @bento_state …`) — Bento never guesses.
+    public var statusOption: String?
 
     public init(
         id: TmuxPaneID,
@@ -184,8 +182,7 @@ public struct Pane: Identifiable, Sendable, Hashable {
         windowID: TmuxWindowID? = nil,
         inActiveWindow: Bool = true,
         inMode: Bool = false,
-        agent: String? = nil,
-        agentState: String? = nil
+        statusOption: String? = nil
     ) {
         self.id = id
         self.width = width
@@ -202,7 +199,6 @@ public struct Pane: Identifiable, Sendable, Hashable {
         self.windowID = windowID
         self.inActiveWindow = inActiveWindow
         self.inMode = inMode
-        self.agent = agent
-        self.agentState = agentState
+        self.statusOption = statusOption
     }
 }

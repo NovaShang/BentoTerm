@@ -16,7 +16,7 @@ SOURCES=(BentoTermiOS/Sources BentoTermMac/Sources bento-terminal-core/Sources)
 # term<TAB>why
 BANNED=$(cat <<'EOF'
 [Ww]orkspace	tmux calls it a session; say "session"
-AI worker	they are CLI agents; say "agent"
+AI worker	Bento has no such concept; name what the user sees (pane, program, pane status)
 remote control	every device is a tmux client; say "client"
 Split Vertical	ambiguous (tmux -v stacks, iTerm2 "vertical" is side-by-side); say "Split Right (-h)" / "Split Down (-v)"
 Split Horizontal	ambiguous (tmux -h is side-by-side, iTerm2 "horizontal" stacks); say "Split Right (-h)" / "Split Down (-v)"

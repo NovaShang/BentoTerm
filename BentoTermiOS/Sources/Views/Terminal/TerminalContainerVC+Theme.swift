@@ -1,7 +1,6 @@
 import UIKit
 import SwiftUI
 import Combine
-import BentoAgentKit
 import BentoSessionKit
 import BentoTmuxKit
 import BentoFilePreviewKit
@@ -71,7 +70,7 @@ extension TerminalContainerVC {
     func applyBackgrounds(animated: Bool) {
         let bgColor = resolvedTerminalBackground()
         let status = PaneChrome.Status(state: titleBar.paneState,
-                                       agentFinishedUnseen: titleBar.agentFinishedUnseen)
+                                       doneUnseen: titleBar.doneUnseen)
         // The surround is the terminal bg FUSED with the same wash the surface
         // wears, so the band and an empty washed terminal read as one color.
         let surround = PaneChromeColors.washed(bgColor, status: status)

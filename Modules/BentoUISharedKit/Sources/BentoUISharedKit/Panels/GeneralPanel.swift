@@ -34,7 +34,7 @@ public enum TmuxLearnMore {
     public static let url = URL(string: "https://github.com/tmux/tmux/wiki")!
 }
 
-/// General — which tmux, the default session name, agent hooks, and about.
+/// General — which tmux, the default session name, pane status, and about.
 ///
 /// Facts, not knobs. There is deliberately no "which tmux" picker: it would be
 /// a knob over a decision with one right answer (`TmuxResolver`: a good enough
@@ -98,11 +98,12 @@ public struct GeneralPanel<Extra: View>: View {
             }
 
             Section {
-                // The hooks are config on whichever machine runs the agent, so
-                // the app can't install them; this is where to find them.
-                Link("Hook Setup for Claude Code and Codex", destination: Self.hooksURL)
-            } header: { Text("Agents") } footer: {
-                PanelNote("A pane's color comes from the agent's hooks: a few lines in its own settings that set two tmux pane options and do nothing outside tmux.")
+                // The status is set from inside the pane, on whichever machine
+                // runs the program, so the app can't set it up; this is where
+                // the examples are.
+                Link("Pane Status Setup", destination: Self.paneStatusURL)
+            } header: { Text("Pane Status") } footer: {
+                PanelNote("Any program can color its pane: `tmux set -p @bento_state working`, `awaiting` or `done`. The setup page has ready-made hooks for Claude Code and Codex.")
             }
 
             extra
@@ -138,7 +139,7 @@ public struct GeneralPanel<Extra: View>: View {
         #endif
     }
 
-    private static var hooksURL: URL { URL(string: "https://github.com/NovaShang/BentoTerm#agent-hooks")! }
+    private static var paneStatusURL: URL { URL(string: "https://github.com/NovaShang/BentoTerm#pane-status")! }
 
     private func factsLine(_ facts: TmuxFacts) -> String {
         switch facts.source {

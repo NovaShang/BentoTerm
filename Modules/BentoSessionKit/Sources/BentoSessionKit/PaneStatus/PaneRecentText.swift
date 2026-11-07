@@ -6,7 +6,7 @@ import BentoTmuxKit
 /// Voice reads ~30 lines of the active pane to bias speech recognition toward
 /// the words on screen, and a pane that turns amber hands its last lines to
 /// the Live Activity / notification as the prompt snippet. Nothing here judges
-/// state — that comes from the agent's own hooks (`AgentHookState`).
+/// state — that comes from the pane's `@bento_state` option (`PaneStatusOption`).
 @MainActor
 public final class PaneRecentText {
     private var linesStore: [TmuxPaneID: [String]] = [:]

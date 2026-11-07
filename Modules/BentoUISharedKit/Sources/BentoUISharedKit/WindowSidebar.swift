@@ -1,6 +1,5 @@
 import SwiftUI
 import BentoTmuxKit
-import BentoAgentKit
 import BentoSessionKit
 import BentoFoundationKit
 import BentoFilePreviewKit

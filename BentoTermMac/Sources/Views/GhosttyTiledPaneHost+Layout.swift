@@ -2,7 +2,6 @@ import BentoTmuxKit
 import BentoGhosttyKit
 #if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
-import BentoAgentKit
 import BentoSessionKit
 import BentoUISharedKit
 
@@ -125,7 +124,7 @@ extension GhosttyTiledPaneHost {
         // bar on the single pane would be the same chrome twice, so the
         // terminal owns the full area. Likewise a session that is ONE pane in
         // total (`SessionChrome`): there is nothing to tell apart, so it looks
-        // like a plain terminal; its agent state stays on the pane's wash.
+        // like a plain terminal; its status stays on the pane's wash.
         // Either way the one visible pane drives tmux from its own surface grid
         // (`isSingleOrZoom`), so dropping the row reaches tmux as a resize.
         let showsTitles = viewModel.sessionMode != .list && !viewModel.isSinglePaneSession

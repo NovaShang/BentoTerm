@@ -7,7 +7,7 @@ import BentoTmuxKit
 /// sidebar rows.
 ///
 /// It lives here beside `PaneState` + `PaneState+Colors` because it is the same
-/// kind of knowledge — how the detection domain's state becomes something the
+/// kind of knowledge — how a pane's status becomes something the
 /// user can read. While each view carried its own copy, they drifted: the iOS
 /// strip showed the bare `pane_current_command`, derived once when the surface
 /// bound, so a pane renamed with `select-pane -T` (or one whose foreground
@@ -28,7 +28,7 @@ public enum PaneChrome {
     }
 
     /// What a pane's chrome announces. `PaneState` plus the one display state
-    /// that isn't a pane state: an agent that finished while you were looking
+    /// that isn't a pane state: a pane that reported done while you were looking
     /// elsewhere.
     public enum Status: Equatable, Sendable {
         case working
@@ -39,8 +39,8 @@ public enum PaneChrome {
         /// "Done, unseen" outranks the pane's own state — by the time the badge
         /// is set the program has settled back to idle, and "it finished while
         /// you were away" is the thing worth saying.
-        public init(state: PaneState, agentFinishedUnseen: Bool) {
-            if agentFinishedUnseen {
+        public init(state: PaneState, doneUnseen: Bool) {
+            if doneUnseen {
                 self = .doneUnseen
                 return
             }
@@ -87,7 +87,7 @@ public enum PaneChrome {
         public var wash: (hex: UInt32, alpha: CGFloat)? {
             switch self {
             case .working:       return (glyphHex, PaneState.working.tintAlpha)
-            case .awaitingInput: return (glyphHex, PaneState.awaitingInput(profile: "").tintAlpha)
+            case .awaitingInput: return (glyphHex, PaneState.awaitingInput.tintAlpha)
             case .doneUnseen:    return (glyphHex, 0.10)
             case .idle:          return nil
             }
