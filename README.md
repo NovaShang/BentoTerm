@@ -145,7 +145,7 @@ The commands run whichever `tmux` comes first on the agent's `PATH`, and `$TMUX`
 | `BentoTermiOS/` | iOS / iPadOS app — UIKit/SwiftUI shell |
 | `Modules/BentoTmuxKit/` | tmux control-mode (`-CC`) protocol client |
 | `Modules/BentoGhosttyKit/` | Terminal surfaces over libghostty |
-| `Modules/BentoAgentKit/` | Pane state from agent hooks, agent presets |
+| `Modules/BentoAgentKit/` | Pane state from agent hooks |
 | `Modules/BentoSessionKit/` | Session, window and pane logic |
 | `Modules/BentoVoiceKit/` | Speech engines and the voice controller |
 | `Modules/BentoFilePreviewKit/` | Path resolution and rich file preview |

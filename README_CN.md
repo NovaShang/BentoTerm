@@ -143,7 +143,7 @@ pane 的颜色由 agent 自己报告。在 agent 的设置里加几行 hook，�
 | `BentoTermiOS/` | iOS / iPadOS app——UIKit/SwiftUI 壳 |
 | `Modules/BentoTmuxKit/` | tmux 控制模式（`-CC`）协议客户端 |
 | `Modules/BentoGhosttyKit/` | libghostty 之上的终端表面 |
-| `Modules/BentoAgentKit/` | 来自 agent hook 的 pane 状态、agent 预设 |
+| `Modules/BentoAgentKit/` | 来自 agent hook 的 pane 状态 |
 | `Modules/BentoSessionKit/` | 会话、窗口、pane 逻辑 |
 | `Modules/BentoVoiceKit/` | 语音引擎与语音控制器 |
 | `Modules/BentoFilePreviewKit/` | 路径解析与富文件预览 |

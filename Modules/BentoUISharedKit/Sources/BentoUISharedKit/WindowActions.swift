@@ -286,8 +286,7 @@ public struct PathAndCommandSheet: View {
     var onCreate: (String?, String?) -> Void
 
     @State private var path = ""
-    @State private var agentPreset: AgentPreset = .none
-    @State private var customCommand = ""
+    @State private var command = ""
     @State private var showPicker = false
     /// The tree needs room: browsing pushes the sheet to .large and coming
     /// back drops it to .medium, so the form stays the compact thing it was.
@@ -340,17 +339,10 @@ public struct PathAndCommandSheet: View {
                         .autocorrectionDisabled()
                 }
                 Section("Command") {
-                    Picker("Agent", selection: $agentPreset) {
-                        ForEach(AgentPreset.allCases) { preset in
-                            Text(preset.rawValue).tag(preset)
-                        }
-                    }
-                    if agentPreset == .custom {
-                        TextField("e.g. cursor-agent", text: $customCommand)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .font(.system(.body, design: .monospaced))
-                    }
+                    TextField("Empty = shell", text: $command)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.system(.body, design: .monospaced))
                 }
             }
             .navigationTitle(title)
@@ -365,7 +357,6 @@ public struct PathAndCommandSheet: View {
                         onCreate(path.isEmpty ? nil : path, resolvedCommand)
                         dismiss()
                     }
-                    .disabled(!canCreate)
                 }
             }
         }
@@ -395,24 +386,10 @@ public struct PathAndCommandSheet: View {
             .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// nil = plain shell (no agent); otherwise the chosen agent's launch command
-    /// or the user's custom command.
+    /// nil = plain shell; otherwise what the user typed.
     private var resolvedCommand: String? {
-        switch agentPreset {
-        case .none:
-            return nil
-        case .custom:
-            let trimmed = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        default:
-            return agentPreset.command
-        }
-    }
-
-    /// Custom needs a non-empty command; every other preset is always valid.
-    private var canCreate: Bool {
-        agentPreset != .custom
-            || !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 #endif

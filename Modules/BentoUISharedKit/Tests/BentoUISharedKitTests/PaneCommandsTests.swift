@@ -14,7 +14,6 @@ struct PaneCommandsTests {
             switch $0 {
             case .command(let c): return c.title(on: surface, zoomed: zoomed)
             case .separator: return "—"
-            case .recentAgents: return "[recents]"
             case .layouts: return "[layouts]"
             case .moveToSession: return "[move]"
             case .paste: return "[paste]"
@@ -25,7 +24,7 @@ struct PaneCommandsTests {
     @Test func macPaneMenuInParallel() {
         #expect(titles(PaneMenuLayout.macPaneMenu(parallel), .macPaneMenu) == [
             "Split Right (-h)", "Split Down (-v)", "—",
-            "Split — Duplicate Current", "Split — Path & Command…", "[recents]",
+            "Split — Duplicate Current", "Split — Path & Command…",
             "—", "[layouts]", "—",
             "Zoom", "—", "[move]", "—", "Close Pane",
         ])
@@ -41,10 +40,10 @@ struct PaneCommandsTests {
         let plain = PaneMenuContext(isTmuxPane: false, sessionMode: .tiled)
         #expect(PaneMenuLayout.macNewMenuSessionRows(plain).isEmpty)
         #expect(titles(PaneMenuLayout.macNewMenuSessionRows(parallel), .macNewMenu) == [
-            "New Pane", "[recents]",
+            "New Pane",
         ])
         #expect(titles(PaneMenuLayout.macNewMenuSessionRows(focus), .macNewMenu) == [
-            "New tmux Window", "[recents]",
+            "New tmux Window",
         ])
         #expect(PaneCommand.newPane.symbol(on: .macNewMenu) == "square.split.2x1")
         #expect(PaneCommand.newTmuxWindow.symbol(on: .macNewMenu) == "macwindow")

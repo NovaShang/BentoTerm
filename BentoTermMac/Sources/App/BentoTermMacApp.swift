@@ -79,10 +79,9 @@ struct TerminalCommands: Commands {
             Button("New tmux Window") { BentoPaneAction.dispatch(BentoPaneAction.newTmuxWindow) }
                 .keyboardShortcut("t", modifiers: .command)
             // Same two names the toolbar's `+` and the Dock
-            // menu use (`LaunchAction`). This menu used to say "New Session"
-            // for the blank one — which stopped being unambiguous the moment an
-            // agent session sat beside it — and "New Window (no tmux)" for a
-            // thing that is a terminal, not a window: closing it discards it.
+            // menu use (`LaunchAction`). "New Window (no tmux)" was the old
+            // name for a thing that is a terminal, not a window: closing it
+            // discards it.
             Button(LaunchAction.emptySession.title) { BentoTerminalWindow.newWindow() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             Button(LaunchAction.plainTerminal.title) { BentoTerminalWindow.newWindowNoTmux() }
@@ -124,36 +123,5 @@ struct TerminalCommands: Commands {
             Button("Close Window") { BentoTerminalWindow.closeMainWindow() }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
         }
-    }
-}
-
-/// Windows manages the secondary, single-purpose windows (today only the agent
-/// wizard). They are opened via AppKit rather than as
-/// SwiftUI `Window` scenes because they are transient and app-triggered, not
-/// restorable places the user navigates to — and because the terminal windows
-/// they sit alongside are AppKit-owned too, so one window story is simpler than
-/// two. They deliberately carry no NSWindowController: closing one must not
-/// count as "the app's last window" in a way that changes lifecycle, and
-/// `applicationShouldTerminateAfterLastWindowClosed` is false anyway.
-enum Windows {
-    enum Kind { case wizard }
-
-    @MainActor
-    static func show(_ kind: Kind) {
-        let title: String
-        let content: AnyView
-        switch kind {
-        case .wizard:
-            title = "New agent session"
-            content = AnyView(AgentWizardWindow())
-        }
-        let host = NSHostingController(rootView: content)
-        let window = NSWindow(contentViewController: host)
-        window.title = title
-        window.styleMask = [.titled, .closable]
-        window.isReleasedWhenClosed = false
-        window.center()
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
     }
 }

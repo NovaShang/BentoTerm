@@ -32,8 +32,6 @@ public enum BentoTerminalWindow {
         TmuxSessionNaming.configuredDefault()
     }
 
-    /// App-provided hooks for toolbar actions that live in the app target.
-    public static var onNewAgentSession: (() -> Void)?
     /// The local `tmux ls` poll wants to run as soon as something changed here,
     /// rather than up to 5s later. Wired in the app target.
     public static var onLocalServerChanged: (() -> Void)?
@@ -414,13 +412,6 @@ public enum BentoTerminalWindow {
         var taken = Set(serverSessions)
         for m in managers { taken.formUnion(m.tab.viewModel.availableTmuxSessions) }
         return TmuxSessionNaming.numbered(defaultSessionName, existing: taken)
-    }
-
-    public static func newWindow(agent spec: AgentSpec) {
-        // The launch is recorded where the session is actually built
-        // (`applyTmuxChoice`), so iPad's wizard gets it too.
-        open(choice: .createAgent(spec: spec), server: .local,
-             title: titleFor(.local(spec.sessionName)))
     }
 
     /// Open a plain (no-tmux) tab running `ssh <host>`, where `host` is an

@@ -15,9 +15,6 @@ public enum TmuxStartChoice: Hashable {
     case createOrAttach(name: String)
     /// Create a grouped session that mirrors `target` (shared with desktop).
     case shareWithDesktop(target: String)
-    /// Spin up a detached tmux session matching `spec` (working dir, agent
-    /// command, layout), then attach in control mode.
-    case createAgent(spec: AgentSpec)
 }
 
 /// High-level session phase. Distinct from low-level SSH state.
@@ -241,11 +238,6 @@ public final class TerminalViewModel: ObservableObject {
     // module-local here before and shadowed it).
     public let host: BentoFoundationKit.Host
     let transport: TerminalTransport
-    /// The machine a remembered launch from this session belongs to, as
-    /// `LaunchRecord.host` spells it: nil on this Mac, the host's name (the
-    /// ssh alias, on macOS) over a link. Both the recording and the recents
-    /// menus key on it, so a remote window remembers and offers its own rows.
-    public var launchHost: String? { transport.isLocalLink ? nil : host.displayName }
     /// The live transport, exposed for app-level features that need
     /// transport-specific capabilities (path-preview's file fetch picks its
     /// source off the concrete SSH client, which can open an SFTP channel;
@@ -254,11 +246,6 @@ public final class TerminalViewModel: ObservableObject {
     let tmuxService = TmuxControlMode()
     /// Last lines each pane printed — voice context and the awaiting snippet.
     let recentOutput = PaneRecentText()
-    /// Panes whose agent has already been written to the recents store, keyed
-    /// pane+agent so a pane that changes hands (claude quits, codex starts in
-    /// the same pane) is remembered again. The poll runs every 2s and the
-    /// write costs a tmux round trip for the directory.
-    var rememberedAgentLaunches: Set<String> = []
     let environment: TerminalEnvironment
 
     /// For non-tmux fallback: direct terminal data callback. Setting this

@@ -138,45 +138,8 @@ extension TerminalViewModel {
                 groupWith: nil,
                 resizeToScreen: !isAttachToExisting
             )
-            // Attaching IS a launch, and it's the most common one there is —
-            // far more common than any of the "new …" verbs. Recorded here rather than where the user clicked, because
-            // at click time there is nothing to ask: the directory and the
-            // program belong to the session, and only the established control
-            // -mode connection can name them. `launchTmux` has by now seen the
-            // greeting and refreshed panes, so the active pane is real.
-            //
-            // A brand-new empty session comes through here too, which is
-            // correct and costs nothing: `new-session -A -s <name>` carries no
-            // `-c`, so it lands in `$HOME` with a bare shell, and the noise
-            // rule drops exactly that.
-            await recordActivePaneLaunch()
         case .shareWithDesktop(let target):
             await launchTmux(sessionName: "\(target)-mobile", groupWith: target, resizeToScreen: false)
-        case .createAgent(let spec):
-            // Seed the session on the -CC launch line itself; it opens as one
-            // pane.
-            //
-            // This used to type a `tmux new-session -d …; tmux split-window …`
-            // script into the shell first and sleep 1s before attaching. That
-            // raced the freshly spawned login shell's pty: when the write landed
-            // before the pty was ready the line was mangled, `-c <dir>` went with
-            // it, and the agent came up in the app's cwd instead of the folder
-            // the user picked — silently, because nothing reads a shell's stderr
-            // here.
-            dlog("Creating agent session \(spec.sessionName)")
-            // An explicit directory AND command, chosen deliberately in the
-            // wizard — the most reusable launch there is, and the reason the
-            // recents list exists. Recorded here rather than at the macOS
-            // window so the iPad wizard feeds the same list.
-            LaunchRecents.shared.recordLaunchIfUseful(
-                dir: spec.workingDir, command: spec.agentCommand, host: launchHost)
-            await launchTmux(
-                sessionName: spec.sessionName,
-                groupWith: nil,
-                resizeToScreen: false,
-                path: spec.workingDir,
-                command: spec.agentCommand
-            )
         }
     }
 
@@ -184,8 +147,6 @@ extension TerminalViewModel {
         sessionName: String,
         groupWith: String?,
         resizeToScreen: Bool,
-        path: String? = nil,
-        command: String? = nil,
         awaitShellFirst: Bool = false
     ) async {
         usingTmux = true
@@ -216,7 +177,7 @@ extension TerminalViewModel {
                 dlog("no shell output within 3s of startShell — writing the launch line anyway")
             }
             let launchCmd = tmuxService.launchCommand(
-                sessionName: sessionName, groupWith: groupWith, path: path, command: command)
+                sessionName: sessionName, groupWith: groupWith)
             dlog("Launching tmux: \(launchCmd.trimmingCharacters(in: .whitespacesAndNewlines))")
             transport.write(launchCmd)
         }

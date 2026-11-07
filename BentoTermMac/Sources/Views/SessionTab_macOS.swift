@@ -46,7 +46,7 @@ final class SessionTab {
     }
 
     /// `command` overrides the plain (no-tmux) tab's login shell — a
-    /// quick-connect `["ssh", host]`, or a one-liner from the wizard.
+    /// quick-connect `["ssh", host]`.
     ///
     /// A tmux-backed tab must leave `command` nil for the LOCAL server (the VM
     /// types the tmux line into a login shell). For a session on an ssh host it
@@ -193,7 +193,6 @@ final class SessionTab {
     static func id(for choice: TmuxStartChoice, on server: TmuxServer) -> TmuxSessionID {
         switch choice {
         case .createOrAttach(let name): return TmuxSessionID(server: server, name: name)
-        case .createAgent(let spec): return TmuxSessionID(server: server, name: spec.sessionName)
         case .shareWithDesktop(let target): return TmuxSessionID(server: server, name: target)
         // A plain tab has no session behind it; it is deduped by title instead
         // (see `openPlain`), and this is only its starting point.
@@ -208,10 +207,6 @@ final class SessionTab {
     /// otherwise (`remoteLaunchCommandLine`).
     static func remoteLaunchCommand(for choice: TmuxStartChoice, name: String) -> String {
         switch choice {
-        case .createAgent(let spec):
-            return TmuxControlMode.remoteLaunchCommandLine(
-                sessionName: name, path: spec.workingDir,
-                command: spec.agentCommand.isEmpty ? nil : spec.agentCommand)
         case .shareWithDesktop(let target):
             return TmuxControlMode.remoteLaunchCommandLine(
                 sessionName: "\(target)-mobile", groupWith: target)

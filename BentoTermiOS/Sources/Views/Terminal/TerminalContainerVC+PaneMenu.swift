@@ -72,7 +72,7 @@ extension TerminalContainerVC {
                 }
             case .moveToSession:
                 return makeMoveToSessionMenu()
-            case .separator, .recentAgents, .layouts:
+            case .separator, .layouts:
                 return nil   // not iOS pane-menu rows
             }
         }

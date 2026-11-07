@@ -31,7 +31,6 @@ struct HostSessionsView: View {
     @State private var showNameField = false
     @FocusState private var nameFieldFocused: Bool
     @State private var isStartingNew = false
-    @State private var showAgentWizard = false
     /// Connect failures surface HERE, in the sheet — the terminal never
     /// exists yet, so the sheet is the only place that can say what happened.
     @State private var connectError: String?
@@ -132,11 +131,6 @@ struct HostSessionsView: View {
             Button("Dismiss", role: .cancel) {}
         } message: {
             Text(connectError ?? "")
-        }
-        .sheet(isPresented: $showAgentWizard) {
-            AgentSessionWizardView { spec in
-                startNewSession(.createAgent(spec: spec))
-            }
         }
     }
 
@@ -248,19 +242,12 @@ struct HostSessionsView: View {
         .bentoSectionStyle()
     }
 
-    /// The three creation methods, host-scoped — the same verbs the Mac
+    /// The creation methods, host-scoped — the same verbs the Mac
     /// renders, drawn from the shared `LaunchAction` vocabulary so the two
     /// platforms cannot drift on titles or icons.
     @ViewBuilder
     private var newSection: some View {
         Section {
-            Button {
-                showAgentWizard = true
-            } label: {
-                Label(LaunchAction.agentSession.title,
-                      systemImage: LaunchAction.agentSession.systemImage)
-            }
-
             Button {
                 withAnimation { showNameField = true }
                 nameFieldFocused = true
@@ -305,7 +292,7 @@ struct HostSessionsView: View {
         if hasPlainShellActive {
             return "A plain-shell session is already open — see Active."
         }
-        return "Agent session picks an agent (Claude / Codex / …), directory and layout. Empty session is a blank single-pane tmux session. Without tmux is a plain shell — no split panes or session persistence."
+        return "Empty session is a blank single-pane tmux session. Without tmux is a plain shell — no split panes or session persistence."
     }
 
     // MARK: - Helpers
@@ -342,7 +329,6 @@ struct HostSessionsView: View {
         case .noTmux: name = ""
         case .createOrAttach(let n): name = n
         case .shareWithDesktop(let target): name = "\(target)-mobile"
-        case .createAgent(let spec): name = spec.sessionName
         }
         let key = SessionKey(hostID: host.id, tmuxSessionName: name)
 

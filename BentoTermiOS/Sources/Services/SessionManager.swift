@@ -472,10 +472,9 @@ final class TmuxLister: ObservableObject {
 
 // MARK: - Recent launches
 
-/// Sessions this device actually attached to, most recent first. The iOS
-/// mirror of the Mac launcher's Recent Launches list — recorded at the
-/// attach moment (not at tap), so it answers "where have I been working",
-/// not "what did I browse".
+/// Sessions this device actually attached to, most recent first — recorded
+/// at the attach moment (not at tap), so it answers "where have I been
+/// working", not "what did I browse".
 @MainActor
 final class RecentLaunchStore: ObservableObject {
     static let shared = RecentLaunchStore()

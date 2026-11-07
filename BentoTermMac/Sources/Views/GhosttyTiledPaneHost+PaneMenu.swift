@@ -47,19 +47,6 @@ extension GhosttyTiledPaneHost {
                 menu.addItem(row)
             case .separator:
                 menu.addItem(.separator())
-            case .recentAgents:
-                // The agents you've had open lately, ready to split off again.
-                // Nothing remembered yet → no separator either: a "Recent
-                // Agents" header over an empty stretch reads as broken.
-                let recents = Self.recentAgentItems(host: viewModel.launchHost, target: self,
-                                                    action: #selector(splitRecentLaunch(_:)))
-                if !recents.isEmpty {
-                    menu.addItem(.separator())
-                    let header = NSMenuItem(title: "Recent Agents", action: nil, keyEquivalent: "")
-                    header.isEnabled = false
-                    menu.addItem(header)
-                    recents.forEach { menu.addItem($0) }
-                }
             case .layouts:
                 menu.addItem(layoutMenuItem())
             case .moveToSession:
@@ -181,22 +168,6 @@ extension GhosttyTiledPaneHost {
               let window = viewModel.activeWindowID else { return }
         Task { [viewModel] in
             _ = await viewModel.applyWindowLayout(window, layout: name)
-        }
-    }
-
-    /// Rows for the remembered agents on `host` (the session's `launchHost`),
-    /// for whichever menu is asking. Empty when nothing has been remembered
-    /// there yet, and the caller drops the separator with it — a lone "Recent
-    /// Agents" header over nothing reads as broken.
-    static func recentAgentItems(host: String?, target: AnyObject?, action: Selector) -> [NSMenuItem] {
-        LaunchRecents.shared.agentLaunches(host: host).map { record in
-            let item = NSMenuItem(title: "\(record.command)  ·  \(tildeAbbreviated(record.dir))",
-                                  action: action, keyEquivalent: "")
-            item.target = target
-            item.representedObject = record
-            item.image = NSImage(systemSymbolName: "clock.arrow.circlepath",
-                                 accessibilityDescription: nil)
-            return item
         }
     }
 }
