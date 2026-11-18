@@ -1,4 +1,5 @@
 import Foundation
+import BentoSessionKit
 
 /// "Things you can open" — the vocabulary behind the open/create surfaces.
 ///
@@ -110,20 +111,125 @@ public struct LocalWindowInfo: Equatable, Sendable, Identifiable {
     public let name: String
     public let isActive: Bool
     public let paneCount: Int
+    /// The panes' combined status, as they report it (`@bento_state`):
+    /// awaiting → working → done → idle. "Done" here is the option still
+    /// saying so — a session nobody has open can't know what was seen.
+    public let status: PaneChrome.Status
+    /// Panes in this window waiting on the user.
+    public let awaitingCount: Int
+    /// The ACTIVE pane: what runs in it, where, and what it is titled
+    /// (whatever the program set, or tmux's default — the host name).
+    public let activeCommand: String?
+    public let activePath: String?
+    public let activeTitle: String?
+    /// Every pane in the window, in pane order.
+    public let panes: [LocalPaneInfo]
 
     public var id: Int { index }
 
-    public init(index: Int, name: String, isActive: Bool, paneCount: Int) {
+    public init(index: Int, name: String, isActive: Bool, paneCount: Int,
+                status: PaneChrome.Status = .idle, awaitingCount: Int = 0,
+                activeCommand: String? = nil, activePath: String? = nil,
+                activeTitle: String? = nil, panes: [LocalPaneInfo] = []) {
         self.index = index
         self.name = name
         self.isActive = isActive
         self.paneCount = paneCount
+        self.status = status
+        self.awaitingCount = awaitingCount
+        self.activeCommand = activeCommand
+        self.activePath = activePath
+        self.activeTitle = activeTitle
+        self.panes = panes
+    }
+
+    /// `list-panes -s -F` for `parsePaneListing`: one pane per line,
+    /// tab-separated, the free-text title last.
+    public static let paneListingFormat = [
+        "#{window_index}", "#{window_name}", "#{?window_active,1,0}", "#{window_panes}",
+        "#{?pane_active,1,0}", "#{@bento_state}", "#{pane_current_command}",
+        "#{pane_current_path}", "#{pane_id}", "#{pane_title}",
+    ].joined(separator: "\t")
+
+    /// Fold a session's pane listing into its windows, in index order.
+    public static func parsePaneListing(_ output: String) -> [LocalWindowInfo] {
+        struct Acc {
+            var name = "", isActive = false, paneCount = 0
+            var status: PaneChrome.Status = .idle
+            var awaiting = 0
+            var command: String?, path: String?, title: String?
+            var panes: [LocalPaneInfo] = []
+        }
+        var byIndex: [Int: Acc] = [:]
+        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let f = line.split(separator: "\t", maxSplits: 9, omittingEmptySubsequences: false)
+                .map(String.init)
+            guard f.count == 10, let index = Int(f[0]) else { continue }
+            var acc = byIndex[index] ?? Acc()
+            acc.name = f[1]
+            acc.isActive = f[2] == "1"
+            acc.paneCount = Int(f[3]) ?? acc.paneCount
+            let pane = paneStatus(option: f[5], command: f[6])
+            if pane == .awaitingInput { acc.awaiting += 1 }
+            if pane.rank > acc.status.rank { acc.status = pane }
+            let command = f[6].isEmpty ? nil : f[6]
+            let path = f[7].isEmpty ? nil : f[7]
+            let title = f[9].isEmpty ? nil : f[9]
+            acc.panes.append(LocalPaneInfo(id: f[8], isActive: f[4] == "1", status: pane,
+                                           command: command, path: path, title: title))
+            if f[4] == "1" {
+                acc.command = command
+                acc.path = path
+                acc.title = title
+            }
+            byIndex[index] = acc
+        }
+        return byIndex.keys.sorted().map { i in
+            let a = byIndex[i]!
+            return LocalWindowInfo(index: i, name: a.name, isActive: a.isActive,
+                                   paneCount: a.paneCount, status: a.status,
+                                   awaitingCount: a.awaiting, activeCommand: a.command,
+                                   activePath: a.path, activeTitle: a.title, panes: a.panes)
+        }
+    }
+
+    /// One pane's status from its option. `done` stays green: with no client
+    /// of ours on the session there is no "seen" to clear it.
+    static func paneStatus(option: String, command: String) -> PaneChrome.Status {
+        let judged = PaneStatusOption.classify(value: option, command: command)
+        switch judged.state {
+        case .working: return .working
+        case .awaitingInput: return .awaitingInput
+        case .idle: return judged.hasStatus && option == "done" ? .doneUnseen : .idle
+        }
     }
 
     /// "3: claude  ·  2 panes" — the pane count only when there is more than
     /// one, since "1 pane" is the default and says nothing.
     public var label: String {
         paneCount > 1 ? "\(index): \(name)  ·  \(paneCount) panes" : "\(index): \(name)"
+    }
+}
+
+/// One pane of a local session, as the poll saw it.
+public struct LocalPaneInfo: Equatable, Sendable, Identifiable {
+    /// tmux's `pane_id` (`%12`) — unique on the server, and kept by a pane
+    /// moving between windows.
+    public let id: String
+    public let isActive: Bool
+    public let status: PaneChrome.Status
+    public let command: String?
+    public let path: String?
+    public let title: String?
+
+    public init(id: String, isActive: Bool, status: PaneChrome.Status,
+                command: String?, path: String?, title: String?) {
+        self.id = id
+        self.isActive = isActive
+        self.status = status
+        self.command = command
+        self.path = path
+        self.title = title
     }
 }
 

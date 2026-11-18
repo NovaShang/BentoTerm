@@ -13,6 +13,7 @@ struct VoiceControllerTests {
     final class FakeVoiceSession: VoiceSessionProtocol {
         var currentTranscript = ""
         var contextProvider: (() -> String?)?
+        var vocabularyProvider: (() -> VoiceContextSnapshot?)?
         var prewarmCount = 0
         var startCount = 0
         var cancelCount = 0

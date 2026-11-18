@@ -88,6 +88,33 @@ public enum BentoTerminalWindow {
         }
     }
 
+    /// Go to session `id` as `focusOrOpen` does, then `act` on the window that
+    /// shows it — once its panes are known, which for a window still opening
+    /// means waiting for the attach (bounded: an attach that never completes
+    /// just lands on the session as it is).
+    static func focusOrOpen(_ id: TmuxSessionID, then act: @escaping (TerminalWindowManager) -> Void) {
+        if let m = manager(for: id.key) {
+            m.bringToFront()
+            act(m)
+        } else if let m = switchableManager(for: id) {
+            m.switchSession(to: id, then: act)
+        } else {
+            open(choice: .createOrAttach(name: id.name), server: id.server, title: titleFor(id))
+            Task { @MainActor in
+                let deadline = Date().addingTimeInterval(10)
+                while Date() < deadline {
+                    if let m = manager(for: id.key), m.tab.viewModel.isTmuxReady,
+                       m.tab.viewModel.activeTmuxSessionName == id.name,
+                       !m.tab.viewModel.sessionPanes.isEmpty {
+                        act(m)
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
+        }
+    }
+
     /// Session ⌄ → Open in New Window (or ⌥-click): the one explicit way to
     /// get a second window for a session, instead of switching this one.
     public static func openInNewWindow(_ id: TmuxSessionID) {

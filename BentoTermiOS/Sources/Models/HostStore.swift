@@ -19,6 +19,15 @@ final class HostStore: ObservableObject {
         load()
     }
 
+    /// The saved hosts' names and hostnames, read straight from disk so it can
+    /// run off the main thread (voice vocabulary — see `ContextVocabulary`).
+    nonisolated static func savedHostNames() -> [String] {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("hosts.json")),
+              let hosts = try? JSONDecoder().decode([Host].self, from: data) else { return [] }
+        return hosts.flatMap { [$0.name, $0.hostname] }.filter { !$0.isEmpty }
+    }
+
     func load() {
         let data: Data
         do {

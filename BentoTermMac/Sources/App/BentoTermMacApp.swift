@@ -22,7 +22,13 @@ struct BentoTermMacApp: App {
         // through the responder chain (BentoPaneAction) to the focused
         // GhosttyTiledPaneHost, because our terminal windows are plain AppKit
         // windows with no NSWindowController of their own.
-        .commands { TerminalCommands() }
+        .commands {
+            // View → Show/Hide Sidebar (⌃⌘S), sent up the responder chain to
+            // the session window's split view — the same action as the
+            // toolbar's sidebar button.
+            SidebarCommands()
+            TerminalCommands()
+        }
     }
 }
 

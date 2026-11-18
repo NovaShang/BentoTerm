@@ -82,6 +82,11 @@ open class VoiceController: ObservableObject {
     /// the shared `VoiceSession`.
     public var readScreenText: (() -> String?)?
 
+    /// Supplies the target pane's command / cwd / session / hosts for the
+    /// Apple engines' contextual strings (see `ContextVocabulary`). Read on
+    /// the main actor when a recording begins; keep it to property reads.
+    public var readVoiceContext: (() -> VoiceContextSnapshot?)?
+
     /// Platform feedback injection (iOS haptics; macOS no-op).
     public var feedback: any VoiceFeedbackProviding = NoopVoiceFeedback()
 
@@ -111,6 +116,7 @@ open class VoiceController: ObservableObject {
 
     private func wireContextProvider() {
         session.contextProvider = { [weak self] in self?.readScreenText?() }
+        session.vocabularyProvider = { [weak self] in self?.readVoiceContext?() }
     }
 
     /// Pre-allocate the mic engine the moment a voice gesture becomes likely (the

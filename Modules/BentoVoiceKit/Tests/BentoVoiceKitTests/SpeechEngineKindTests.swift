@@ -32,6 +32,35 @@ final class SpeechEngineKindTests: XCTestCase {
         XCTAssertEqual(SpeechEngineKind.current(defaults: defaults), .apple)
     }
 
+    // MARK: Apple (new model)
+
+    func testNewAppleModelIsSelectableOnASupportedOS() {
+        let defaults = freshDefaults()
+        defaults.set("speechanalyzer", forKey: "speech_engine")
+        XCTAssertEqual(SpeechEngineKind.current(defaults: defaults, analyzerSupported: true), .speechAnalyzer)
+    }
+
+    func testNewAppleModelBelowIOS26RunsAsTheOldAppleEngine() {
+        let defaults = freshDefaults()
+        defaults.set("speechanalyzer", forKey: "speech_engine")
+        XCTAssertEqual(SpeechEngineKind.current(defaults: defaults, analyzerSupported: false), .apple)
+    }
+
+    func testOldAppleEngineIsUnaffectedByAnalyzerSupport() {
+        let defaults = freshDefaults()
+        defaults.set("apple", forKey: "speech_engine")
+        XCTAssertEqual(SpeechEngineKind.current(defaults: defaults, analyzerSupported: true), .apple)
+        XCTAssertEqual(SpeechEngineKind.current(defaults: defaults, analyzerSupported: false), .apple)
+    }
+
+    func testEngineTraits() {
+        XCTAssertEqual(SpeechEngineKind.speechAnalyzer.rawValue, "speechanalyzer")
+        XCTAssertTrue(SpeechEngineKind.speechAnalyzer.isOnDevice)
+        XCTAssertNil(SpeechEngineKind.speechAnalyzer.keyDefaultsKey)
+        XCTAssertNil(SpeechEngineKind.speechAnalyzer.onDeviceModel, "Apple's assets aren't a sherpa download")
+        XCTAssertEqual(SpeechEngineKind.allCases.filter(\.isApple), [.apple, .speechAnalyzer])
+    }
+
     func testUnsetOrUnknownIsApple() {
         let defaults = freshDefaults()
         XCTAssertEqual(SpeechEngineKind.current(defaults: defaults), .apple)

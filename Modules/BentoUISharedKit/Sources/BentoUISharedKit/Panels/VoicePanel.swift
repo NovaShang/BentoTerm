@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import BentoVoiceKit
 #if os(macOS)
 import AppKit
 #else
@@ -28,8 +29,12 @@ struct SpeechEngineOption: Identifiable {
     let cost: String
 
     static let all: [SpeechEngineOption] = [
-        SpeechEngineOption(id: "apple", name: "Apple", badge: nil,
+        SpeechEngineOption(id: SpeechEngineKind.apple.rawValue, name: "Apple (on-device)", badge: nil,
                            cost: "Never leaves this device. A little less accurate."),
+        SpeechEngineOption(id: SpeechEngineKind.speechAnalyzer.rawValue, name: "Apple (new model)", badge: nil,
+                           cost: "Never leaves this device. Apple's newer speech model; downloads once per language if it isn't on the device yet."),
+        SpeechEngineOption(id: SpeechEngineKind.senseVoice.rawValue, name: "SenseVoice (on-device)", badge: nil,
+                           cost: "Never leaves this device, no key. Strong on Chinese, English, Japanese, Korean and Cantonese. One-time model download."),
         SpeechEngineOption(id: "qwen", name: "Qwen", badge: "Recommended",
                            cost: "Best on mixed and non-English speech, and it can read what's on screen to get names and jargon right. Needs your DashScope API key."),
         SpeechEngineOption(id: "openai", name: "OpenAI", badge: nil,
@@ -136,6 +141,10 @@ public struct VoicePanel: View {
     @ViewBuilder
     private func engineSettings(_ id: String) -> some View {
         switch id {
+        case SpeechEngineKind.senseVoice.rawValue:
+            OnDeviceModelRow(store: .shared(for: .senseVoiceSmall))
+        case SpeechEngineKind.speechAnalyzer.rawValue:
+            AppleSpeechModelRow(store: .shared, localeKey: speechLocale)
         case "openai":
             SecureField("OpenAI API key", text: $openaiKey)
         case "qwen":
@@ -156,6 +165,11 @@ public struct VoicePanel: View {
     // Says where the audio goes for the engine actually picked, and owns up
     // when a cloud engine is picked without its key: voice then quietly runs
     // on Apple's engine, which would otherwise look like the choice was ignored.
+    private static var appleNewModelNote: LocalizedStringKey {
+        LocalizedStringKey(AppleSpeechModelCopy.engineNote(
+            osSupportsAnalyzer: AppleSpeechAnalyzerSupport.osSupportsAnalyzer))
+    }
+
     private var engineNote: LocalizedStringKey {
         switch speechEngine {
         case "openai" where openaiKey.trimmingCharacters(in: .whitespaces).isEmpty,
@@ -163,6 +177,11 @@ public struct VoicePanel: View {
             return "Add your API key above. Until then, voice uses Apple's engine."
         case "openai", "qwen":
             return "Audio goes straight to the provider, on your own key."
+        case SpeechEngineKind.senseVoice.rawValue:
+            // The FunASR model licence asks for the source to be credited.
+            return "Runs on this device. Model: SenseVoiceSmall by Alibaba FunAudioLLM, via sherpa-onnx."
+        case SpeechEngineKind.speechAnalyzer.rawValue:
+            return Self.appleNewModelNote
         default:
             return "Apple's engine runs on this device."
         }
@@ -263,5 +282,112 @@ public struct VoicePanel: View {
             UIApplication.shared.open(url)
         }
         #endif
+    }
+}
+
+/// Status / download progress of Apple's new speech model for the chosen
+/// language. Apple's asset daemon owns the files, so there is nothing to
+/// delete or cancel here — only check, download, and watch.
+struct AppleSpeechModelRow: View {
+    @ObservedObject var store: AppleSpeechModelStore
+    let localeKey: String
+
+    var body: some View {
+        Group {
+            if !AppleSpeechAnalyzerSupport.osSupportsAnalyzer {
+                EmptyView()   // the engine note says it
+            } else {
+                switch store.state {
+                case .downloading(let fraction):
+                    VStack(alignment: .leading, spacing: 6) {
+                        ProgressView(value: fraction)
+                        statusText
+                    }
+                case .checking, .unknown:
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        statusText
+                    }
+                case .ready(.analyzer(.transcriber, _)):
+                    Label(AppleSpeechModelCopy.status(for: store.state) ?? "", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .ready:
+                    statusText
+                case .needsDownload, .failed:
+                    VStack(alignment: .leading, spacing: 6) {
+                        if case .failed(let message) = store.state {
+                            Label(message, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                        Button(AppleSpeechModelCopy.downloadButton) { store.download(localeKey: localeKey) }
+                    }
+                }
+            }
+        }
+        .onAppear { store.refresh(localeKey: localeKey) }
+        .onChange(of: localeKey) { _, key in store.refresh(localeKey: key) }
+    }
+
+    private var statusText: some View {
+        Text(AppleSpeechModelCopy.status(for: store.state) ?? "")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+}
+
+/// Download / progress / cancel / delete for one on-device speech model, shown
+/// under its engine. The store does the work off the main thread; this only
+/// renders its state.
+struct OnDeviceModelRow: View {
+    @ObservedObject var store: OnDeviceModelStore
+
+    var body: some View {
+        Group {
+            switch store.state {
+            case .installed(let bytes):
+                HStack {
+                    Label("Model downloaded", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Spacer()
+                    Button("Delete model (\(Self.size(bytes)))", role: .destructive) { store.delete() }
+                }
+            case .downloading(let fraction):
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: fraction)
+                    HStack {
+                        Text("Downloading speech model… \(Int((fraction * 100).rounded(.down)))% of \(Self.size(store.totalBytes))")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Cancel") { store.cancelDownload() }
+                    }
+                }
+            case .verifying:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking speech model…").font(.caption).foregroundStyle(.secondary)
+                }
+            case .notInstalled, .failed:
+                VStack(alignment: .leading, spacing: 6) {
+                    if case .failed(let message) = store.state {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    Button(downloadTitle) { store.download() }
+                }
+            }
+        }
+        .onAppear { store.refresh() }
+    }
+
+    private var downloadTitle: String {
+        if store.partialBytes > 0 {
+            return "Resume download (\(Self.size(store.partialBytes)) of \(Self.size(store.totalBytes)))"
+        }
+        return "Download model (\(Self.size(store.totalBytes)))"
+    }
+
+    static func size(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }

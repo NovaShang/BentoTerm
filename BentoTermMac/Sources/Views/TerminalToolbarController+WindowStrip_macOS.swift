@@ -10,16 +10,9 @@ extension TerminalToolbarController {
     /// A single-window session is the common case, and a one-item switcher is
     /// chrome that says nothing.
     func setCenterShowsTabs(_ showTabs: Bool) {
-        guard let tb = toolbarRef, showTabs != centerShowsTabs || tb.items.isEmpty else { return }
+        guard showTabs != centerShowsTabs else { return }
         centerShowsTabs = showTabs
-        let want = showTabs ? Self.centerID : Self.locationID
-        if let idx = tb.items.firstIndex(where: {
-            $0.itemIdentifier == Self.centerID || $0.itemIdentifier == Self.locationID
-        }), tb.items[idx].itemIdentifier != want {
-            tb.removeItem(at: idx)
-            tb.insertItem(withItemIdentifier: want, at: idx)
-            tb.centeredItemIdentifiers = [want]
-        }
+        syncToolbarItems()
     }
 
     func configureGroup(_ g: NSToolbarItemGroup) {

@@ -12,11 +12,14 @@ import AppKit
 /// (bordered "glass").
 ///
 /// Layout (left → right):
-///   [▢ <session> ⌄] [Parallel│Focus]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋ ▤]
+///   [◧] [▢ <session> ⌄]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋ ▤]
+///
+/// There is no Parallel / Focus switch: the sidebar's session row shows the
+/// panes split, a pane row shows one alone.
 ///
 /// A plain (no-tmux) terminal gets the minimal version, decided at
 /// construction (`isPlain`): its name button (Close + the app's rows) and ＋.
-/// No mode switch, no window strip, no file panel, no size banner.
+/// No window strip, no file panel, no size banner.
 ///
 /// The named left button carries the session (its switcher today, its actions
 /// once sessions become native window tabs); the centre strip is the current
@@ -52,57 +55,62 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// confirmed: make this window the one that sets the session size.
     var onClaimSessionSize: (() -> Void)?
     var onCloseTab: (() -> Void)?
-    /// The Tiled|List mode switch picked a mode (the manager runs `setMode`,
-    /// warning first when a mixed external structure must be flattened).
-    var onSelectMode: ((TmuxSessionMode) -> Void)?
     var onTogglePreview: (() -> Void)?
 
     /// This toolbar belongs to a plain (no-tmux) terminal: the minimal set of
     /// items, and its name button's menu is just Close plus the app's rows.
     let isPlain: Bool
 
-    /// Which items belong in the toolbar right now.
-    ///
-    /// - **Sessions** names the active session and lists the others.
-    /// - **Parallel|Focus** reshapes the session, once there is something to
-    ///   arrange.
-    /// - New survives every state — creating is what a window with nothing in
-    ///   it is FOR.
-    ///
-    /// The window strip is not here: it is a variable-width list, and its slot
-    /// is already shared with the location by `setCenterShowsTabs`. A plain
-    /// toolbar's items are fixed (`toolbarDefaultItemIdentifiers`).
-    private func syncToolbarItems() {
-        guard !isPlain, let tb = toolbarRef else { return }
-        setItem(Self.sessionsID, visible: true, insertAt: 0)
-        let afterSessions = tb.items.firstIndex { $0.itemIdentifier == Self.sessionsID }
-            .map { $0 + 1 } ?? 0
-        setItem(Self.modeID, visible: wantsModeItem, insertAt: afterSessions)
-        // The take-over banner rides in the toolbar rather than in a strip above
-        // the panes, and that is deliberate: a strip would shrink the terminal,
-        // which is the very grid the banner is comparing — it would keep
-        // clearing its own condition and blink. The toolbar is chrome that was
-        // already there, so it perturbs nothing.
-        let afterMode = tb.items.firstIndex { $0.itemIdentifier == Self.modeID }
-            .map { $0 + 1 } ?? afterSessions
-        setItem(Self.sizeID, visible: sizeMismatch != nil, insertAt: afterMode)
+    /// Whether the window's sidebar is shown. While it is, the title bar over
+    /// the terminal is empty but for the file panel's button: the sidebar
+    /// lists the sessions and panes, its foot holds ＋ and the app's menu,
+    /// and a session's own actions are on its row.
+    var sidebarShown = false {
+        didSet { if sidebarShown != oldValue { syncToolbarItems() } }
     }
 
-    /// Add or remove the toolbar ITEM — not just its view.
+    /// Which items belong in the toolbar right now, in order.
     ///
-    /// Setting `isHidden` on the view leaves the `NSToolbarItem` in place, and
-    /// the item draws its own background: a plain terminal showed an empty
-    /// switch-shaped capsule with no labels in it, the control gone but the
-    /// thing it sat in still there. Removing the item is what the centre strip
-    /// already does to swap tabs for the location.
-    private func setItem(_ id: NSToolbarItem.Identifier, visible: Bool, insertAt: Int) {
-        guard let tb = toolbarRef else { return }
-        let existing = tb.items.firstIndex { $0.itemIdentifier == id }
-        if visible, existing == nil {
-            tb.insertItem(withItemIdentifier: id, at: min(max(insertAt, 0), tb.items.count))
-        } else if !visible, let existing {
-            tb.removeItem(at: existing)
+    /// - The system sidebar button and its tracking separator always lead,
+    ///   so the button sits over the sidebar (by the traffic lights when it
+    ///   is away).
+    /// - Sidebar away: **Sessions** (the session's menu), the centre (window
+    ///   strip or location), ＋ and ▤.
+    /// - Sidebar shown: ▤ only.
+    /// - The take-over banner appears in either, and only while the canvas is
+    ///   someone else's. It rides in the toolbar rather than in a strip above
+    ///   the panes deliberately: a strip would shrink the terminal, which is
+    ///   the very grid the banner is comparing — it would keep clearing its
+    ///   own condition and blink.
+    private var desiredItems: [NSToolbarItem.Identifier] {
+        var ids: [NSToolbarItem.Identifier] = [.toggleSidebar, .sidebarTrackingSeparator]
+        if sidebarShown {
+            if sizeMismatch != nil { ids.append(Self.sizeID) }
+            ids += [.flexibleSpace, Self.previewID]
+        } else {
+            ids.append(Self.sessionsID)
+            if sizeMismatch != nil { ids.append(Self.sizeID) }
+            ids += [.flexibleSpace, centerShowsTabs ? Self.centerID : Self.locationID,
+                    .flexibleSpace, Self.newID, Self.previewID]
         }
+        return ids
+    }
+
+    /// Bring the toolbar's items to `desiredItems`: what they share from the
+    /// start stays put (so the sidebar button never blinks), the rest is
+    /// replaced. Items are removed, not hidden — a hidden view leaves its
+    /// item's capsule behind.
+    func syncToolbarItems() {
+        guard !isPlain, let tb = toolbarRef else { return }
+        let want = desiredItems
+        let have = tb.items.map(\.itemIdentifier)
+        guard have != want else { return }
+        var keep = 0
+        while keep < min(have.count, want.count), have[keep] == want[keep] { keep += 1 }
+        while tb.items.count > keep { tb.removeItem(at: tb.items.count - 1) }
+        for (i, id) in want.enumerated().dropFirst(keep) { tb.insertItem(withItemIdentifier: id, at: i) }
+        let center = want.first { $0 == Self.centerID || $0 == Self.locationID }
+        tb.centeredItemIdentifiers = center.map { [$0] } ?? []
     }
 
     /// EVERY tmux session on the machine, open here or not, with its dot.
@@ -139,6 +147,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         let info: LocalSessionInfo?
     }
     var activeSessionKey: String?
+    /// Whether the session menu carries the session list — not while the
+    /// sidebar is shown (it IS that list).
+    var listsSessionsInMenu = true
     /// Go to that session in THIS window (or front the window it is open in).
     var onSelectSession: ((String) -> Void)?
     /// Keep this window, open that session in a new one — the row's "Open in
@@ -146,9 +157,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     var onOpenSessionInNewWindow: ((String) -> Void)?
 
     let sessionsButton = NSButton()
-    /// Tiled|List — the session's structural mode, next to the session button.
-    /// Reflects the active tab's `sessionMode`; hidden for plain (no-tmux) tabs.
-    private let modeSwitch = NSSegmentedControl()
     /// New ⌄ and the preview toggle: two plain toolbar buttons in adjacent
     /// items with no space between, which macOS 26+ draws as one glass capsule.
     /// Not a segmented control — that always draws a divider between segments.
@@ -192,7 +200,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     var currentSig: [String] = []
 
     fileprivate static let sessionsID = NSToolbarItem.Identifier("bento.sessions")
-    fileprivate static let modeID = NSToolbarItem.Identifier("bento.mode")
     fileprivate static let newID = NSToolbarItem.Identifier("bento.new")
     fileprivate static let previewID = NSToolbarItem.Identifier("bento.preview")
     static let centerID = NSToolbarItem.Identifier("bento.center")
@@ -221,18 +228,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         // actions. Its text is updated by the manager via `setSessionTitle`.
         configureMenu(sessionsButton, symbol: isPlain ? "terminal" : "macwindow", text: "Session",
                       action: #selector(sessionMenuTapped))
-        // Tiled|List: the structure IS the mode, so this reads as a view switch
-        // (lossless, instant) — the manager confirms only the mixed→List case.
-        modeSwitch.segmentCount = 2
-        modeSwitch.setLabel("Parallel", forSegment: 0)
-        modeSwitch.setLabel("Focus", forSegment: 1)
-        modeSwitch.trackingMode = .selectOne
-        modeSwitch.controlSize = .large   // match the neighboring buttons
-        modeSwitch.target = self
-        modeSwitch.action = #selector(modeSwitched)
-        modeSwitch.setToolTip("One window, tiled panes", forSegment: 0)
-        modeSwitch.setToolTip("One pane per window, listed in the sidebar", forSegment: 1)
-        modeSwitch.sizeToFit()
         // [＋ ▤]: New (a menu) and the inspector-style preview dock toggle.
         configure(newButton, symbol: "plus", title: "", action: #selector(newTapped))
         newButton.setAccessibilityLabel("New")
@@ -272,27 +267,13 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         setMenuText(sessionsButton, sessionsText)
     }
 
-    /// Reflect the active tab's mode on the Tiled|List switch. nil = nothing to
-    /// arrange (a single pane), so the switch goes away entirely.
+    /// The active tab's mode (nil = a single pane) — the ＋ menu's first row
+    /// says "New Pane" (split) or "New tmux Window" (one pane shown alone).
     func setSessionMode(_ mode: TmuxSessionMode?) {
         sessionMode = mode
-        wantsModeItem = (mode != nil)
-        syncToolbarItems()
-        guard let mode else { return }
-        modeSwitch.selectedSegment = (mode == .tiled) ? 0 : 1
     }
 
-    /// Whether the Layout item belongs in the toolbar at all. Kept as state
-    /// because `setSessionMode` can run before `makeToolbar`, and the answer has
-    /// to survive until there is a toolbar to apply it to.
-    private var wantsModeItem = true
-    /// The active tab's mode (nil = no switch shown) — the ＋ menu's first row
-    /// says "New Pane" or "New tmux Window" after it.
     private(set) var sessionMode: TmuxSessionMode?
-
-    @objc private func modeSwitched() {
-        onSelectMode?(modeSwitch.selectedSegment == 1 ? .list : .tiled)
-    }
 
     private func configureLocationLabel() {
         let b = locationLabel
@@ -362,7 +343,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         // Pin the session strip to the WINDOW's center, independent of the side
         // items' widths — so the session-name button can size to its text without
         // ever nudging the tabs (the native alternative to hardcoding widths).
-        if !isPlain { tb.centeredItemIdentifiers = [Self.centerID] }
         toolbarRef = tb
         // State decided before the toolbar existed still has to land.
         syncToolbarItems()
@@ -438,20 +418,14 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // Plain: <name> ⌄ | ⸺flex⸺ | ＋
         if isPlain { return [Self.sessionsID, .flexibleSpace, Self.newID] }
-        // ◧ | Sessions ⌄ | Tiled|List | ⸺flex⸺ | [session tabs] | ⸺flex⸺ | ＋ ▤
-        // ＋ and ▤ are adjacent items with nothing between them, so the system
-        // groups them into one capsule.
-        return [Self.sessionsID, Self.modeID, .flexibleSpace, Self.centerID,
-                .flexibleSpace, Self.newID, Self.previewID]
+        return desiredItems
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // The centre swaps between the window strip and the location, so both
-        // must be ALLOWED even though only one is in the default set.
-        // The size banner is never in the DEFAULT set — it exists only while the
-        // canvas is someone else's — but an item can't be inserted unless it is
-        // allowed.
+        // Everything `desiredItems` can ask for, in any state — an item can't
+        // be inserted unless it is allowed.
         if isPlain { return toolbarDefaultItemIdentifiers(toolbar) }
-        return toolbarDefaultItemIdentifiers(toolbar) + [Self.locationID, Self.sizeID]
+        return [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.sessionsID,
+                Self.centerID, Self.locationID, Self.sizeID, Self.newID, Self.previewID]
     }
 
     @objc private func previewTapped() { onTogglePreview?() }
@@ -465,7 +439,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         let item = NSToolbarItem(itemIdentifier: id)
         switch id {
         case Self.sessionsID: item.view = sessionsButton; item.label = "Session"
-        case Self.modeID:     item.view = modeSwitch;     item.label = "Layout"
         case Self.newID:      item.view = newButton;      item.label = "New"
         case Self.previewID:  item.view = previewButton;  item.label = "Preview"
         case Self.sizeID:     item.view = sizeButton;     item.label = "Session Size"

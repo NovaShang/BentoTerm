@@ -87,6 +87,9 @@ struct PlainShellView: View {
             voiceController.onResult = { [weak viewModel] result in
                 viewModel?.handleVoiceResult(result)
             }
+            voiceController.readVoiceContext = { [weak viewModel] in
+                viewModel?.voiceContextSnapshot(loadHostAliases: { HostStore.savedHostNames() })
+            }
         }
     }
 

@@ -79,6 +79,19 @@ jobs:
           test -x bundled-tmux/tmux-darwin-arm64 \
             || { echo "ERROR: bundled tmux missing — refusing to ship an app that needs a system tmux" >&2; exit 1; }
 
+      # sherpa-onnx (on-device SenseVoice speech) is not committed: this
+      # assembles Modules/SherpaOnnxKit/SherpaOnnx.xcframework from the
+      # official k2-fsa release zips (checksum-pinned in the script). Without it
+      # SwiftPM can't resolve BentoVoiceKit. The zips are cached.
+      - name: Cache sherpa-onnx
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/bento-sherpa-onnx
+          key: sherpa-onnx-${{ hashFiles('scripts/fetch-sherpa-onnx.sh') }}
+
+      - name: Fetch sherpa-onnx
+        run: scripts/fetch-sherpa-onnx.sh
+
       - name: Generate Xcode project
         run: xcodegen
 

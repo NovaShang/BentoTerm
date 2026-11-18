@@ -27,29 +27,62 @@ public struct VoiceInputResult: Sendable {
 /// Which ASR engine a recording uses, from the `speech_engine` user setting.
 /// `openai` = OpenAI Realtime; `qwen` = Alibaba DashScope Qwen realtime (best
 /// 中文 / 中英混说 accuracy), both streaming and driven through `RealtimeASR`.
-public enum SpeechEngineKind: String, Sendable {
+/// `senseVoice` = SenseVoiceSmall on device through sherpa-onnx: no key, not
+/// streaming — the whole clip is decoded once, on release.
+/// `apple` = `SFSpeechRecognizer` (the system-dictation model);
+/// `speechAnalyzer` = Apple's newer model through `SpeechAnalyzer` +
+/// `SpeechTranscriber` (iOS/macOS 26+). Both on device; kept side by side so
+/// they can be compared.
+public enum SpeechEngineKind: String, Sendable, CaseIterable {
     case apple, openai, qwen
+    case senseVoice = "sensevoice"
+    case speechAnalyzer = "speechanalyzer"
 
     /// The engine voice will actually use. A cloud engine needs the user's own
     /// key — there is no shared server to fall back on — so one selected
     /// without its key runs as Apple's on-device engine instead.
-    public static func current(defaults: UserDefaults = .standard) -> SpeechEngineKind {
+    ///
+    /// SenseVoice is never swapped out here: when its model isn't on the device
+    /// the gesture says so (`onDeviceModelUnavailableMessage`). Quietly running a
+    /// different engine would make the choice look ignored.
+    ///
+    /// The new Apple model needs iOS 26: below that it runs as the old Apple
+    /// engine (same vendor, same privacy, the closest thing there is).
+    public static func current(defaults: UserDefaults = .standard,
+                               analyzerSupported: Bool = AppleSpeechAnalyzerSupport.osSupportsAnalyzer)
+        -> SpeechEngineKind {
         let raw = defaults.string(forKey: "speech_engine") ?? "apple"
         let selected = SpeechEngineKind(rawValue: raw) ?? .apple
-        if selected != .apple, selected.apiKey(defaults: defaults).isEmpty { return .apple }
+        if selected.keyDefaultsKey != nil, selected.apiKey(defaults: defaults).isEmpty { return .apple }
+        if selected == .speechAnalyzer, !analyzerSupported { return .apple }
         return selected
     }
 
-    /// UserDefaults key holding this engine's API key; nil for Apple.
+    /// UserDefaults key holding this engine's API key; nil for on-device engines.
     public var keyDefaultsKey: String? {
         switch self {
-        case .apple: return nil
+        case .apple, .senseVoice, .speechAnalyzer: return nil
         case .openai: return "openai_api_key"
         case .qwen: return "dashscope_api_key"
         }
     }
 
-    /// The trimmed key for this engine, "" when unset (always "" for Apple).
+    /// Audio never leaves the device.
+    public var isOnDevice: Bool { self == .apple || self == .senseVoice || self == .speechAnalyzer }
+
+    /// Runs on Apple's Speech framework: needs the speech-recognition
+    /// permission, and takes the terminal's vocabulary as contextual strings.
+    public var isApple: Bool { self == .apple || self == .speechAnalyzer }
+
+    /// The downloadable sherpa-onnx model this engine runs, if any.
+    public var onDeviceModel: OnDeviceASRModel? {
+        switch self {
+        case .senseVoice: return .senseVoiceSmall
+        case .apple, .openai, .qwen, .speechAnalyzer: return nil
+        }
+    }
+
+    /// The trimmed key for this engine, "" when unset (always "" on device).
     public func apiKey(defaults: UserDefaults = .standard) -> String {
         guard let name = keyDefaultsKey else { return "" }
         return (defaults.string(forKey: name) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -77,6 +77,16 @@ struct IOSSettingsPage: View {
             VoicePanel()
         case .general:
             GeneralPanel {
+                #if DEBUG
+                // Dev builds only: hand the log to another device (Tailscale's
+                // share target sends it to the dev Mac) when the phone can't be
+                // reached for a file pull.
+                Section {
+                    ShareLink(item: DebugLogger.shared.logFileURL) {
+                        Label("Share Debug Log", systemImage: "square.and.arrow.up")
+                    }
+                }
+                #endif
                 SettingsAboutSection(
                     icon: BentoAppIcon.image,
                     tagline: "A tmux-native terminal for iPhone & iPad.")
