@@ -47,6 +47,17 @@ public final class VoiceSession {
     /// auto-context (manual vocab only). Only the Qwen engine uses this.
     public var contextProvider: (() -> String?)?
 
+    /// Supplies what the terminal knows about the target pane (command, cwd,
+    /// session, hosts) for the Apple engines' contextual strings. Called on
+    /// the main actor when an Apple recording begins — a few property reads;
+    /// `ContextVocabulary.gather` does the rest off the main thread.
+    public var vocabularyProvider: (() -> VoiceContextSnapshot?)?
+
+    /// The live hold on Apple's new model (SpeechAnalyzer), if that's the
+    /// engine and the plan resolved to it.
+    private var analyzerRecording: (any AppleAnalyzerRecording)?
+    private let appleModels: AppleSpeechModelStore
+
     /// Set when the realtime engine delivers a non-empty final / emits its
     /// `completed` event after a commit — so `finish()` stops waiting promptly.
     private var realtimeFinalArrived = false
@@ -88,7 +99,36 @@ public final class VoiceSession {
     /// rather than transcribing a partial clip.
     private var recordedPCMOverflowed = false
 
-    public init() {}
+    /// Simulated streaming for the on-device engine (see `partialTick`).
+    private var partialTask: Task<Void, Never>?
+    private var partialDecodeInFlight = false
+    private var partialDecodedBytes = 0
+    /// Audio before this byte offset has been cut into segments at pauses and
+    /// decoded once; `committedText` is what they said. Never re-decoded, so
+    /// what is on screen up to there stops changing.
+    private var committedBytes = 0
+    private var committedText = ""
+    /// The hold's voice activity detector (nil if its model won't load —
+    /// then segments are cut by loudness instead), and how much of the clip
+    /// it has been fed.
+    private var segmenter: OnDeviceSegmenter?
+    private var vadFedBytes = 0
+
+    /// Test seam: a fixed model store for every on-device engine. nil = the
+    /// shared per-model stores the Settings panel drives.
+    private let modelStoreOverride: OnDeviceModelStore?
+
+    public init(modelStore: OnDeviceModelStore? = nil, appleModels: AppleSpeechModelStore? = nil) {
+        self.modelStoreOverride = modelStore
+        self.appleModels = appleModels ?? .shared
+    }
+
+    /// The store (location + readiness) of the on-device model this recording
+    /// uses; nil for streaming engines.
+    private var activeModelStore: OnDeviceModelStore? {
+        guard let model = engine.onDeviceModel else { return nil }
+        return modelStoreOverride ?? OnDeviceModelStore.shared(for: model)
+    }
 
     /// Pre-allocate the mic engine ahead of an imminent recording (e.g. the right
     /// button just went down) so the actual `start()` reaches the mic in a few ms
@@ -106,6 +146,28 @@ public final class VoiceSession {
         // leave a second mic engine / ASR socket running.
         if isActive { cancel() }
         engine = .current()
+        // On-device model engine picked but its model isn't on the device (or
+        // is still downloading): say so on the gesture and record nothing. No
+        // fallback to another engine — that would make the choice look ignored.
+        if let store = activeModelStore {
+            if !store.state.isInstalled { store.refresh() }
+            if let message = onDeviceModelUnavailableMessage(for: store.state) {
+                dlog("[voice] \(engine) unavailable: \(message)")
+                isActive = false
+                onError(message)
+                return
+            }
+        }
+        // Apple's new model mid-download: same deal — say how far along it
+        // is and record nothing.
+        if engine == .speechAnalyzer, appleModels.localeKey == Self.speechLocaleKey,
+           case .downloading = appleModels.state,
+           let message = appleSpeechModelUnavailableMessage(for: appleModels.state) {
+            dlog("[voice] \(engine) unavailable: \(message)")
+            isActive = false
+            onError(message)
+            return
+        }
         sessionGeneration += 1
         isActive = true
         lastTranscript = ""
@@ -121,13 +183,10 @@ public final class VoiceSession {
         // first grant), begin the engine INLINE on this main-actor turn — no Task
         // hop, no async permission round-trip — so the mic goes live immediately
         // instead of a few hundred ms after the compass appears.
-        let needsSpeech = (engine == .apple)
+        let needsSpeech = engine.isApple
         if MicPermission.micAuthorizedSync(), !needsSpeech || MicPermission.speechAuthorizedSync() {
             dlog("[voice] permission pre-granted → begin \(engine) inline")
-            switch engine {
-            case .apple:         beginApple(onPartial: onPartial, onError: onError)
-            case .openai, .qwen: beginRealtime(onPartial: onPartial, onError: onError)
-            }
+            begin(onPartial: onPartial, onError: onError)
             return
         }
 
@@ -138,7 +197,7 @@ public final class VoiceSession {
                 dlog("[voice] mic permission DENIED")
                 isActive = false; onError("Microphone permission denied"); return
             }
-            if engine == .apple, await MicPermission.ensureSpeech() == false {
+            if engine.isApple, await MicPermission.ensureSpeech() == false {
                 dlog("[voice] speech permission DENIED")
                 isActive = false; onError("Speech recognition permission denied"); return
             }
@@ -150,11 +209,29 @@ public final class VoiceSession {
                 return
             }
             dlog("[voice] permissions ok → begin \(engine)")
-            switch engine {
-            case .apple:         beginApple(onPartial: onPartial, onError: onError)
-            case .openai, .qwen: beginRealtime(onPartial: onPartial, onError: onError)
-            }
+            begin(onPartial: onPartial, onError: onError)
         }
+    }
+
+    private func begin(onPartial: @escaping @MainActor (String) -> Void,
+                       onError: @escaping @MainActor (String) -> Void) {
+        switch engine {
+        case .apple:          beginApple(vocabulary: makeVocabularyTask(), onPartial: onPartial, onError: onError)
+        case .speechAnalyzer: beginAnalyzer(onPartial: onPartial, onError: onError)
+        case .openai, .qwen:  beginRealtime(onPartial: onPartial, onError: onError)
+        case .senseVoice:     beginOnDevice(onPartial: onPartial, onError: onError)
+        }
+    }
+
+    static var speechLocaleKey: String {
+        UserDefaults.standard.string(forKey: "speech_locale") ?? "auto"
+    }
+
+    /// The pane snapshot is taken now (main actor, property reads); reading
+    /// host aliases off disk and building the list happen off the main thread.
+    private func makeVocabularyTask() -> Task<[String], Never> {
+        let snapshot = vocabularyProvider?()
+        return Task { await ContextVocabulary.gather(snapshot) }
     }
 
     /// Quiet the interim must have been at release to treat it as the complete
@@ -200,16 +277,23 @@ public final class VoiceSession {
         let settled = interimSettled && engine != .qwen
         switch engine {
         case .apple:
-            // Settled partial → return it now (non-awaiting stop); otherwise await
-            // the on-device final (bounded internally) to catch the tail.
-            if settled {
-                let t = apple?.stopRecording() ?? lastTranscript
-                apple = nil
-                return t.isEmpty ? lastTranscript : t
-            }
-            let final = await apple?.finishRecording() ?? lastTranscript
-            apple = nil
-            return final.isEmpty ? lastTranscript : final
+            return await finishApple(settled: settled)
+
+        case .speechAnalyzer:
+            // Resolved to the old engine (no analyzer model for the language).
+            guard let rec = analyzerRecording else { return await finishApple(settled: settled) }
+            analyzerRecording = nil
+            audioCapture.stop()
+            // The tap's last chunk may still be on its way into the stream.
+            try? await Task.sleep(for: .milliseconds(40))
+            // Not "settled → return the partial": a volatile result is the
+            // model's draft, and finalizing on device is quick.
+            let text = await rec.finish()
+            if generation == sessionGeneration, interrupted { return "" }
+            return text
+
+        case .senseVoice:
+            return await finishOnDevice(generation: generation)
 
         case .openai, .qwen:
             audioCapture.stop()
@@ -286,6 +370,12 @@ public final class VoiceSession {
         case .apple:
             _ = apple?.stopRecording()
             apple = nil
+        case .speechAnalyzer:
+            audioCapture.stop()
+            analyzerRecording?.cancel()
+            analyzerRecording = nil
+            _ = apple?.stopRecording()
+            apple = nil
         case .openai, .qwen:
             audioCapture.stop()
             let asr = realtime
@@ -293,6 +383,10 @@ public final class VoiceSession {
             realtimeReady = false
             pendingPCM = []
             Task { await asr?.cancel() }
+        case .senseVoice:
+            partialTask?.cancel()
+            partialTask = nil
+            audioCapture.stop()
         }
         isActive = false
     }
@@ -350,6 +444,20 @@ public final class VoiceSession {
     public func refineRecordedPCM(screenText: String?,
                                   completion: @escaping @MainActor (String?) -> Void) -> Bool {
         guard let rec = takeRecordedPCM() else { return false }
+        if let store = activeModelStore {
+            // On-device: the "better model" IS the engine — decode the clip
+            // once and fill the preview with it.
+            let clipSeconds = recordedDuration
+            let model = store.model, dir = store.directory
+            Task {
+                let text = try? await OnDeviceASREngine.shared.transcribe(
+                    pcm16: rec.pcm, sampleRate: rec.sampleRate, model: model, directory: dir)
+                completion(text.flatMap {
+                    self.isHallucinated($0, clipSeconds: clipSeconds, corpus: "") ? nil : $0
+                })
+            }
+            return true
+        }
         let corpus = assembleQwenCorpus(screenText: screenText)
         let clipSeconds = recordedDuration
         Task {
@@ -369,14 +477,33 @@ public final class VoiceSession {
 
     // MARK: - Apple (on-device)
 
-    private func beginApple(onPartial: @escaping @MainActor (String) -> Void,
+    /// Settled partial → return it now (non-awaiting stop); otherwise await
+    /// the on-device final (bounded internally) to catch the tail.
+    private func finishApple(settled: Bool) async -> String {
+        if settled {
+            let t = apple?.stopRecording() ?? lastTranscript
+            apple = nil
+            return t.isEmpty ? lastTranscript : t
+        }
+        let final = await apple?.finishRecording() ?? lastTranscript
+        apple = nil
+        return final.isEmpty ? lastTranscript : final
+    }
+
+    private func beginApple(vocabulary: Task<[String], Never>,
+                            onPartial: @escaping @MainActor (String) -> Void,
                             onError: @escaping @MainActor (String) -> Void) {
         guard isActive else { return }
         let eng = AppleSpeechEngine()
         apple = eng
         Task {
+            // Milliseconds: the snapshot was taken already, this is the
+            // ~/.ssh/config read and the dedupe.
+            let strings = await vocabulary.value
+            // Released (or superseded) while the list was being built.
+            guard apple === eng else { return }
             do {
-                try await eng.startRecording { partial in
+                try await eng.startRecording(contextualStrings: strings) { partial in
                     Task { @MainActor in
                         self.lastTranscript = partial; self.lastInterimAt = Date(); onPartial(partial)
                     }
@@ -387,6 +514,338 @@ public final class VoiceSession {
                 await MainActor.run { onError(error.localizedDescription) }
             }
         }
+    }
+
+    // MARK: - Apple new model (SpeechAnalyzer)
+
+    /// The plan for this language is normally cached after the first hold, so
+    /// the mic opens inline. The first hold (or one after a language change)
+    /// resolves the fallback chain first, and if Apple's model has to be
+    /// downloaded, starts that and says so instead of recording.
+    private func beginAnalyzer(onPartial: @escaping @MainActor (String) -> Void,
+                               onError: @escaping @MainActor (String) -> Void) {
+        guard isActive else { return }
+        let key = Self.speechLocaleKey
+        let vocabulary = makeVocabularyTask()
+        if let plan = appleModels.cachedPlan(for: key) {
+            startAnalyzer(plan, vocabulary: vocabulary, onPartial: onPartial, onError: onError)
+            return
+        }
+        if appleModels.isLegacy(for: key) {
+            beginApple(vocabulary: vocabulary, onPartial: onPartial, onError: onError)
+            return
+        }
+        let generation = sessionGeneration
+        Task {
+            let outcome = await appleModels.prepare(localeKey: key, download: true)
+            guard isActive, generation == sessionGeneration else { return }
+            switch outcome {
+            case .ready(let plan):
+                startAnalyzer(plan, vocabulary: vocabulary, onPartial: onPartial, onError: onError)
+            case .legacy:
+                beginApple(vocabulary: vocabulary, onPartial: onPartial, onError: onError)
+            case .unavailable:
+                let message = appleSpeechModelUnavailableMessage(for: appleModels.state)
+                    ?? AppleSpeechModelStore.downloadFailedMessage
+                dlog("[voice] \(engine) unavailable: \(message)")
+                onError(message)
+            }
+        }
+    }
+
+    /// Mic → analyzer straight from the capture queue: the PCM never visits
+    /// the main thread, and only the text comes back here.
+    private func startAnalyzer(_ plan: AppleReadyPlan, vocabulary: Task<[String], Never>,
+                               onPartial: @escaping @MainActor (String) -> Void,
+                               onError: @escaping @MainActor (String) -> Void) {
+        guard #available(iOS 26.0, macOS 26.0, *) else {
+            beginApple(vocabulary: vocabulary, onPartial: onPartial, onError: onError)
+            return
+        }
+        let rec = SpeechAnalyzerRecording(plan: plan)
+        analyzerRecording = rec
+        let generation = sessionGeneration
+        audioCapture.onPCM = { [weak rec] pcm in rec?.feed(pcm) }
+        do {
+            try audioCapture.start(targetSampleRate: rec.sampleRate)
+            dlog("[voice] apple-new capture started @\(Int(rec.sampleRate))Hz")
+        } catch {
+            dlog("[voice] mic capture FAILED: \(error.localizedDescription)")
+            onError(error.localizedDescription)
+            return
+        }
+        rec.begin(vocabulary: vocabulary, onPartial: { text in
+            Task { @MainActor in
+                guard generation == self.sessionGeneration, self.isActive else { return }
+                self.lastTranscript = text
+                self.lastInterimAt = Date()
+                onPartial(text)
+            }
+        }, onError: { error in
+            Task { @MainActor in
+                guard generation == self.sessionGeneration, self.isActive else { return }
+                onError(error.localizedDescription)
+            }
+        })
+    }
+
+    // MARK: - On-device model (SenseVoice): simulated streaming
+
+    /// Record the clip locally (nothing leaves the device) and, while the user
+    /// talks, re-decode what's been captured so far every
+    /// `OnDevicePartialPolicy.tickInterval` so they see what the model
+    /// understood — the offline model has no streaming mode of its own. The
+    /// model starts loading now so neither the first partial nor the final
+    /// waits for it.
+    private func beginOnDevice(onPartial: @escaping @MainActor (String) -> Void,
+                               onError: @escaping @MainActor (String) -> Void) {
+        guard isActive, let store = activeModelStore else { return }
+        let generation = sessionGeneration
+        activeSampleRate = Double(OnDeviceASRModel.sampleRate)
+        activeCorpus = ""
+        speechGate = SpeechGate(sampleRate: activeSampleRate)
+        partialDecodeInFlight = false
+        partialDecodedBytes = 0
+        committedBytes = 0
+        committedText = ""
+        vadFedBytes = 0
+        do {
+            segmenter = try OnDeviceSegmenter()
+        } catch {
+            segmenter = nil
+            dlog("[voice] VAD unavailable (\(error.localizedDescription)) — cutting segments by loudness")
+        }
+        OnDeviceASREngine.shared.preload(store.model, directory: store.directory)
+        audioCapture.onPCM = { [weak self] pcm in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.recordedPCM.count < Self.recordedPCMMaxBytes {
+                    self.recordedPCM.append(pcm)
+                } else {
+                    self.recordedPCMOverflowed = true
+                }
+                // The gate only measures here: it is how a silent hold or a
+                // click resolves empty instead of being decoded.
+                _ = self.speechGate.admit(pcm)
+            }
+        }
+        do {
+            try audioCapture.start(targetSampleRate: activeSampleRate)
+            dlog("[voice] on-device capture started @\(Int(activeSampleRate))Hz")
+        } catch {
+            dlog("[voice] mic capture FAILED: \(error.localizedDescription)")
+            onError(error.localizedDescription)
+            return
+        }
+        partialTask?.cancel()
+        partialTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: OnDevicePartialPolicy.tickInterval)
+                guard let self, self.isActive, generation == self.sessionGeneration else { return }
+                self.partialTick(store: store, generation: generation, onPartial: onPartial)
+            }
+        }
+    }
+
+    /// One tick of the simulated stream. The offline model has no streaming
+    /// mode, so each tick decodes audio again — but only the OPEN segment (the
+    /// audio since the last pause), never the whole clip. When a pause closes
+    /// the segment (or it runs too long without one), that stretch is decoded
+    /// once and kept: the text before it stops changing, and each tick costs
+    /// at most a segment's worth of decoding however long the hold.
+    ///
+    /// Main actor work is a decision and a copy of the open segment; the
+    /// decodes run on the engine's serial queue.
+    private func partialTick(store: OnDeviceModelStore, generation: Int,
+                             onPartial: @escaping @MainActor (String) -> Void) {
+        if let segmenter {
+            partialTickByVAD(segmenter, store: store, generation: generation, onPartial: onPartial)
+        } else {
+            partialTickByLoudness(store: store, generation: generation, onPartial: onPartial)
+        }
+    }
+
+    /// Segments closed by the VAD (a pause of 0.1 s, or 8 s without one) are
+    /// decoded once and kept; while one is open, only it is decoded for the
+    /// live text — sherpa-onnx's own simulated streaming for SenseVoice.
+    private func partialTickByVAD(_ segmenter: OnDeviceSegmenter, store: OnDeviceModelStore,
+                                  generation: Int,
+                                  onPartial: @escaping @MainActor (String) -> Void) {
+        let total = recordedPCM.count & ~1
+        guard !partialDecodeInFlight, speechGate.isOpen, total > vadFedBytes else { return }
+        let fresh = recordedPCM.subdata(in: vadFedBytes..<total)
+        vadFedBytes = total
+        partialDecodeInFlight = true
+        let rate = activeSampleRate
+        let model = store.model, dir = store.directory
+        Task { @MainActor [weak self] in
+            let (segments, speaking) = await segmenter.accept(pcm16: fresh)
+            guard let self, generation == self.sessionGeneration else { return }
+            for segment in segments where !segment.samples.isEmpty {
+                let range = OnDevicePartialPolicy.segmentBytes(
+                    in: self.recordedPCM, start: segment.start, count: segment.samples.count,
+                    floor: self.committedBytes, sampleRate: rate)
+                self.committedBytes = max(self.committedBytes, range.upperBound)
+                let pcm = self.recordedPCM.subdata(in: range)
+                do {
+                    let text = try await OnDeviceASREngine.shared.transcribe(
+                        pcm16: pcm, sampleRate: rate, model: model, directory: dir)
+                    guard generation == self.sessionGeneration else { return }
+                    self.committedText = OnDevicePartialPolicy.join(self.committedText, text)
+                } catch {
+                    dlog("[voice] on-device segment decode FAILED: \(error.localizedDescription)")
+                }
+            }
+            var open = ""
+            let end = min(self.vadFedBytes, self.recordedPCM.count & ~1)
+            let start = min(self.committedBytes, end)
+            if speaking, Double(end - start) >= OnDevicePartialPolicy.minAudioSeconds * rate * 2 {
+                let tail = self.recordedPCM.subdata(in: start..<end)
+                open = (try? await OnDeviceASREngine.shared.transcribe(
+                    pcm16: tail, sampleRate: rate, model: model, directory: dir)) ?? ""
+                guard generation == self.sessionGeneration else { return }
+            }
+            self.partialDecodeInFlight = false
+            guard self.isActive else { return }
+            let shown = OnDevicePartialPolicy.join(self.committedText, open)
+            guard !shown.isEmpty else { return }
+            self.lastTranscript = shown
+            self.lastInterimAt = Date()
+            onPartial(shown)
+        }
+    }
+
+    /// Fallback when the VAD can't load: segments cut at quiet stretches.
+    private func partialTickByLoudness(store: OnDeviceModelStore, generation: Int,
+                                       onPartial: @escaping @MainActor (String) -> Void) {
+        let total = recordedPCM.count & ~1   // whole samples only
+        guard !partialDecodeInFlight, speechGate.isOpen, total > partialDecodedBytes,
+              total > committedBytes else { return }
+        let rate = activeSampleRate
+        let open = recordedPCM.subdata(in: committedBytes..<total)
+        var closing: Data?
+        if let cut = OnDevicePartialPolicy.cut(open, sampleRate: rate) {
+            if cut.voiced { closing = open.subdata(in: 0..<cut.offset) }
+            committedBytes += cut.offset
+        }
+        let tail = recordedPCM.subdata(in: committedBytes..<total)
+        let decodeTail = Double(tail.count) >= OnDevicePartialPolicy.minAudioSeconds * rate * 2
+        partialDecodedBytes = total
+        partialDecodeInFlight = true
+        let model = store.model, dir = store.directory
+        Task { @MainActor [weak self] in
+            var closed = ""
+            if let closing {
+                do {
+                    closed = try await OnDeviceASREngine.shared.transcribe(
+                        pcm16: closing, sampleRate: rate, model: model, directory: dir)
+                } catch {
+                    dlog("[voice] on-device segment decode FAILED: \(error.localizedDescription)")
+                }
+            }
+            let open = decodeTail ? (try? await OnDeviceASREngine.shared.transcribe(
+                pcm16: tail, sampleRate: rate, model: model, directory: dir)) ?? "" : ""
+            guard let self, generation == self.sessionGeneration else { return }
+            self.committedText = OnDevicePartialPolicy.join(self.committedText, closed)
+            self.partialDecodeInFlight = false
+            guard self.isActive else { return }
+            let shown = OnDevicePartialPolicy.join(self.committedText, open)
+            guard !shown.isEmpty else { return }
+            self.lastTranscript = shown
+            self.lastInterimAt = Date()
+            onPartial(shown)
+        }
+    }
+
+    /// Stop the mic and decode what no tick has closed yet — the open segment —
+    /// off the main thread, then put it after the segments already decoded.
+    /// The final is therefore what was on screen plus its last words, rather
+    /// than a fresh decode of the whole clip that could disagree with it.
+    private func finishOnDevice(generation: Int) async -> String {
+        partialTask?.cancel()
+        partialTask = nil
+        audioCapture.stop()
+        // Chunks the tap delivered just before the stop are still queued as
+        // main-actor tasks; let them land so the last syllable isn't cut.
+        try? await Task.sleep(for: .milliseconds(40))
+        // A new hold began in that window: the buffer is already its clip.
+        guard generation == sessionGeneration else { return "" }
+        guard speechGate.isOpen, speechGate.voicedDuration >= Self.minVoicedSeconds else {
+            dlog("[voice] not enough speech during hold (maxRMS=\(Int(speechGate.maxRMS)), voiced=\(String(format: "%.2f", speechGate.voicedDuration))s) — empty result")
+            return ""
+        }
+        // A tick may be closing a segment right now; its text belongs before
+        // the tail. Bounded: past it, decode the whole clip as one.
+        var waits = 0
+        while partialDecodeInFlight, waits < 150 {
+            try? await Task.sleep(for: .milliseconds(20))
+            waits += 1
+        }
+        guard generation == sessionGeneration else { return "" }
+        if let segmenter, !partialDecodeInFlight {
+            return await finishByVAD(segmenter, generation: generation)
+        }
+        let whole = partialDecodeInFlight
+        // Snapshot before the await: a new hold may start while this decodes,
+        // and it resets the buffer. This utterance still gets its text.
+        let total = recordedPCM.count & ~1
+        let start = whole ? 0 : min(committedBytes, total)
+        let pcm = recordedPCM.subdata(in: start..<total)
+        let committed = whole ? "" : committedText
+        let rate = activeSampleRate
+        let clipSeconds = recordedDuration
+        guard let store = activeModelStore else { return "" }
+        let model = store.model, dir = store.directory
+        do {
+            let tail = pcm.count >= Int(rate * 0.1) * 2
+                ? try await OnDeviceASREngine.shared.transcribe(
+                    pcm16: pcm, sampleRate: rate, model: model, directory: dir)
+                : ""
+            let text = OnDevicePartialPolicy.join(committed, tail)
+            if generation == sessionGeneration, interrupted { return "" }
+            return isImplausibleTranscript(text, clipSeconds: clipSeconds, corpus: "") ? "" : text
+        } catch {
+            dlog("[voice] on-device decode FAILED: \(error.localizedDescription)")
+            // Files that verified but won't load: forget the install so the
+            // next hold says to download it again instead of failing silently.
+            store.invalidate()
+            return committed
+        }
+    }
+
+    /// The VAD's final: feed it the rest of the clip, close the open segment,
+    /// decode what closed and put it after the segments already kept.
+    private func finishByVAD(_ segmenter: OnDeviceSegmenter, generation: Int) async -> String {
+        let total = recordedPCM.count & ~1
+        let fresh = recordedPCM.subdata(in: min(vadFedBytes, total)..<total)
+        vadFedBytes = total
+        let committed = committedText
+        let clipSeconds = recordedDuration
+        guard let store = activeModelStore else { return committed }
+        let model = store.model, dir = store.directory
+        // Snapshot: a new hold may start while this decodes and reset these.
+        let clip = recordedPCM
+        var floor = committedBytes
+        let rate = activeSampleRate
+        let segments = await segmenter.finish(pcm16: fresh)
+        var text = committed
+        for segment in segments where !segment.samples.isEmpty {
+            let range = OnDevicePartialPolicy.segmentBytes(
+                in: clip, start: segment.start, count: segment.samples.count,
+                floor: floor, sampleRate: rate)
+            floor = max(floor, range.upperBound)
+            do {
+                let part = try await OnDeviceASREngine.shared.transcribe(
+                    pcm16: clip.subdata(in: range), sampleRate: rate, model: model, directory: dir)
+                text = OnDevicePartialPolicy.join(text, part)
+            } catch {
+                dlog("[voice] on-device decode FAILED: \(error.localizedDescription)")
+                store.invalidate()
+                return committed
+            }
+        }
+        if generation == sessionGeneration, interrupted { return "" }
+        return isImplausibleTranscript(text, clipSeconds: clipSeconds, corpus: "") ? "" : text
     }
 
     // MARK: - Realtime (OpenAI gpt-realtime-whisper / Qwen qwen3-asr-flash-realtime)
@@ -547,6 +1006,7 @@ public func voiceDirection(forTranslation t: CGSize, threshold: CGFloat = 40) ->
 public protocol VoiceSessionProtocol: AnyObject {
     var currentTranscript: String { get }
     var contextProvider: (() -> String?)? { get set }
+    var vocabularyProvider: (() -> VoiceContextSnapshot?)? { get set }
     func prewarm()
     func start(onPartial: @escaping @MainActor (String) -> Void,
                onError: @escaping @MainActor (String) -> Void)
@@ -557,3 +1017,123 @@ public protocol VoiceSessionProtocol: AnyObject {
 }
 
 extension VoiceSession: VoiceSessionProtocol {}
+
+// MARK: - Simulated streaming policy (on-device engines)
+
+/// How a hold is cut into segments for live partials. Pure, so the rules are
+/// testable without audio. The session decodes only the open segment each
+/// tick and keeps a closed segment's text for good; it skips a tick while a
+/// decode is running, when nothing new arrived, under ~0.3 s of audio, and
+/// before the speech gate opens (decoding silence only invites junk).
+///
+/// It used to re-decode the whole clip every tick (a trailing 20 s window
+/// past that): the model revised earlier words on every pass, and once the
+/// window started sliding the whole line was replaced each time — long
+/// dictation jumped about the screen.
+enum OnDevicePartialPolicy {
+    /// How often a partial is attempted while the user talks. The knob to
+    /// tune: lower = livelier text, more CPU.
+    static let tickInterval: Duration = .milliseconds(350)
+    static let minAudioSeconds: Double = 0.3
+    /// Silence this long after speech closes a segment.
+    static let pauseSeconds: Double = 0.45
+    /// No pause for this long: close the segment anyway, at the quietest
+    /// moment of its last `forcedCutSearchSeconds`.
+    static let maxSegmentSeconds: Double = 12
+    static let forcedCutSearchSeconds: Double = 3
+    static let frameSeconds: Double = 0.02
+    /// Below this a frame counts as silence — the speech gate's threshold.
+    static let silenceRMS: Double = 180
+
+    struct Cut: Equatable {
+        /// Byte offset into the open segment's audio.
+        let offset: Int
+        /// The closed stretch has speech in it (one without is skipped, not
+        /// decoded — a model given silence makes words up).
+        let voiced: Bool
+    }
+
+    /// Where to close the open segment (`pcm` = the audio since the last cut),
+    /// or nil to keep it open: in the middle of the first pause after speech,
+    /// or — no pause within `maxSegmentSeconds` — at its quietest recent frame.
+    static func cut(_ pcm: Data, sampleRate: Double) -> Cut? {
+        let frameBytes = Int(sampleRate * frameSeconds) * 2
+        guard frameBytes > 0 else { return nil }
+        let levels = frameLevels(pcm, frameBytes: frameBytes)
+        let pauseFrames = max(1, Int((pauseSeconds / frameSeconds).rounded()))
+        var voiced = false
+        var runStart = -1
+        for (i, level) in levels.enumerated() {
+            if level >= silenceRMS { voiced = true; runStart = -1; continue }
+            guard voiced else { continue }
+            if runStart < 0 { runStart = i }
+            if i - runStart + 1 >= pauseFrames {
+                return Cut(offset: (runStart + pauseFrames / 2) * frameBytes, voiced: true)
+            }
+        }
+        let maxFrames = Int(maxSegmentSeconds / frameSeconds)
+        guard levels.count >= maxFrames else { return nil }
+        let lo = max(1, maxFrames - Int(forcedCutSearchSeconds / frameSeconds))
+        let quietest = (lo..<maxFrames).min { levels[$0] < levels[$1] } ?? maxFrames
+        return Cut(offset: quietest * frameBytes,
+                   voiced: levels[..<quietest].contains { $0 >= silenceRMS })
+    }
+
+    /// RMS of each whole frame of 16-bit little-endian mono PCM.
+    static func frameLevels(_ pcm: Data, frameBytes: Int) -> [Double] {
+        let samplesPerFrame = frameBytes / 2
+        let frames = pcm.count / frameBytes
+        guard frames > 0, samplesPerFrame > 0 else { return [] }
+        var out = [Double](repeating: 0, count: frames)
+        pcm.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            guard let base = raw.baseAddress else { return }
+            for f in 0..<frames {
+                var acc = 0.0
+                for i in 0..<samplesPerFrame {
+                    let v = Double(base.loadUnaligned(fromByteOffset: (f * samplesPerFrame + i) * 2, as: Int16.self))
+                    acc += v * v
+                }
+                out[f] = (acc / Double(samplesPerFrame)).squareRoot()
+            }
+        }
+        return out
+    }
+
+    /// Where a VAD segment is decoded from in the clip. The VAD reports
+    /// speech a little after it starts and closes a segment a little into
+    /// what follows, so its own samples clip the first syllable and can end
+    /// on the next one's onset. So: start `leadSeconds` earlier (never before
+    /// what was already decoded), and end at the quietest moment of the
+    /// segment's last `endSearchSeconds` — the real gap — rather than at its
+    /// reported end.
+    static let leadSeconds: Double = 0.3
+    static let endSearchSeconds: Double = 0.3
+
+    static func segmentBytes(in clip: Data, start: Int, count: Int, floor: Int,
+                             sampleRate: Double) -> Range<Int> {
+        let ceiling = clip.count & ~1
+        let lead = Int(leadSeconds * sampleRate)
+        let lo = min(ceiling, max(floor, (start - lead) * 2)) & ~1
+        var hi = min(ceiling, (start + count) * 2) & ~1
+        let frameBytes = Int(sampleRate * frameSeconds) * 2
+        let searchLo = max(lo, hi - Int(endSearchSeconds * sampleRate) * 2) & ~1
+        if frameBytes > 0, hi - searchLo >= frameBytes {
+            let levels = frameLevels(clip.subdata(in: searchLo..<hi), frameBytes: frameBytes)
+            if let quietest = levels.indices.min(by: { levels[$0] < levels[$1] }) {
+                hi = (searchLo + quietest * frameBytes + frameBytes / 2) & ~1
+            }
+        }
+        return lo..<max(lo, hi)
+    }
+
+    /// Put two decoded stretches together: CJK runs straight on, words of a
+    /// Latin-script language get a space between them.
+    static func join(_ a: String, _ b: String) -> String {
+        guard !a.isEmpty else { return b }
+        guard !b.isEmpty else { return a }
+        guard let last = a.unicodeScalars.last, let first = b.unicodeScalars.first,
+              last.isASCII, first.isASCII, !CharacterSet.whitespaces.contains(last),
+              CharacterSet.alphanumerics.contains(first) else { return a + b }
+        return a + " " + b
+    }
+}

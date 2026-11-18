@@ -56,6 +56,9 @@ final class PlainTerminalHost: NSView {
         voiceController.onResult = { [weak viewModel] result in
             viewModel?.handleVoiceResult(result)
         }
+        voiceController.readVoiceContext = { [weak viewModel] in
+            viewModel?.voiceContextSnapshot(loadHostAliases: { SSHConfigHosts.hosts() })
+        }
         voiceController.$showOverlay
             .receive(on: RunLoop.main)
             .sink { [weak self] show in self?.voiceOverlay?.isHidden = !show }

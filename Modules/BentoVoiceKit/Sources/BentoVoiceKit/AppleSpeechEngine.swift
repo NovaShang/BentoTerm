@@ -40,6 +40,13 @@ public final class AppleSpeechEngine: NSObject, SpeechEngine, @unchecked Sendabl
     }
 
     public func startRecording(onPartialResult: @escaping @Sendable (String) -> Void) async throws {
+        try await startRecording(contextualStrings: [], onPartialResult: onPartialResult)
+    }
+
+    /// `contextualStrings` bias the recognizer's language model toward the
+    /// terminal's words (see `ContextVocabulary`); it never echoes them.
+    public func startRecording(contextualStrings: [String],
+                               onPartialResult: @escaping @Sendable (String) -> Void) async throws {
         refreshRecognizer()
         guard let speechRecognizer, speechRecognizer.isAvailable else {
             throw SpeechError.notAvailable
@@ -54,6 +61,7 @@ public final class AppleSpeechEngine: NSObject, SpeechEngine, @unchecked Sendabl
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.addsPunctuation = true
+        if !contextualStrings.isEmpty { request.contextualStrings = contextualStrings }
         recognitionRequest = request
 
         recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in

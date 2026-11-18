@@ -42,6 +42,30 @@ public extension TerminalViewModel {
         }
     }
 
+    /// What the Apple engines' contextual strings are built from, for the
+    /// pane a recording targets (the active one: a voice press selects its
+    /// pane first). Property reads only — this runs on the main actor at the
+    /// start of a hold. `loadHostAliases` is the platform's disk-backed host
+    /// list (`~/.ssh/config` on the Mac, saved hosts on iOS); it is run off
+    /// the main thread by `ContextVocabulary.gather`.
+    func voiceContextSnapshot(loadHostAliases: (@Sendable () -> [String])? = nil) -> VoiceContextSnapshot {
+        let paneID = activePaneID
+        let pane = paneID.flatMap { id in
+            paneViewModels.first { $0.paneID == id }?.pane ?? sessionPanes.first { $0.id == id }
+        }
+        // Active window first: it is the one being looked at.
+        let windowNames = windows.sorted { $0.isActive && !$1.isActive }.map(\.name)
+        let hostNames = [host.name, host.hostname].filter { !$0.isEmpty }
+        return VoiceContextSnapshot(
+            command: pane?.currentCommand,
+            cwd: paneID.flatMap { paneWorkingDirectories[$0] },
+            paneTitle: pane?.title,
+            sessionName: activeTmuxSessionName,
+            windowNames: windowNames,
+            hostNames: hostNames,
+            loadHostAliases: loadHostAliases)
+    }
+
     /// Recent terminal text used as LLM context for the active pane.
     func recentPaneContext() -> String {
         if let activePaneID {

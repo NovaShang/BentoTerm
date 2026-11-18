@@ -32,6 +32,9 @@ if [ -x bundled-tmux/tmux-darwin-arm64 ]; then
     export PATH="$tmux_bin:$PATH"
 fi
 
+# BentoVoiceKit links sherpa-onnx, which is fetched rather than committed
+# (no-op once present).
+step "fetch sherpa-onnx" ./scripts/fetch-sherpa-onnx.sh
 step "terminology" ./scripts/check-terminology.sh
 # All kits, in dependency order. (The old swift-tmux / bento-terminal-core
 # packages were folded into Modules/ on 2026-08-02.) BentoUISharedKit has no

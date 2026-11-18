@@ -20,6 +20,7 @@ let package = Package(
         .package(path: "../BentoFoundationKit"),
         .package(path: "../BentoSessionKit"),
         .package(path: "../BentoFilePreviewKit"),
+        .package(path: "../BentoVoiceKit"),
     ],
     targets: [
         .target(
@@ -29,6 +30,8 @@ let package = Package(
                 "BentoFoundationKit",
                 "BentoSessionKit",
                 "BentoFilePreviewKit",
+                // Settings → Voice drives the on-device model download.
+                "BentoVoiceKit",
             ]
         ),
         .testTarget(

@@ -41,3 +41,7 @@ tests/maestro/*.png
 .dd-ios-device/
 .dd-*/
 film/out/
+
+# sherpa-onnx xcframework built by scripts/fetch-sherpa-onnx.sh (~90 MB).
+/Modules/SherpaOnnxKit/SherpaOnnx.xcframework/
+/Modules/SherpaOnnxKit/.sherpa-onnx-version

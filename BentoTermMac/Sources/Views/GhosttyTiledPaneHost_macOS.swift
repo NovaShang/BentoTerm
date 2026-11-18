@@ -148,6 +148,10 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         voiceController.onResult = { [weak self] result in
             self?.viewModel.handleVoiceResult(result)
         }
+        // Words from this session for the Apple engines' contextual strings.
+        voiceController.readVoiceContext = { [weak self] in
+            self?.viewModel.voiceContextSnapshot(loadHostAliases: { SSHConfigHosts.hosts() })
+        }
         voiceController.$showOverlay
             .receive(on: RunLoop.main)
             .sink { [weak self] show in
