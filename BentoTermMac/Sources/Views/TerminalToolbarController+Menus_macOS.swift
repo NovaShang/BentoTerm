@@ -31,7 +31,9 @@ extension TerminalToolbarController {
         }
         // The tab bar switches between OPEN sessions; this list covers the rest
         // — picking one moves this window onto it.
-        sessionSwitchSection(menu)
+        // …unless the sidebar is shown: it lists every session already, and
+        // two lists of the same thing leave you unsure which one is real.
+        if listsSessionsInMenu { sessionSwitchSection(menu) }
         add(menu, "Rename Session…", #selector(renameAction))
         // Only when something has fixed the size: taking it over is the
         // banner's job, and the default needs no row.
@@ -243,6 +245,12 @@ extension TerminalToolbarController {
     /// "Window" reads as a Mac window everywhere else in the OS. Key
     /// equivalents are the menu bar's, shown here as a reminder.
     @objc func newTapped() {
+        pop(newMenu(), from: newButton)
+    }
+
+    /// The ＋ menu — the toolbar's button while the sidebar is away, the
+    /// sidebar's foot while it is shown.
+    func newMenu() -> NSMenu {
         let menu = NSMenu()
         let context = PaneMenuContext(isTmuxPane: !isPlain,
                                       sessionMode: sessionMode ?? .tiled)
@@ -273,9 +281,26 @@ extension TerminalToolbarController {
         menu.addItem(SSHHostMenu.item(target: self,
                                       remoteTmux: #selector(remoteSessionAction(_:)),
                                       shell: #selector(sshShellAction(_:))).keepingImageVisible())
-
-        pop(menu, from: newButton)
+        return menu
     }
+
+    /// Settings, updates, About — the rows the session button's menu ends
+    /// with, for the sidebar's ⚙ while that button is gone.
+    func appMenu() -> NSMenu {
+        let menu = NSMenu()
+        appSection(menu)
+        if menu.items.first?.isSeparatorItem == true { menu.removeItem(at: 0) }
+        return menu
+    }
+
+    /// Pop `menu` just above the pointer — for a control that isn't AppKit's
+    /// (the sidebar's foot is SwiftUI).
+    func popAtPointer(_ menu: NSMenu) {
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    /// Session ⌄ → Release Size, for the sidebar's session row.
+    func releaseSize() { onReleaseSize?() }
 
     /// A one-line row: symbol, title, and the explanation on hover.
     private func plainItem(symbol: String?, title: String, tip: String, action: Selector?) -> NSMenuItem {

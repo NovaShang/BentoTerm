@@ -78,11 +78,15 @@ extension TerminalWindowManager {
         if hasOverflow {
             items.append(("", "more", NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More windows")))
         }
-        // The centre is shared with the location title. A switcher for ONE window says nothing, and in Focus the
-        // sidebar is already the window list — so in both cases that space says
-        // where the focused pane is instead.
-        let isFocus = tab.viewModel.sessionMode == .list
-        toolbar.setCenterShowsTabs(!isFocus && tmuxWindows.count > 1)
+        // The centre is shared with the location title. A switcher for ONE
+        // window says nothing, and while the sidebar is shown it is already the
+        // window list — so in both cases that space says where the focused
+        // pane is instead. With the sidebar away the strip is the switcher, in
+        // either mode.
+        let sidebarShown = self.sidebarShown
+        toolbar.setCenterShowsTabs(!sidebarShown && tmuxWindows.count > 1)
+        toolbar.listsSessionsInMenu = !sidebarShown
+        toolbar.sidebarShown = sidebarShown
 
         let activeIdx = activeWindowID.flatMap { id in visible.firstIndex { $0.id == id } } ?? -1
         toolbar.updateTabs(items, selected: activeIdx)
@@ -96,6 +100,7 @@ extension TerminalWindowManager {
             toolbar.sizingOwnerIsMe = active.viewModel.sizingOwnerIsMe
             toolbar.sizeMismatch = active.viewModel.sessionSizeMismatch
         }
+        rebuildSidebar()
     }
 
 

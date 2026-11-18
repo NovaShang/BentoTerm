@@ -19,6 +19,7 @@
 		1D2EDA24577C317F162E10D1 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B6C52CD52BC257E2AAFF715 /* SettingsView.swift */; };
 		1F1BFEF946A74D6192E92B60 /* PaneContainerVC+Layout.swift in Sources */ = {isa = PBXBuildFile; fileRef = D866D970CE314B7879477AC1 /* PaneContainerVC+Layout.swift */; };
 		24620D99BA434A2095318856 /* GhosttyTiledPaneHost+Actions.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF931EEE7805DA9B524737BB /* GhosttyTiledPaneHost+Actions.swift */; };
+		271AF6134E330868969BDA4D /* TerminalWindowManager+Sidebar_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0839BFC41A3B24AEC605F20 /* TerminalWindowManager+Sidebar_macOS.swift */; };
 		282DED3858B0440A89828794 /* TmuxResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 290C740D8E9D4EB5520195EF /* TmuxResolver.swift */; };
 		290D08C30B891884D76A97D5 /* GhosttyTiledPaneHost_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3584533185D6686FE3BA1548 /* GhosttyTiledPaneHost_macOS.swift */; };
 		295807B84441469F8E683805 /* SSHKeyGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31809EE7FD547FC85DF4F628 /* SSHKeyGenerator.swift */; };
@@ -233,6 +234,7 @@
 		AF931EEE7805DA9B524737BB /* GhosttyTiledPaneHost+Actions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GhosttyTiledPaneHost+Actions.swift"; sourceTree = "<group>"; };
 		AF9DBB6D03D227C62D3B9816 /* WelcomeFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeFlowView.swift; sourceTree = "<group>"; };
 		B06F422BAC36C23B8F22B665 /* MacKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacKeychain.swift; sourceTree = "<group>"; };
+		B0839BFC41A3B24AEC605F20 /* TerminalWindowManager+Sidebar_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TerminalWindowManager+Sidebar_macOS.swift"; sourceTree = "<group>"; };
 		B3BDABB268588893433DC067 /* TileDividerOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TileDividerOverlay.swift; sourceTree = "<group>"; };
 		B73561C6F88999D2ABEF2F0B /* GhosttyKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GhosttyKit; path = Modules/GhosttyKit; sourceTree = SOURCE_ROOT; };
 		B75E58A2AE8BB259D1E2A63A /* SessionsMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsMenu.swift; sourceTree = "<group>"; };
@@ -456,6 +458,7 @@
 				2AD2718AD486BCF95CA8F26A /* TerminalToolbarController+Menus_macOS.swift */,
 				3B51C7A958A799CE19F008CA /* TerminalToolbarController+WindowStrip_macOS.swift */,
 				9F8B832DDB58A11F917F4D49 /* TerminalWindowManager+Bindings_macOS.swift */,
+				B0839BFC41A3B24AEC605F20 /* TerminalWindowManager+Sidebar_macOS.swift */,
 				DE42C19F6BAF4A443956B99B /* TerminalWindowManager+WindowStrip_macOS.swift */,
 			);
 			path = Views;
@@ -969,6 +972,7 @@
 				AF96097580A9742496E5C848 /* TerminalToolbarController+Menus_macOS.swift in Sources */,
 				C29557B57325ABF4CA70AA6E /* TerminalToolbarController+WindowStrip_macOS.swift in Sources */,
 				957AFB467BE5128F7BF42782 /* TerminalWindowManager+Bindings_macOS.swift in Sources */,
+				271AF6134E330868969BDA4D /* TerminalWindowManager+Sidebar_macOS.swift in Sources */,
 				A16F2BE02BB508B1FF67333A /* TerminalWindowManager+WindowStrip_macOS.swift in Sources */,
 				2D0D3C403373C25D72F2AF79 /* TmuxCLI.swift in Sources */,
 				282DED3858B0440A89828794 /* TmuxResolver.swift in Sources */,

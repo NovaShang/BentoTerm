@@ -22,9 +22,22 @@ extension TerminalWindowManager {
                 self.rebuildTabBar()
             }
             .store(in: &activeCancellables)
-        // Mode drives the toolbar's Tiled|List switch and the sidebar (List
-        // only). A single-pane session has no switch (`SessionChrome`), so it
-        // also follows
+        // The sidebar's rows also say what each window's panes are doing and
+        // where (titles, `cd`, a status moving between windows) — changes the
+        // strip above never needed. Coalesced: a busy session republishes its
+        // panes several times a second.
+        tab.viewModel.$sessionPanes.map { _ in () }
+            .merge(with: tab.viewModel.$paneWorkingDirectories.map { _ in () },
+                   tab.viewModel.$stateVersion.map { _ in () })
+            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .sink { [weak self, weak tab] in
+                guard let self, let tab, tab === self.activeTab else { return }
+                self.rebuildSidebar()
+            }
+            .store(in: &activeCancellables)
+        // Mode drives the ＋ menu's first row and the sidebar's selection (split
+        // → the session row, alone → the pane row). A single-pane session
+        // has no switch (`SessionChrome`), so it also follows
         // the session's pane and window counts. The values are taken from the
         // publishers rather than re-read: `@Published` emits BEFORE the
         // property is assigned.

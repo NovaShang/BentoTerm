@@ -159,3 +159,12 @@ extension TerminalViewModel {
     }
 }
 
+
+public extension TerminalViewModel {
+    /// One pane's status as its chrome would show it — the same caches the
+    /// window aggregate reads, for a list that names panes one by one.
+    func paneDisplayStatus(_ paneID: TmuxPaneID) -> PaneChrome.Status {
+        PaneChrome.Status(state: paneStates[paneID] ?? .idle,
+                          doneUnseen: paneDoneUnseen[paneID] == true)
+    }
+}

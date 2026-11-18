@@ -38,25 +38,19 @@ enum TmuxCLI {
     /// per-session submenu so users can jump straight to "the claude
     /// window" instead of attaching + typing prefix-n a few times.
     static func listWindows(session localSession: LocalTmuxSessionName) async -> [LocalWindowInfo] {
-        let session = localSession.rawValue
-        // Pipe-separated fields: index | name | active | pane_count
-        guard let rows = await captureRows([
-            "list-windows", "-t", session, "-F",
-            "#{window_index}|#{window_name}|#{?window_active,1,0}|#{window_panes}"
-        ]) else { return [] }
-        var windows: [LocalWindowInfo] = []
-        for parts in rows {
-            guard parts.count == 4, let idx = Int(parts[0]), let panes = Int(parts[3]) else {
-                continue
-            }
-            windows.append(LocalWindowInfo(
-                index: idx,
-                name: parts[1],
-                isActive: parts[2] == "1",
-                paneCount: panes
-            ))
-        }
-        return windows.sorted { $0.index < $1.index }
+        // One row per PANE (`list-panes -s`), folded into windows here: the
+        // sidebar needs each window's pane status (`@bento_state`) and what its
+        // active pane is doing, and a window-scoped listing can only see the
+        // active pane. Same number of tmux calls per session as before.
+        //
+        // Tab-separated, the free-text fields last: a title or a name can hold
+        // `|`, and `maxSplits` keeps whatever the title contains in one field.
+        guard let tmux = locate(),
+              let result = try? await runCapture(tmux, [
+                "list-panes", "-s", "-t", "=" + localSession.rawValue, "-F",
+                LocalWindowInfo.paneListingFormat,
+              ]), result.code == 0 else { return [] }
+        return LocalWindowInfo.parsePaneListing(result.out)
     }
 
     /// Kill a tmux session. Any windows attached to it exit.
@@ -74,19 +68,6 @@ enum TmuxCLI {
     }
 
     // MARK: - helpers
-
-    /// Run tmux with `args` and split its stdout into rows of `|`-separated
-    /// fields — the query shape list-windows uses. Returns nil when tmux is missing, fails to spawn, or
-    /// exits non-zero. Callers validate field counts themselves.
-    private static func captureRows(_ args: [String]) async -> [[String]]? {
-        guard let tmux = locate() else { return nil }
-        guard let result = try? await runCapture(tmux, args), result.code == 0 else {
-            return nil
-        }
-        return result.out.split(separator: "\n", omittingEmptySubsequences: true).map { line in
-            line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        }
-    }
 
     private static func runCapture(_ exe: URL, _ args: [String]) async throws
         -> (out: String, err: String, code: Int32)
