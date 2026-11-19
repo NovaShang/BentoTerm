@@ -330,7 +330,13 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     }
 
     func makeToolbar() -> NSToolbar {
-        let tb = NSToolbar(identifier: "BentoTerminalToolbar")
+        // One identifier per toolbar, never shared. AppKit treats toolbars
+        // with the same identifier as one family and mirrors every
+        // insert/remove into all of them, but each window wants its own items
+        // (sidebar shown or not, size banner or not): a new window's sync
+        // removed items from the others by index and AppKit threw, killing
+        // the app (opening a new ssh session from the sidebar's ＋).
+        let tb = NSToolbar(identifier: "BentoTerminalToolbar-\(UUID().uuidString)")
         tb.delegate = self
         tb.displayMode = .iconOnly
         tb.allowsUserCustomization = false
