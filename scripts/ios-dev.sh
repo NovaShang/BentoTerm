@@ -93,7 +93,6 @@ cmd_doctor() {
 cmd_build() {
   need_boot
   echo "→ building $SCHEME (Debug) for $SIM_ID …"
-  "$REPO/scripts/fetch-sherpa-onnx.sh"   # on-device speech runtime; no-op once present
   local logf="$DD/last-build.log"
   set +e
   if [[ "${BENTO_VERBOSE:-}" == "1" ]]; then

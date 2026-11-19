@@ -179,7 +179,7 @@ public struct VoicePanel: View {
             return "Audio goes straight to the provider, on your own key."
         case SpeechEngineKind.senseVoice.rawValue:
             // The FunASR model licence asks for the source to be credited.
-            return "Runs on this device. Model: SenseVoiceSmall by Alibaba FunAudioLLM, via sherpa-onnx."
+            return "Runs on this device. Model: SenseVoiceSmall by Alibaba FunAudioLLM, via FluidAudio."
         case SpeechEngineKind.speechAnalyzer.rawValue:
             return Self.appleNewModelNote
         default:

@@ -27,7 +27,7 @@ public struct VoiceInputResult: Sendable {
 /// Which ASR engine a recording uses, from the `speech_engine` user setting.
 /// `openai` = OpenAI Realtime; `qwen` = Alibaba DashScope Qwen realtime (best
 /// 中文 / 中英混说 accuracy), both streaming and driven through `RealtimeASR`.
-/// `senseVoice` = SenseVoiceSmall on device through sherpa-onnx: no key, not
+/// `senseVoice` = SenseVoiceSmall on device (Core ML via FluidAudio): no key, not
 /// streaming — the whole clip is decoded once, on release.
 /// `apple` = `SFSpeechRecognizer` (the system-dictation model);
 /// `speechAnalyzer` = Apple's newer model through `SpeechAnalyzer` +
@@ -74,7 +74,7 @@ public enum SpeechEngineKind: String, Sendable, CaseIterable {
     /// permission, and takes the terminal's vocabulary as contextual strings.
     public var isApple: Bool { self == .apple || self == .speechAnalyzer }
 
-    /// The downloadable sherpa-onnx model this engine runs, if any.
+    /// The downloadable on-device model this engine runs, if any.
     public var onDeviceModel: OnDeviceASRModel? {
         switch self {
         case .senseVoice: return .senseVoiceSmall

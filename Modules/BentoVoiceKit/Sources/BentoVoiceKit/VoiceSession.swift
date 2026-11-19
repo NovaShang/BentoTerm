@@ -610,7 +610,7 @@ public final class VoiceSession {
         committedText = ""
         vadFedBytes = 0
         do {
-            segmenter = try OnDeviceSegmenter()
+            segmenter = try OnDeviceSegmenter(directory: store.directory)
         } catch {
             segmenter = nil
             dlog("[voice] VAD unavailable (\(error.localizedDescription)) — cutting segments by loudness")
@@ -665,9 +665,10 @@ public final class VoiceSession {
         }
     }
 
-    /// Segments closed by the VAD (a pause of 0.1 s, or 8 s without one) are
-    /// decoded once and kept; while one is open, only it is decoded for the
-    /// live text — sherpa-onnx's own simulated streaming for SenseVoice.
+    /// Segments closed by the VAD (one quiet 256 ms window, or 8 s without
+    /// one) are decoded once and kept; while one is open, only it is decoded
+    /// for the live text — the simulated streaming sherpa-onnx's SenseVoice
+    /// example does.
     private func partialTickByVAD(_ segmenter: OnDeviceSegmenter, store: OnDeviceModelStore,
                                   generation: Int,
                                   onPartial: @escaping @MainActor (String) -> Void) {
@@ -681,9 +682,9 @@ public final class VoiceSession {
         Task { @MainActor [weak self] in
             let (segments, speaking) = await segmenter.accept(pcm16: fresh)
             guard let self, generation == self.sessionGeneration else { return }
-            for segment in segments where !segment.samples.isEmpty {
+            for segment in segments where segment.count > 0 {
                 let range = OnDevicePartialPolicy.segmentBytes(
-                    in: self.recordedPCM, start: segment.start, count: segment.samples.count,
+                    in: self.recordedPCM, start: segment.start, count: segment.count,
                     floor: self.committedBytes, sampleRate: rate)
                 self.committedBytes = max(self.committedBytes, range.upperBound)
                 let pcm = self.recordedPCM.subdata(in: range)
@@ -829,9 +830,9 @@ public final class VoiceSession {
         let rate = activeSampleRate
         let segments = await segmenter.finish(pcm16: fresh)
         var text = committed
-        for segment in segments where !segment.samples.isEmpty {
+        for segment in segments where segment.count > 0 {
             let range = OnDevicePartialPolicy.segmentBytes(
-                in: clip, start: segment.start, count: segment.samples.count,
+                in: clip, start: segment.start, count: segment.count,
                 floor: floor, sampleRate: rate)
             floor = max(floor, range.upperBound)
             do {

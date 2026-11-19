@@ -1,23 +1,32 @@
 import Foundation
 import BentoFoundationKit
+import CoreML
+@preconcurrency import FluidAudio
 #if os(iOS)
 import UIKit
 #endif
 
-/// The on-device (sherpa-onnx) speech engine: one lazily loaded recognizer,
-/// kept warm between utterances, owned by a single serial queue. Only one
-/// model is resident at a time — asking for another replaces it.
+/// The on-device speech engine: SenseVoiceSmall as Core ML through FluidAudio
+/// (the preprocessor on the CPU, the int8 encoder on the Neural Engine). One
+/// lazily loaded model, kept warm between utterances. Only one model is
+/// resident at a time — asking for another replaces it.
 ///
-/// Everything heavy happens on that queue — loading the model (hundreds of ms
-/// for ~240 MB), converting the clip, decoding it — never on the main thread.
-/// Callers `await` the result.
+/// Loading (hundreds of ms the first time; Core ML caches the Neural Engine
+/// plan after that) and resampling run on a serial queue, the decode on
+/// FluidAudio's `SenseVoiceManager` actor — never on the main thread. Callers
+/// `await` the result.
 public final class OnDeviceASREngine: @unchecked Sendable {
     public static let shared = OnDeviceASREngine()
 
     private let queue = DispatchQueue(label: "com.bento.voice.on-device-asr", qos: .userInitiated)
     // Queue-confined.
-    private var recognizer: SherpaOfflineRecognizer?
+    private var manager: SenseVoiceManager?
     private var loadedKey: String?
+
+    /// SenseVoice's text-norm query: 14 = "withitn" (inverse text
+    /// normalization: punctuation and digits). FluidAudio defaults to 15,
+    /// "woitn", which leaves the text unpunctuated.
+    static let withITN: Int32 = 14
 
     init() {
         #if os(iOS)
@@ -35,13 +44,13 @@ public final class OnDeviceASREngine: @unchecked Sendable {
     /// Start loading the model now (e.g. when recording begins) so the
     /// decode after release doesn't pay for it. No-op if already loaded.
     public func preload(_ model: OnDeviceASRModel, directory: URL) {
-        queue.async { _ = try? self.loadedRecognizer(model, directory) }
+        queue.async { _ = try? self.loadedManager(model, directory) }
     }
 
     /// Drop the loaded model (memory warning, model deleted).
     public func unload() {
         queue.async {
-            self.recognizer = nil
+            self.manager = nil
             self.loadedKey = nil
         }
     }
@@ -49,49 +58,148 @@ public final class OnDeviceASREngine: @unchecked Sendable {
     /// Transcribe a complete clip of 16-bit little-endian mono PCM.
     public func transcribe(pcm16 data: Data, sampleRate: Double,
                            model: OnDeviceASRModel, directory: URL) async throws -> String {
-        try await onQueue {
+        let (m, samples) = try await onQueue {
             let samples = ASRPCM.resample(ASRPCM.floatSamples(int16LE: data),
                                           from: sampleRate, to: Double(OnDeviceASRModel.sampleRate))
-            return try self.decode(samples, model, directory)
+            return (try self.loadedManager(model, directory), samples)
         }
+        return try await decode(samples, with: m, model)
     }
 
     /// Transcribe float samples (any rate; resampled to 16 kHz).
     public func transcribe(samples: [Float], sampleRate: Double,
                            model: OnDeviceASRModel, directory: URL) async throws -> String {
-        try await onQueue {
+        let (m, s) = try await onQueue {
             let s = ASRPCM.resample(samples, from: sampleRate, to: Double(OnDeviceASRModel.sampleRate))
-            return try self.decode(s, model, directory)
+            return (try self.loadedManager(model, directory), s)
         }
+        return try await decode(s, with: m, model)
     }
 
-    private func decode(_ samples: [Float], _ model: OnDeviceASRModel, _ dir: URL) throws -> String {
-        let r = try loadedRecognizer(model, dir)
+    /// Under this the preprocessor has no whole 25 ms frame to work on.
+    static let minSamples = 800
+
+    private func decode(_ samples: [Float], with m: SenseVoiceManager,
+                        _ model: OnDeviceASRModel) async throws -> String {
+        guard samples.count >= Self.minSamples else { return "" }
         let t0 = Date()
-        let text = r.recognize(samples: samples)
+        let text = try await m.transcribe(audio: samples).trimmingCharacters(in: .whitespacesAndNewlines)
         let audio = Double(samples.count) / Double(OnDeviceASRModel.sampleRate)
         dlog("[on-device-asr] \(model.family) decoded \(String(format: "%.2f", audio))s audio in \(Int(Date().timeIntervalSince(t0) * 1000))ms → \(text.count) chars")
         return text
     }
 
-    private func loadedRecognizer(_ model: OnDeviceASRModel, _ dir: URL) throws -> SherpaOfflineRecognizer {
+    // MARK: Loading — CPU first, Neural Engine once it's compiled
+
+    /// The Neural Engine is the fast path (a 3 s clip in ~25 ms on an M-series
+    /// Mac, vs ~95 ms on the CPU), but Core ML compiles the int8 encoder for
+    /// it the first time it's loaded from a given path, and that compile took
+    /// ~2 minutes on an M-series Mac. Core ML caches the result, after which
+    /// the load is ~200 ms.
+    ///
+    /// So: until a marker in the model directory says that compile finished
+    /// (on this OS build — an OS update can drop the cache), the encoder loads
+    /// on the CPU (~2 s the first time, then tens of ms) and the Neural Engine
+    /// copy compiles in the background; when it's ready it replaces the CPU
+    /// copy. Nobody waits two minutes for their first sentence.
+    static let neuralEngineMarker = ".ane-compiled"
+    private let warmQueue = DispatchQueue(label: "com.bento.voice.on-device-asr.ane", qos: .utility)
+    // Queue-confined (`queue`).
+    private var warmingKey: String?
+
+    private static var osBuild: String { ProcessInfo.processInfo.operatingSystemVersionString }
+
+    private func loadedManager(_ model: OnDeviceASRModel, _ dir: URL) throws -> SenseVoiceManager {
         let key = model.id + "|" + dir.path
-        if let r = recognizer, loadedKey == key { return r }
+        if let m = manager, loadedKey == key { return m }
         // Free the old one before loading: two models resident at once is
         // exactly the memory spike iOS kills apps for.
-        recognizer = nil
+        manager = nil
         loadedKey = nil
+        let marker = dir.appendingPathComponent(Self.neuralEngineMarker)
+        let compiled = (try? String(contentsOf: marker, encoding: .utf8)) == Self.osBuild
         let t0 = Date()
-        let r = try SherpaOfflineRecognizer(model: model, directory: dir)
-        dlog("[on-device-asr] \(model.id) loaded in \(Int(Date().timeIntervalSince(t0) * 1000))ms (sherpa-onnx \(SherpaOfflineRecognizer.runtimeVersion))")
-        recognizer = r
+        let m: SenseVoiceManager
+        do {
+            m = try Self.makeManager(model, dir, encoderUnits: compiled ? .cpuAndNeuralEngine : .cpuOnly)
+        } catch {
+            dlog("[on-device-asr] \(model.id) failed to load: \(error.localizedDescription)")
+            throw OnDeviceASRError.modelLoadFailed
+        }
+        dlog("[on-device-asr] \(model.id) loaded in \(Int(Date().timeIntervalSince(t0) * 1000))ms on \(compiled ? "the Neural Engine" : "the CPU")")
+        manager = m
         loadedKey = key
-        return r
+        if !compiled { compileForNeuralEngine(model, dir, key: key, marker: marker) }
+        return m
     }
 
-    private func onQueue<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+    /// Queue-confined. Load the Neural Engine copy in the background; swap it
+    /// in if the same model is still the loaded one.
+    private func compileForNeuralEngine(_ model: OnDeviceASRModel, _ dir: URL, key: String, marker: URL) {
+        guard warmingKey != key else { return }
+        warmingKey = key
+        warmQueue.async {
+            let t0 = Date()
+            let fast = try? Self.makeManager(model, dir, encoderUnits: .cpuAndNeuralEngine)
+            let seconds = Int(Date().timeIntervalSince(t0))
+            self.queue.async {
+                self.warmingKey = nil
+                guard let fast else {
+                    dlog("[on-device-asr] Neural Engine load failed after \(seconds)s — staying on the CPU")
+                    return
+                }
+                try? Self.osBuild.write(to: marker, atomically: true, encoding: .utf8)
+                dlog("[on-device-asr] compiled for the Neural Engine in \(seconds)s")
+                if self.loadedKey == key { self.manager = fast }
+            }
+        }
+    }
+
+    /// FluidAudio's `SenseVoiceModels.load` fixes the encoder's compute units
+    /// by precision; this is the same load with them chosen here. The
+    /// preprocessor always runs on the CPU (fp32 — its power spectrum
+    /// overflows fp16).
+    private static func makeManager(_ model: OnDeviceASRModel, _ dir: URL,
+                                    encoderUnits: MLComputeUnits) throws -> SenseVoiceManager {
+        switch model.family {
+        case .senseVoice:
+            let cpu = MLModelConfiguration()
+            cpu.computeUnits = .cpuOnly
+            let encoderConfig = MLModelConfiguration()
+            encoderConfig.computeUnits = encoderUnits
+            let pre = try MLModel(contentsOf: dir.appendingPathComponent(OnDeviceASRModel.SenseVoiceFiles.preprocessor),
+                                  configuration: cpu)
+            let enc = try MLModel(contentsOf: dir.appendingPathComponent(OnDeviceASRModel.SenseVoiceFiles.encoder),
+                                  configuration: encoderConfig)
+            let vocab = try loadVocabulary(dir.appendingPathComponent(OnDeviceASRModel.SenseVoiceFiles.vocabulary))
+            return SenseVoiceManager(models: SenseVoiceModels(preprocessor: pre, encoder: enc, vocabulary: vocab),
+                                     language: SenseVoiceConfig.defaultLanguage, textNorm: withITN)
+        }
+    }
+
+    /// vocab.json: a JSON array of SentencePiece pieces, index = token id.
+    static func loadVocabulary(_ url: URL) throws -> [Int: String] {
+        guard let pieces = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String] else {
+            throw OnDeviceASRError.modelLoadFailed
+        }
+        var vocab: [Int: String] = [:]
+        vocab.reserveCapacity(pieces.count)
+        for (i, piece) in pieces.enumerated() { vocab[i] = piece }
+        return vocab
+    }
+
+    private func onQueue<T>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { cont in
             queue.async { cont.resume(with: Result { try work() }) }
+        }
+    }
+}
+
+enum OnDeviceASRError: LocalizedError {
+    case modelLoadFailed
+    var errorDescription: String? {
+        switch self {
+        case .modelLoadFailed: return "Speech model couldn't load — download it again in Settings → Voice."
         }
     }
 }

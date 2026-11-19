@@ -64,7 +64,8 @@ final class OnDeviceModelLayoutTests: XCTestCase {
     override func setUpWithError() throws {
         dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("sv-layout-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Model files live in subdirectories (Core ML bundles), as here.
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("model"), withIntermediateDirectories: true)
     }
 
     override func tearDown() {
@@ -95,15 +96,28 @@ final class OnDeviceModelLayoutTests: XCTestCase {
     }
 
     func testManifestIsWellFormed() {
-        XCTAssertEqual(Set(OnDeviceASRModel.senseVoiceSmall.files.map(\.name)), ["model.int8.onnx", "tokens.txt"])
-        for f in OnDeviceASRModel.senseVoiceSmall.files {
+        let files = OnDeviceASRModel.senseVoiceSmall.files
+        let names = Set(files.map(\.name))
+        XCTAssertEqual(names.count, files.count, "no file listed twice")
+        // Everything the loaders open is in the download.
+        typealias SV = OnDeviceASRModel.SenseVoiceFiles
+        for bundle in [SV.preprocessor, SV.encoder, OnDeviceVAD.modelBundleName] {
+            XCTAssertTrue(names.contains("\(bundle)/coremldata.bin"), bundle)
+            XCTAssertTrue(names.contains("\(bundle)/model.mil"), bundle)
+            XCTAssertTrue(names.contains("\(bundle)/weights/weight.bin"), bundle)
+        }
+        XCTAssertTrue(names.contains(SV.vocabulary))
+        for f in files {
             XCTAssertEqual(f.sha256.count, 64)
             XCTAssertEqual(f.sha256, f.sha256.lowercased())
             XCTAssertGreaterThan(f.size, 0)
             XCTAssertFalse(f.urls.isEmpty)
-            XCTAssertTrue(f.urls.allSatisfy { $0.scheme == "https" && $0.lastPathComponent == f.name })
+            XCTAssertTrue(f.urls.allSatisfy { $0.scheme == "https" && $0.path.hasSuffix("/" + f.name) })
+            // Pinned to a commit, never a moving branch: the hashes must stay true.
+            XCTAssertTrue(f.urls.allSatisfy { !$0.path.contains("/resolve/main/") }, "\(f.urls)")
         }
-        XCTAssertEqual(OnDeviceASRModel.senseVoiceSmall.files.first?.name, "tokens.txt", "small file first: fail fast")
+        XCTAssertEqual(files.first?.name, SV.vocabulary, "small file first: fail fast")
+        XCTAssertEqual(files.last?.name, "\(SV.encoder)/weights/weight.bin", "the big one last")
         XCTAssertGreaterThan(OnDeviceASRModel.senseVoiceSmall.totalBytes, 200_000_000)
     }
 
@@ -123,7 +137,7 @@ final class OnDeviceModelLayoutTests: XCTestCase {
 
     func testInstalledNeedsFilesAndAMatchingMarker() throws {
         let a = Data("tokens".utf8), b = Data("weights!".utf8)
-        let layout = OnDeviceModelLayout(directory: dir, files: [file("tokens.txt", a), file("model.int8.onnx", b)])
+        let layout = OnDeviceModelLayout(directory: dir, files: [file("tokens.txt", a), file("model/weights.bin", b)])
         XCTAssertFalse(layout.isInstalled)
         XCTAssertEqual(layout.bytesOnDisk, 0)
 
@@ -141,7 +155,7 @@ final class OnDeviceModelLayoutTests: XCTestCase {
         XCTAssertTrue(layout.isInstalled)
 
         // A different manifest (new model revision) invalidates the marker.
-        let other = OnDeviceModelLayout(directory: dir, files: [file("tokens.txt", a), file("model.int8.onnx", Data("weights?".utf8))])
+        let other = OnDeviceModelLayout(directory: dir, files: [file("tokens.txt", a), file("model/weights.bin", Data("weights?".utf8))])
         XCTAssertFalse(other.isInstalled)
 
         // A truncated file invalidates it too.
@@ -152,7 +166,7 @@ final class OnDeviceModelLayoutTests: XCTestCase {
     @MainActor
     func testStoreReflectsDiskAndDeleteClearsIt() throws {
         let a = Data("tokens".utf8), b = Data("weights!".utf8)
-        let files = [file("tokens.txt", a), file("model.int8.onnx", b)]
+        let files = [file("tokens.txt", a), file("model/weights.bin", b)]
         let layout = OnDeviceModelLayout(directory: dir, files: files)
         try a.write(to: layout.finalURL(files[0]))
         try b.write(to: layout.finalURL(files[1]))
@@ -444,7 +458,7 @@ final class SenseVoiceRealModelTests: XCTestCase {
         var clip = Data()
         for _ in 0..<8 { clip.append(one); clip.append(gap) }
 
-        let segmenter = try OnDeviceSegmenter()
+        let segmenter = try OnDeviceSegmenter(directory: dir)
         let engine = OnDeviceASREngine()
         let step = Int(rate * 0.35) * 2
         var committedBytes = 0, committed = ""
@@ -454,10 +468,10 @@ final class SenseVoiceRealModelTests: XCTestCase {
             let end = min(clip.count, fed + step)
             let (closed, speaking) = await segmenter.accept(pcm16: clip.subdata(in: fed..<end))
             fed = end
-            for seg in closed where !seg.samples.isEmpty {
+            for seg in closed where seg.count > 0 {
                 segments += 1
                 let range = OnDevicePartialPolicy.segmentBytes(in: clip.subdata(in: 0..<fed), start: seg.start,
-                                                               count: seg.samples.count, floor: committedBytes, sampleRate: rate)
+                                                               count: seg.count, floor: committedBytes, sampleRate: rate)
                 let text = try await engine.transcribe(pcm16: clip.subdata(in: range), sampleRate: rate,
                                                        model: model, directory: dir)
                 committed = OnDevicePartialPolicy.join(committed, text)
@@ -473,9 +487,9 @@ final class SenseVoiceRealModelTests: XCTestCase {
             XCTAssertTrue(shown.hasPrefix(committed))
             if history.last != shown { history.append(shown) }
         }
-        for seg in await segmenter.finish(pcm16: Data()) where !seg.samples.isEmpty {
+        for seg in await segmenter.finish(pcm16: Data()) where seg.count > 0 {
             segments += 1
-            let range = OnDevicePartialPolicy.segmentBytes(in: clip, start: seg.start, count: seg.samples.count,
+            let range = OnDevicePartialPolicy.segmentBytes(in: clip, start: seg.start, count: seg.count,
                                                            floor: committedBytes, sampleRate: rate)
             committed = OnDevicePartialPolicy.join(committed, try await engine.transcribe(
                 pcm16: clip.subdata(in: range), sampleRate: rate, model: model, directory: dir))
@@ -483,7 +497,7 @@ final class SenseVoiceRealModelTests: XCTestCase {
         }
         print("[sensevoice-fast] \(String(format: "%.1f", Double(clip.count) / 2 / rate))s, \(segments) segments, longest open stretch \(String(format: "%.1f", maxOpenSeconds))s, \(history.count) partials")
         print("[sensevoice-fast] final: \(committed)")
-        XCTAssertLessThanOrEqual(maxOpenSeconds, Double(SileroVAD.maxSpeech) + 1)
+        XCTAssertLessThanOrEqual(maxOpenSeconds, Double(OnDeviceVAD.maxSpeech) + 1)
         XCTAssertGreaterThanOrEqual(segments, 4)
     }
 
@@ -560,40 +574,48 @@ final class SenseVoiceRealModelTests: XCTestCase {
         }
         XCTAssertLessThan(ms3, 350, "a 3 s partial must fit inside one tick")
     }
-}
 
-/// Qwen3-ASR 0.6B (sherpa-onnx int8 export) through the same wrapper —
-/// evaluation only, skipped unless `QWEN3_ASR_DIR` points at its files.
-final class Qwen3ASREvaluationTests: XCTestCase {
-    func testQwen3DecodeLatency() async throws {
-        let path = ProcessInfo.processInfo.environment["QWEN3_ASR_DIR"] ?? ""
-        try XCTSkipIf(path.isEmpty, "set QWEN3_ASR_DIR to evaluate Qwen3-ASR")
-        let dir = URL(fileURLWithPath: path, isDirectory: true)
-        let model = OnDeviceASRModel(id: "qwen3-eval", family: .qwen3ASR, files: [])
+    /// Opt-in (`BENTO_ANE_COMPILE_CHECK=1`, a few minutes): a copy of the model
+    /// at a path Core ML has never compiled for the Neural Engine. The first
+    /// sentence must come back in seconds (CPU), not after the compile; the
+    /// compile then finishes in the background, leaves its marker, and the
+    /// engine moves onto the Neural Engine.
+    func testFreshModelDecodesOnTheCPUWhileTheNeuralEngineCompiles() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["BENTO_ANE_COMPILE_CHECK"] == "1",
+                          "set BENTO_ANE_COMPILE_CHECK=1 to time a first-ever Neural Engine compile")
+        let model = OnDeviceASRModel.senseVoiceSmall
+        try XCTSkipUnless(OnDeviceModelLayout(directory: model.defaultDirectory, files: model.files).isInstalled,
+                          "SenseVoice model not downloaded at \(model.defaultDirectory.path)")
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sv-fresh-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.copyItem(at: model.defaultDirectory, to: dir)
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(OnDeviceASREngine.neuralEngineMarker))
+        defer { try? FileManager.default.removeItem(at: dir) }
+
         let url = try XCTUnwrap(Bundle.module.url(forResource: "zh-sample", withExtension: "wav", subdirectory: "Fixtures"))
         let wav = try XCTUnwrap(ASRPCM.readWAV(try Data(contentsOf: url)))
         let engine = OnDeviceASREngine()
         let t0 = Date()
-        let text = try await engine.transcribe(samples: wav.samples, sampleRate: 16000, model: model, directory: dir)
-        print("[qwen3-check] cold (load+decode) \(Int(Date().timeIntervalSince(t0) * 1000)) ms → \"\(text)\"")
-        var ten: [Float] = []
-        while ten.count < 160_000 { ten += wav.samples + [Float](repeating: 0, count: 4_000) }
-        for (label, clip) in [("3 s", Array(wav.samples.prefix(48_000))), ("10 s", Array(ten.prefix(160_000)))] {
-            var ms: [Int] = []
-            var out = ""
-            for _ in 0..<3 {
-                let t = Date()
-                out = try await engine.transcribe(samples: clip, sampleRate: 16000, model: model, directory: dir)
-                ms.append(Int(Date().timeIntervalSince(t) * 1000))
-            }
-            print("[qwen3-check] warm \(label) clip: \(ms.sorted()[1]) ms → \"\(out)\"")
+        let first = try await engine.transcribe(samples: wav.samples, sampleRate: wav.sampleRate, model: model, directory: dir)
+        let firstSeconds = Date().timeIntervalSince(t0)
+        print("[sensevoice-ane] first sentence on a fresh copy in \(Int(firstSeconds * 1000)) ms → \(first)")
+        XCTAssertTrue(first.contains("公园散步"), first)
+        XCTAssertLessThan(firstSeconds, 15)
+
+        let marker = dir.appendingPathComponent(OnDeviceASREngine.neuralEngineMarker)
+        while !FileManager.default.fileExists(atPath: marker.path) {
+            XCTAssertLessThan(Date().timeIntervalSince(t0), 600, "Neural Engine compile never finished")
+            if Date().timeIntervalSince(t0) > 600 { return }
+            try await Task.sleep(for: .seconds(2))
         }
-        if let other = ProcessInfo.processInfo.environment["SENSEVOICE_WAV"],
-           let w = ASRPCM.readWAV(try Data(contentsOf: URL(fileURLWithPath: other))) {
+        print("[sensevoice-ane] Neural Engine ready \(Int(Date().timeIntervalSince(t0)))s after the first load")
+        try await Task.sleep(for: .milliseconds(200))   // the swap lands on the engine queue
+        var ms: [Int] = []
+        for _ in 0..<5 {
             let t = Date()
-            let out = try await engine.transcribe(samples: w.samples, sampleRate: w.sampleRate, model: model, directory: dir)
-            print("[qwen3-check] \(other): \(Int(Date().timeIntervalSince(t) * 1000)) ms → \"\(out)\"")
+            _ = try await engine.transcribe(samples: wav.samples, sampleRate: wav.sampleRate, model: model, directory: dir)
+            ms.append(Int(Date().timeIntervalSince(t) * 1000))
         }
-        XCTAssertTrue(text.contains("天气"), text)
+        print("[sensevoice-ane] warm decode after the swap: median \(ms.sorted()[2]) ms")
     }
 }

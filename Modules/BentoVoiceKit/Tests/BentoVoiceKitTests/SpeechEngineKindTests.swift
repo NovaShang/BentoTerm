@@ -57,7 +57,7 @@ final class SpeechEngineKindTests: XCTestCase {
         XCTAssertEqual(SpeechEngineKind.speechAnalyzer.rawValue, "speechanalyzer")
         XCTAssertTrue(SpeechEngineKind.speechAnalyzer.isOnDevice)
         XCTAssertNil(SpeechEngineKind.speechAnalyzer.keyDefaultsKey)
-        XCTAssertNil(SpeechEngineKind.speechAnalyzer.onDeviceModel, "Apple's assets aren't a sherpa download")
+        XCTAssertNil(SpeechEngineKind.speechAnalyzer.onDeviceModel, "Apple's assets aren't our model download")
         XCTAssertEqual(SpeechEngineKind.allCases.filter(\.isApple), [.apple, .speechAnalyzer])
     }
 
