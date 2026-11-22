@@ -288,6 +288,17 @@ public final class OnDeviceModelStore: ObservableObject {
         }
     }
 
+    /// Call once at app launch: compile the installed model for the Neural
+    /// Engine in the background if this OS build hasn't got it yet.
+    public static func prepareInstalledModelsAtLaunch() {
+        let model = OnDeviceASRModel.senseVoiceSmall
+        let layout = OnDeviceModelLayout(directory: model.defaultDirectory, files: model.files)
+        DispatchQueue.global(qos: .utility).async {
+            guard layout.isInstalled else { return }
+            OnDeviceASREngine.shared.compileForNeuralEngineIfNeeded(model, directory: layout.directory)
+        }
+    }
+
     public var totalBytes: Int64 { layout.files.reduce(0) { $0 + $1.size } }
 
     /// Re-read the disk (a few stats — no hashing).

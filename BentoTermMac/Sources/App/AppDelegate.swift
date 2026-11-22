@@ -5,6 +5,7 @@ import Foundation
 import SwiftUI
 import BentoFoundationKit
 import BentoUISharedKit
+import BentoVoiceKit
 
 /// AppDelegate owns the background polling timer that refreshes the tmux
 /// session list.
@@ -38,6 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Register the bundled Maple Mono NF CN into CoreText before any
         // surface exists, so libghostty can resolve it by family name.
         registerBundledFonts()
+        // Have the offline voice model compiled before the first hold.
+        OnDeviceModelStore.prepareInstalledModelsAtLaunch()
         // Stores of removed features: recent launches, and the ⌘P palette's
         // recent files.
         ["palette_recent_launches", "palette_recent_files"].forEach(UserDefaults.standard.removeObject)

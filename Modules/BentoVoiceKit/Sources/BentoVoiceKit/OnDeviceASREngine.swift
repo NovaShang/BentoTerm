@@ -47,6 +47,19 @@ public final class OnDeviceASREngine: @unchecked Sendable {
         queue.async { _ = try? self.loadedManager(model, directory) }
     }
 
+    /// At launch: if the model is on disk but the Neural Engine copy isn't
+    /// compiled for this OS build (first run after an OS update, or the app
+    /// quit mid-compile), compile it now in the background so the next hold
+    /// doesn't start on the slow CPU path. Doesn't keep the model loaded.
+    public func compileForNeuralEngineIfNeeded(_ model: OnDeviceASRModel, directory: URL) {
+        queue.async {
+            let marker = directory.appendingPathComponent(Self.neuralEngineMarker)
+            guard (try? String(contentsOf: marker, encoding: .utf8)) != Self.osBuild else { return }
+            dlog("[on-device-asr] \(model.id) not compiled for the Neural Engine on this OS — compiling now")
+            self.compileForNeuralEngine(model, directory, key: model.id + "|" + directory.path, marker: marker)
+        }
+    }
+
     /// Drop the loaded model (memory warning, model deleted).
     public func unload() {
         queue.async {

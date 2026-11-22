@@ -3,6 +3,7 @@ import UIKit
 import BentoSessionKit
 import BentoFoundationKit
 import BentoGhosttyKit
+import BentoVoiceKit
 
 @main
 struct BentoApp: App {
@@ -22,6 +23,8 @@ struct BentoApp: App {
 
     init() {
         BentoAppearance.install()
+        // Have the offline voice model compiled before the first hold.
+        OnDeviceModelStore.prepareInstalledModelsAtLaunch()
         // Links, and the ssh tunnels that make a remote `localhost` reachable.
         LinkRouter.install(forwarder: IOSPortForwarder()) { request in
             WebSheetPresenter.present(url: request.url, origin: request.origin)
