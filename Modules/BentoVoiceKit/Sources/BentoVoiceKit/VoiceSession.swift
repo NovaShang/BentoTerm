@@ -1,8 +1,8 @@
 import Foundation
 import BentoFoundationKit
 
-/// Shared voice-recording driver: engine selection (Apple on-device / OpenAI
-/// realtime), permission gating, audio capture, and start/stop. The platform
+/// Shared voice-recording driver: engine selection (Qwen realtime /
+/// SenseVoice / Apple), permission gating, audio capture, and start/stop. The platform
 /// controllers (iOS `VoiceInputController`, macOS `MacVoiceController`) wrap this
 /// and add the gesture, the compass direction, haptics, and the overlay — so the
 /// gnarly engine code lives in exactly one place.
@@ -12,16 +12,15 @@ public final class VoiceSession {
     private var realtime: RealtimeASR?
     private var apple: AppleSpeechEngine?
     private var engine: SpeechEngineKind = .apple
-    /// Sample rate the active realtime engine (and thus mic capture + the batch
-    /// fallback) uses — OpenAI = 24 kHz, Qwen = 16 kHz. Set when a realtime
-    /// session begins so `takeRecordedPCM`/batch wrap the clip at the right rate.
-    private var activeSampleRate: Double = OpenAIRealtimeASRService.requiredSampleRate
+    /// Sample rate of this recording's captured PCM, so `takeRecordedPCM`/batch
+    /// wrap the clip at the right rate. Set when a session begins.
+    private var activeSampleRate: Double = QwenRealtimeASRService.requiredSampleRate
     /// The Qwen context-biasing corpus assembled when this recording began, reused
     /// for the batch fallback so it biases the same way. Empty for non-Qwen.
     private var activeCorpus = ""
 
     /// The most recent transcript seen (so `finish()` can return the final text
-    /// even for the OpenAI engine, whose final arrives via a callback).
+    /// even for the realtime engine, whose final arrives via a callback).
     private var lastTranscript = ""
     public private(set) var isActive = false
 
@@ -48,15 +47,10 @@ public final class VoiceSession {
     public var contextProvider: (() -> String?)?
 
     /// Supplies what the terminal knows about the target pane (command, cwd,
-    /// session, hosts) for the Apple engines' contextual strings. Called on
+    /// session, hosts) for the Apple engine's contextual strings. Called on
     /// the main actor when an Apple recording begins — a few property reads;
     /// `ContextVocabulary.gather` does the rest off the main thread.
     public var vocabularyProvider: (() -> VoiceContextSnapshot?)?
-
-    /// The live hold on Apple's new model (SpeechAnalyzer), if that's the
-    /// engine and the plan resolved to it.
-    private var analyzerRecording: (any AppleAnalyzerRecording)?
-    private let appleModels: AppleSpeechModelStore
 
     /// Set when the realtime engine delivers a non-empty final / emits its
     /// `completed` event after a commit — so `finish()` stops waiting promptly.
@@ -79,16 +73,16 @@ public final class VoiceSession {
     /// crosses the speech threshold, NOTHING is sent upstream — a silent hold
     /// otherwise makes the model hallucinate (it "transcribes" the biasing
     /// corpus, or invents stage directions like "(尴尬的沉默)"). See SpeechGate.
-    private var speechGate = SpeechGate(sampleRate: OpenAIRealtimeASRService.requiredSampleRate)
+    private var speechGate = SpeechGate(sampleRate: QwenRealtimeASRService.requiredSampleRate)
 
-    /// The whole utterance's PCM, accumulated across the entire recording (OpenAI
-    /// engine only — Apple's engine captures audio internally and never hits
+    /// The whole utterance's PCM, accumulated across the entire recording
+    /// (not Apple's engine — it captures audio internally and never hits
     /// `audioCapture`). The right-swipe preview flow grabs this after `stop()` to
     /// re-transcribe the full clip with a higher-accuracy batch model.
     private var recordedPCM = Data()
 
-    /// Ceiling on the locally buffered full clip (~5 min of 24 kHz 16-bit mono
-    /// ≈ 48 KB/s). Past it, PCM keeps streaming to the realtime engine but stops
+    /// Ceiling on the locally buffered full clip (~7 min of 16 kHz 16-bit mono
+    /// ≈ 32 KB/s). Past it, PCM keeps streaming to the realtime engine but stops
     /// being buffered — a right-swipe/batch re-transcription of an hours-long
     /// hold would otherwise POST a huge base64 WAV. Full-clip capture is
     /// deliberate (right-swipe re-transcription); this only adds the ceiling.
@@ -118,9 +112,8 @@ public final class VoiceSession {
     /// shared per-model stores the Settings panel drives.
     private let modelStoreOverride: OnDeviceModelStore?
 
-    public init(modelStore: OnDeviceModelStore? = nil, appleModels: AppleSpeechModelStore? = nil) {
+    public init(modelStore: OnDeviceModelStore? = nil) {
         self.modelStoreOverride = modelStore
-        self.appleModels = appleModels ?? .shared
     }
 
     /// The store (location + readiness) of the on-device model this recording
@@ -158,16 +151,6 @@ public final class VoiceSession {
                 return
             }
         }
-        // Apple's new model mid-download: same deal — say how far along it
-        // is and record nothing.
-        if engine == .speechAnalyzer, appleModels.localeKey == Self.speechLocaleKey,
-           case .downloading = appleModels.state,
-           let message = appleSpeechModelUnavailableMessage(for: appleModels.state) {
-            dlog("[voice] \(engine) unavailable: \(message)")
-            isActive = false
-            onError(message)
-            return
-        }
         sessionGeneration += 1
         isActive = true
         lastTranscript = ""
@@ -183,7 +166,7 @@ public final class VoiceSession {
         // first grant), begin the engine INLINE on this main-actor turn — no Task
         // hop, no async permission round-trip — so the mic goes live immediately
         // instead of a few hundred ms after the compass appears.
-        let needsSpeech = engine.isApple
+        let needsSpeech = engine == .apple
         if MicPermission.micAuthorizedSync(), !needsSpeech || MicPermission.speechAuthorizedSync() {
             dlog("[voice] permission pre-granted → begin \(engine) inline")
             begin(onPartial: onPartial, onError: onError)
@@ -197,7 +180,7 @@ public final class VoiceSession {
                 dlog("[voice] mic permission DENIED")
                 isActive = false; onError("Microphone permission denied"); return
             }
-            if engine.isApple, await MicPermission.ensureSpeech() == false {
+            if needsSpeech, await MicPermission.ensureSpeech() == false {
                 dlog("[voice] speech permission DENIED")
                 isActive = false; onError("Speech recognition permission denied"); return
             }
@@ -216,15 +199,10 @@ public final class VoiceSession {
     private func begin(onPartial: @escaping @MainActor (String) -> Void,
                        onError: @escaping @MainActor (String) -> Void) {
         switch engine {
-        case .apple:          beginApple(vocabulary: makeVocabularyTask(), onPartial: onPartial, onError: onError)
-        case .speechAnalyzer: beginAnalyzer(onPartial: onPartial, onError: onError)
-        case .openai, .qwen:  beginRealtime(onPartial: onPartial, onError: onError)
-        case .senseVoice:     beginOnDevice(onPartial: onPartial, onError: onError)
+        case .apple:      beginApple(vocabulary: makeVocabularyTask(), onPartial: onPartial, onError: onError)
+        case .qwen:       beginRealtime(onPartial: onPartial, onError: onError)
+        case .senseVoice: beginOnDevice(onPartial: onPartial, onError: onError)
         }
-    }
-
-    static var speechLocaleKey: String {
-        UserDefaults.standard.string(forKey: "speech_locale") ?? "auto"
     }
 
     /// The pane snapshot is taken now (main actor, property reads); reading
@@ -238,9 +216,8 @@ public final class VoiceSession {
     /// utterance — i.e. the user finished speaking, *then* released. Below this the
     /// release looks mid-word, so we still wait briefly for the tail.
     private static let settleThresholdMs: Double = 300
-    /// Bounded wait for the tail when released mid-speech (down from 800 — we only
-    /// pay it in the uncommon mid-speech case now, not on every send).
-    private static let tailGraceMs = 300
+    /// Bounded wait for Qwen's final after the commit; it lands in ~0.3–0.6 s.
+    private static let finalGraceMs = 2000
 
     /// Milliseconds since the last streamed interim (∞ if none arrived).
     private var quietMs: Double {
@@ -255,11 +232,11 @@ public final class VoiceSession {
 
     /// Stop recording and resolve the BEST final transcript.
     ///
-    /// Adaptive: if the streamed interim has already settled (the user spoke, then
-    /// released), it IS the final — return it immediately, no round-trip, so the
-    /// common case sends instantly. Only when the release looks mid-speech do we
-    /// wait a short grace for the tail, falling back to a whole-clip batch
-    /// transcription if streaming caught nothing. `language` is the batch hint.
+    /// Apple: a settled interim (the user spoke, then released) IS the final, so
+    /// it returns at once; only a mid-speech release waits for the tail.
+    /// SenseVoice: decode what is still open. Qwen: commit and wait for the final,
+    /// falling back to a whole-clip batch transcription if streaming caught
+    /// nothing. `language` is the batch hint.
     public func finish(language: String) async -> String {
         isActive = false
         // The overlay now leaves on release, so the user can start a NEW hold
@@ -270,32 +247,14 @@ public final class VoiceSession {
         // A cancel() (error path) may have torn the session down before we got
         // here — a cancelled session resolves empty, never with text.
         guard !interrupted else { return "" }
-        // Qwen's interims are a rolling window (they reset mid-utterance), NOT the
-        // full running transcript, so a settled interim is not the final — force
-        // the commit + wait path so we return the authoritative `completed`.
-        // OpenAI's interim IS the full transcript, so a settled one ships instantly.
-        let settled = interimSettled && engine != .qwen
         switch engine {
         case .apple:
-            return await finishApple(settled: settled)
-
-        case .speechAnalyzer:
-            // Resolved to the old engine (no analyzer model for the language).
-            guard let rec = analyzerRecording else { return await finishApple(settled: settled) }
-            analyzerRecording = nil
-            audioCapture.stop()
-            // The tap's last chunk may still be on its way into the stream.
-            try? await Task.sleep(for: .milliseconds(40))
-            // Not "settled → return the partial": a volatile result is the
-            // model's draft, and finalizing on device is quick.
-            let text = await rec.finish()
-            if generation == sessionGeneration, interrupted { return "" }
-            return text
+            return await finishApple(settled: interimSettled)
 
         case .senseVoice:
             return await finishOnDevice(generation: generation)
 
-        case .openai, .qwen:
+        case .qwen:
             audioCapture.stop()
             let asr = realtime
             // Silent (or near-silent) hold: the gate never opened, or it opened
@@ -311,23 +270,12 @@ public final class VoiceSession {
                 Task { await asr?.cancel() }
                 return ""
             }
-            // Fast path (OpenAI only): interim already complete → send it, tidy the
-            // socket in the background. No commit, no wait, no "识别中".
-            if settled {
-                let streamed = lastTranscript
-                realtime = nil
-                realtimeReady = false
-                pendingPCM = []
-                Task { await asr?.cancel() }
-                return isHallucinated(streamed) ? "" : streamed
-            }
-            // Released mid-speech (or Qwen, always): commit the buffer and wait
-            // (bounded) for the realtime final. The socket stays open during this
-            // so the `completed` event is processed (updates lastTranscript). Qwen's
-            // final lands ~0.3–0.6s after commit, so it gets a longer grace.
-            let graceMs = engine == .qwen ? 2000 : Self.tailGraceMs
+            // Commit the buffer and wait (bounded) for the realtime final. Qwen's
+            // interims are a rolling window (they reset mid-utterance), so even a
+            // settled one is not the final. The socket stays open during this so
+            // the `completed` event is processed (updates lastTranscript).
             await asr?.commit()
-            await waitForRealtimeFinal(graceMs: graceMs)
+            await waitForRealtimeFinal(graceMs: Self.finalGraceMs)
             // A newer recording began while we waited: its state has replaced
             // ours, so there is nothing of this utterance left to resolve — and
             // the teardown below would rip the socket out from under it.
@@ -370,13 +318,7 @@ public final class VoiceSession {
         case .apple:
             _ = apple?.stopRecording()
             apple = nil
-        case .speechAnalyzer:
-            audioCapture.stop()
-            analyzerRecording?.cancel()
-            analyzerRecording = nil
-            _ = apple?.stopRecording()
-            apple = nil
-        case .openai, .qwen:
+        case .qwen:
             audioCapture.stop()
             let asr = realtime
             realtime = nil
@@ -461,7 +403,7 @@ public final class VoiceSession {
         let corpus = assembleQwenCorpus(screenText: screenText)
         let clipSeconds = recordedDuration
         Task {
-            let lang = openAILanguageHint(for: UserDefaults.standard.string(forKey: "speech_locale") ?? "auto")
+            let lang = speechLanguageHint(for: UserDefaults.standard.string(forKey: "speech_locale") ?? "auto")
             let better = await BatchTranscriptionService.shared.transcribe(
                 pcm: rec.pcm, sampleRate: rec.sampleRate, language: lang, corpus: corpus)
             // Same guard as the send path: a corpus echo must not land in the
@@ -514,79 +456,6 @@ public final class VoiceSession {
                 await MainActor.run { onError(error.localizedDescription) }
             }
         }
-    }
-
-    // MARK: - Apple new model (SpeechAnalyzer)
-
-    /// The plan for this language is normally cached after the first hold, so
-    /// the mic opens inline. The first hold (or one after a language change)
-    /// resolves the fallback chain first, and if Apple's model has to be
-    /// downloaded, starts that and says so instead of recording.
-    private func beginAnalyzer(onPartial: @escaping @MainActor (String) -> Void,
-                               onError: @escaping @MainActor (String) -> Void) {
-        guard isActive else { return }
-        let key = Self.speechLocaleKey
-        let vocabulary = makeVocabularyTask()
-        if let plan = appleModels.cachedPlan(for: key) {
-            startAnalyzer(plan, vocabulary: vocabulary, onPartial: onPartial, onError: onError)
-            return
-        }
-        if appleModels.isLegacy(for: key) {
-            beginApple(vocabulary: vocabulary, onPartial: onPartial, onError: onError)
-            return
-        }
-        let generation = sessionGeneration
-        Task {
-            let outcome = await appleModels.prepare(localeKey: key, download: true)
-            guard isActive, generation == sessionGeneration else { return }
-            switch outcome {
-            case .ready(let plan):
-                startAnalyzer(plan, vocabulary: vocabulary, onPartial: onPartial, onError: onError)
-            case .legacy:
-                beginApple(vocabulary: vocabulary, onPartial: onPartial, onError: onError)
-            case .unavailable:
-                let message = appleSpeechModelUnavailableMessage(for: appleModels.state)
-                    ?? AppleSpeechModelStore.downloadFailedMessage
-                dlog("[voice] \(engine) unavailable: \(message)")
-                onError(message)
-            }
-        }
-    }
-
-    /// Mic → analyzer straight from the capture queue: the PCM never visits
-    /// the main thread, and only the text comes back here.
-    private func startAnalyzer(_ plan: AppleReadyPlan, vocabulary: Task<[String], Never>,
-                               onPartial: @escaping @MainActor (String) -> Void,
-                               onError: @escaping @MainActor (String) -> Void) {
-        guard #available(iOS 26.0, macOS 26.0, *) else {
-            beginApple(vocabulary: vocabulary, onPartial: onPartial, onError: onError)
-            return
-        }
-        let rec = SpeechAnalyzerRecording(plan: plan)
-        analyzerRecording = rec
-        let generation = sessionGeneration
-        audioCapture.onPCM = { [weak rec] pcm in rec?.feed(pcm) }
-        do {
-            try audioCapture.start(targetSampleRate: rec.sampleRate)
-            dlog("[voice] apple-new capture started @\(Int(rec.sampleRate))Hz")
-        } catch {
-            dlog("[voice] mic capture FAILED: \(error.localizedDescription)")
-            onError(error.localizedDescription)
-            return
-        }
-        rec.begin(vocabulary: vocabulary, onPartial: { text in
-            Task { @MainActor in
-                guard generation == self.sessionGeneration, self.isActive else { return }
-                self.lastTranscript = text
-                self.lastInterimAt = Date()
-                onPartial(text)
-            }
-        }, onError: { error in
-            Task { @MainActor in
-                guard generation == self.sessionGeneration, self.isActive else { return }
-                onError(error.localizedDescription)
-            }
-        })
     }
 
     // MARK: - On-device model (SenseVoice): simulated streaming
@@ -849,28 +718,19 @@ public final class VoiceSession {
         return isImplausibleTranscript(text, clipSeconds: clipSeconds, corpus: "") ? "" : text
     }
 
-    // MARK: - Realtime (OpenAI gpt-realtime-whisper / Qwen qwen3-asr-flash-realtime)
+    // MARK: - Realtime (Qwen qwen3-asr-flash-realtime)
 
     private func beginRealtime(onPartial: @escaping @MainActor (String) -> Void,
                                onError: @escaping @MainActor (String) -> Void) {
         guard isActive else { return }
         let generation = sessionGeneration   // for the WSS connect Task below
         let defaults = UserDefaults.standard
-        // Empty hint = auto-detect, which is best for 中英混说 on both engines.
-        let language = openAILanguageHint(for: defaults.string(forKey: "speech_locale") ?? "auto")
-        activeCorpus = ""
-
-        let asr: RealtimeASR
-        switch engine {
-        case .qwen:
-            activeCorpus = assembleQwenCorpus(screenText: contextProvider?())
-            asr = QwenRealtimeASRService(apiKey: engine.apiKey(defaults: defaults),
-                                         language: language, corpus: activeCorpus)
-            dlog("[voice] qwen begin: lang=\(language.isEmpty ? "auto" : language) corpus=\(activeCorpus.count)c")
-        default: // .openai
-            asr = OpenAIRealtimeASRService(apiKey: engine.apiKey(defaults: defaults), language: language)
-            dlog("[voice] openai begin: lang=\(language.isEmpty ? "auto" : language)")
-        }
+        // Empty hint = auto-detect, which is best for 中英混说.
+        let language = speechLanguageHint(for: defaults.string(forKey: "speech_locale") ?? "auto")
+        activeCorpus = assembleQwenCorpus(screenText: contextProvider?())
+        let asr: RealtimeASR = QwenRealtimeASRService(apiKey: engine.apiKey(defaults: defaults),
+                                                      language: language, corpus: activeCorpus)
+        dlog("[voice] qwen begin: lang=\(language.isEmpty ? "auto" : language) corpus=\(activeCorpus.count)c")
         realtime = asr
         activeSampleRate = asr.sampleRate
         pendingPCM = []

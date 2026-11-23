@@ -25,60 +25,49 @@ public struct VoiceInputResult: Sendable {
 }
 
 /// Which ASR engine a recording uses, from the `speech_engine` user setting.
-/// `openai` = OpenAI Realtime; `qwen` = Alibaba DashScope Qwen realtime (best
-/// 中文 / 中英混说 accuracy), both streaming and driven through `RealtimeASR`.
-/// `senseVoice` = SenseVoiceSmall on device (Core ML via FluidAudio): no key, not
-/// streaming — the whole clip is decoded once, on release.
-/// `apple` = `SFSpeechRecognizer` (the system-dictation model);
-/// `speechAnalyzer` = Apple's newer model through `SpeechAnalyzer` +
-/// `SpeechTranscriber` (iOS/macOS 26+). Both on device; kept side by side so
-/// they can be compared.
+/// `qwen` = Alibaba DashScope Qwen realtime (best 中文 / 中英混说 accuracy),
+/// streaming, on the user's own key.
+/// `senseVoice` = SenseVoiceSmall on device (Core ML via FluidAudio): no key,
+/// not streaming — live text comes from re-decoding the open segment.
+/// `apple` = `SFSpeechRecognizer` (the system-dictation model): no key, nothing
+/// to download, so it is the default and what Qwen without a key runs as.
 public enum SpeechEngineKind: String, Sendable, CaseIterable {
-    case apple, openai, qwen
+    case qwen
     case senseVoice = "sensevoice"
-    case speechAnalyzer = "speechanalyzer"
+    case apple
 
-    /// The engine voice will actually use. A cloud engine needs the user's own
-    /// key — there is no shared server to fall back on — so one selected
-    /// without its key runs as Apple's on-device engine instead.
+    /// The engine picked in Settings. An engine that no longer exists
+    /// ("openai", "speechanalyzer") reads as Apple's.
+    public init(setting: String?) {
+        self = setting.flatMap(Self.init(rawValue:)) ?? .apple
+    }
+
+    /// The engine voice will actually use. Qwen needs the user's own key —
+    /// there is no shared server to fall back on — so without one it runs as
+    /// Apple's engine instead.
     ///
     /// SenseVoice is never swapped out here: when its model isn't on the device
     /// the gesture says so (`onDeviceModelUnavailableMessage`). Quietly running a
     /// different engine would make the choice look ignored.
-    ///
-    /// The new Apple model needs iOS 26: below that it runs as the old Apple
-    /// engine (same vendor, same privacy, the closest thing there is).
-    public static func current(defaults: UserDefaults = .standard,
-                               analyzerSupported: Bool = AppleSpeechAnalyzerSupport.osSupportsAnalyzer)
-        -> SpeechEngineKind {
-        let raw = defaults.string(forKey: "speech_engine") ?? "apple"
-        let selected = SpeechEngineKind(rawValue: raw) ?? .apple
+    public static func current(defaults: UserDefaults = .standard) -> SpeechEngineKind {
+        let selected = SpeechEngineKind(setting: defaults.string(forKey: "speech_engine"))
         if selected.keyDefaultsKey != nil, selected.apiKey(defaults: defaults).isEmpty { return .apple }
-        if selected == .speechAnalyzer, !analyzerSupported { return .apple }
         return selected
     }
 
     /// UserDefaults key holding this engine's API key; nil for on-device engines.
     public var keyDefaultsKey: String? {
         switch self {
-        case .apple, .senseVoice, .speechAnalyzer: return nil
-        case .openai: return "openai_api_key"
+        case .apple, .senseVoice: return nil
         case .qwen: return "dashscope_api_key"
         }
     }
-
-    /// Audio never leaves the device.
-    public var isOnDevice: Bool { self == .apple || self == .senseVoice || self == .speechAnalyzer }
-
-    /// Runs on Apple's Speech framework: needs the speech-recognition
-    /// permission, and takes the terminal's vocabulary as contextual strings.
-    public var isApple: Bool { self == .apple || self == .speechAnalyzer }
 
     /// The downloadable on-device model this engine runs, if any.
     public var onDeviceModel: OnDeviceASRModel? {
         switch self {
         case .senseVoice: return .senseVoiceSmall
-        case .apple, .openai, .qwen, .speechAnalyzer: return nil
+        case .apple, .qwen: return nil
         }
     }
 
@@ -89,11 +78,8 @@ public enum SpeechEngineKind: String, Sendable, CaseIterable {
     }
 }
 
-/// A streaming realtime ASR engine (OpenAI or Qwen). `VoiceSession` drives any
-/// conformer identically — start → sendAudio* → commit → cancel — and receives
-/// results through the callbacks. Keeping this behind a protocol lets the two
-/// dialects (different endpoints, wire shapes, and sample rates) share one
-/// capture/lifecycle path.
+/// A streaming realtime ASR engine (Qwen). `VoiceSession` drives it as start →
+/// sendAudio* → commit → cancel and receives results through the callbacks.
 public protocol RealtimeASR: AnyObject {
     /// Sample rate (Hz) the mic capture must feed this engine.
     var sampleRate: Double { get }
@@ -156,9 +142,9 @@ public func assembleQwenCorpus(screenText: String?, maxChars: Int = 2000) -> Str
     return [vocab, screen].filter { !$0.isEmpty }.joined(separator: "\n")
 }
 
-/// Map a `speech_locale` setting to OpenAI's ISO-639-1 hint ("" = auto).
+/// Map a `speech_locale` setting to an ISO-639-1 hint ("" = auto).
 /// Mirrors the language list in the shared settings speech section.
-public func openAILanguageHint(for locale: String) -> String {
+public func speechLanguageHint(for locale: String) -> String {
     switch locale {
     case "zh-Hans", "zh-Hant", "zh": return "zh"
     case "en-US", "en-GB", "en": return "en"

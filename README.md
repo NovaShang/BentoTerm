@@ -19,7 +19,7 @@ Website: [bentoai.dev/term](https://bentoai.dev/term/) · Install: `brew install
 - **Attaches to real tmux sessions** via control mode. tmux is bundled for machines that don't have it; if you already run tmux, Bento attaches to your existing server and any other tmux client stays in sync — layouts, panes and scrollback live in tmux, not in the app.
 - **Shows each pane's status** — working / awaiting input / done-and-unread — as a color on the pane title bar and in the sidebar. Whatever runs in the pane sets it with one tmux command, `tmux set -p @bento_state working` ([details below](#pane-status), with ready-made hooks for Claude Code and Codex). Nothing reads the screen, so the color doesn't break when a program changes its UI; a pane that doesn't set it just has no color.
 - **Two layouts over the same session:** Parallel tiles every pane; Focus gives one pane the window with the rest in a sidebar. Switching rearranges the actual tmux panes rather than maintaining a separate view state.
-- **Push-to-talk voice input.** Hold right-click on a pane and speak; the transcript lands in that pane's input. Recognition vocabulary is biased by on-screen text, so identifiers and file names from the visible scrollback transcribe correctly, including mixed Chinese/English. Engines: Apple on-device (default), plus Qwen and OpenAI realtime on your own API key. Speech can also be translated into a shell command.
+- **Push-to-talk voice input.** Hold right-click on a pane and speak; the transcript lands in that pane's input. Recognition vocabulary is biased by on-screen text, so identifiers and file names from the visible scrollback transcribe correctly, including mixed Chinese/English. Engines: Qwen realtime on your own API key (most accurate), SenseVoice (offline), or Apple's (default, nothing to set up). Speech can also be translated into a shell command.
 - **File tree and preview.** Every pane exposes the file tree of its working directory. Printed paths are clickable — resolved even when a TUI wrapped or truncated the line — and open with syntax highlighting and jump-to-line (`path:42`). PDFs, images and other documents open via Quick Look. The same tree works from iOS over the SSH connection.
 - **Pane management as tmux operations.** Splits, drag-to-dock between positions and across sessions, duplication — each is executed as a real tmux `split-window` / `move-pane`, so a plain `tmux attach` from elsewhere shows exactly the same layout.
 - **iOS/iPadOS client** attaches to the same sessions mid-run over SSH, with the same pane status (it lives in tmux, so every client sees it).
@@ -33,7 +33,7 @@ Website: [bentoai.dev/term](https://bentoai.dev/term/) · Install: `brew install
 | Apps | Native Swift end to end — AppKit/SwiftUI on macOS, UIKit/SwiftUI on iOS — as thin shells over the shared [`Modules/`](Modules/) packages |
 | Pane status | A tmux pane option (`@bento_state`) that any program sets on its own pane; the client reads it with its regular `list-panes` poll |
 | SSH | macOS rides your system OpenSSH, so `~/.ssh/config`, ControlMaster, and jump hosts all just work; a remote host needs only `sshd` + `tmux` |
-| Voice | A `SpeechEngine` abstraction over Apple on-device, OpenAI, and Qwen realtime ASR, with on-screen-context vocabulary biasing |
+| Voice | A `SpeechEngine` abstraction over Qwen realtime, SenseVoice (Core ML via FluidAudio), and Apple's recognizer, with on-screen-context vocabulary biasing |
 
 Two design rules shape everything:
 
@@ -148,7 +148,7 @@ These commands run whichever `tmux` comes first on the program's `PATH`, and `$T
 - No accounts.
 - Terminal output never leaves your machines; the connection is plain SSH.
 - No telemetry.
-- Voice audio stays on the device with Apple's engine. With Qwen or OpenAI it goes straight to that provider on your own key; Bento runs no server in between.
+- Voice audio stays on the device with SenseVoice. With Qwen it goes straight to DashScope on your own key. Apple's engine follows Apple's speech recognition terms: depending on the language it may use Apple's servers. Bento runs no server in between.
 
 ## Repository layout
 

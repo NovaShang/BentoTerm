@@ -30,10 +30,10 @@ final class VoiceTests: XCTestCase {
     }
 
     func testLanguageHint() {
-        XCTAssertEqual(openAILanguageHint(for: "zh-Hans"), "zh")
-        XCTAssertEqual(openAILanguageHint(for: "en-US"), "en")
-        XCTAssertEqual(openAILanguageHint(for: "ja-JP"), "ja")
-        XCTAssertEqual(openAILanguageHint(for: "auto"), "")
+        XCTAssertEqual(speechLanguageHint(for: "zh-Hans"), "zh")
+        XCTAssertEqual(speechLanguageHint(for: "en-US"), "en")
+        XCTAssertEqual(speechLanguageHint(for: "ja-JP"), "ja")
+        XCTAssertEqual(speechLanguageHint(for: "auto"), "")
     }
 
     func testResultRoundTrips() {
@@ -159,7 +159,7 @@ final class VoiceTests: XCTestCase {
         // A long hold that genuinely contains a lot of speech is not capped.
         XCTAssertFalse(isImplausibleTranscript(String(repeating: "话", count: 100),
                                                clipSeconds: 20, corpus: corpus))
-        // No corpus (OpenAI/Apple engines) → only the rate test applies.
+        // No corpus (SenseVoice) → only the rate test applies.
         XCTAssertFalse(isImplausibleTranscript("git commit", clipSeconds: 1.0, corpus: ""))
         // No audio duration at all (Apple records internally) → no judgement.
         XCTAssertFalse(isImplausibleTranscript("anything at all here", clipSeconds: 0, corpus: corpus))

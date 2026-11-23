@@ -18,7 +18,6 @@ final class SenseVoiceSelectionTests: XCTestCase {
         XCTAssertEqual(SpeechEngineKind.current(defaults: defaults), .senseVoice)
         XCTAssertNil(SpeechEngineKind.senseVoice.keyDefaultsKey)
         XCTAssertEqual(SpeechEngineKind.senseVoice.apiKey(defaults: defaults), "")
-        XCTAssertTrue(SpeechEngineKind.senseVoice.isOnDevice)
         XCTAssertEqual(SpeechEngineKind.senseVoice.onDeviceModel, .senseVoiceSmall)
         XCTAssertNil(SpeechEngineKind.apple.onDeviceModel)
         XCTAssertNil(SpeechEngineKind.qwen.onDeviceModel)
@@ -260,7 +259,7 @@ final class ASRPCMTests: XCTestCase {
         XCTAssertEqual(y[0], 0, accuracy: 1e-6)
         XCTAssertEqual(y[800], x[2400], accuracy: 1e-6)   // ramp stays a ramp
 
-        // 24k → 16k (OpenAI's capture rate) and an up-sample.
+        // 24k → 16k and an up-sample.
         XCTAssertEqual(ASRPCM.resample([Float](repeating: 1, count: 2400), from: 24000, to: 16000).count, 1600)
         let up = ASRPCM.resample([0, 1], from: 8000, to: 16000)
         XCTAssertEqual(up.count, 4)
