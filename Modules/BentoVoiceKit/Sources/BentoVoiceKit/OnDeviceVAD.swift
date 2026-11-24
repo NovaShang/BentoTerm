@@ -36,8 +36,9 @@ enum OnDeviceVAD {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cached: (path: String, model: MLModel)?
 
-    /// The VAD model in `directory`, loaded once per process (it's ~1 MB, on
-    /// the CPU — the Neural Engine's load cost isn't worth it at this size).
+    /// The VAD model in `directory`, loaded once per process, on the CPU
+    /// (~1 MB). A load blocks while Core ML loads anything else, so never call
+    /// this on the main thread.
     static func model(in directory: URL) throws -> MLModel {
         let url = directory.appendingPathComponent(modelBundleName, isDirectory: true)
         lock.lock(); defer { lock.unlock() }

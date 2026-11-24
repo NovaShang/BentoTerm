@@ -74,8 +74,7 @@ public struct OnDeviceASRModel: Sendable, Equatable, Identifiable {
 
     /// SenseVoiceSmall (FunAudioLLM, 2024-07-17; zh/en/ja/ko/yue) as
     /// FluidInference's Core ML export: a CPU preprocessor plus the int8
-    /// encoder, which runs on the Neural Engine and is the same size as the
-    /// int8 ONNX it replaced. Silero VAD (MIT) rides along in the same
+    /// encoder, the same size as the int8 ONNX it replaced. Silero VAD (MIT) rides along in the same
     /// download — it cuts a hold into segments for the live text.
     ///
     /// The files come from this fixed list through our own downloader, not
@@ -288,17 +287,6 @@ public final class OnDeviceModelStore: ObservableObject {
         }
     }
 
-    /// Call once at app launch: compile the installed model for the Neural
-    /// Engine in the background if this OS build hasn't got it yet.
-    public static func prepareInstalledModelsAtLaunch() {
-        let model = OnDeviceASRModel.senseVoiceSmall
-        let layout = OnDeviceModelLayout(directory: model.defaultDirectory, files: model.files)
-        DispatchQueue.global(qos: .utility).async {
-            guard layout.isInstalled else { return }
-            OnDeviceASREngine.shared.compileForNeuralEngineIfNeeded(model, directory: layout.directory)
-        }
-    }
-
     public var totalBytes: Int64 { layout.files.reduce(0) { $0 + $1.size } }
 
     /// Re-read the disk (a few stats — no hashing).
@@ -344,9 +332,8 @@ public final class OnDeviceModelStore: ObservableObject {
                 dlog("[on-device-asr] model installed at \(layout.directory.path)")
                 self.state = .installed(bytes: layout.totalBytesInDirectory)
                 self.partialBytes = 0
-                // Start the one-time Neural Engine compile now (in the
-                // background; the CPU copy is usable at once), not on the
-                // first hold.
+                // Core ML's first load of a new model takes ~2 s; pay it now,
+                // not on the first hold.
                 OnDeviceASREngine.shared.preload(self.model, directory: layout.directory)
             case .cancelled:
                 self.state = .notInstalled

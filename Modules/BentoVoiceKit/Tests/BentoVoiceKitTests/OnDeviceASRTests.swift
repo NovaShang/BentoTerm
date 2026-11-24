@@ -573,48 +573,4 @@ final class SenseVoiceRealModelTests: XCTestCase {
         }
         XCTAssertLessThan(ms3, 350, "a 3 s partial must fit inside one tick")
     }
-
-    /// Opt-in (`BENTO_ANE_COMPILE_CHECK=1`, a few minutes): a copy of the model
-    /// at a path Core ML has never compiled for the Neural Engine. The first
-    /// sentence must come back in seconds (CPU), not after the compile; the
-    /// compile then finishes in the background, leaves its marker, and the
-    /// engine moves onto the Neural Engine.
-    func testFreshModelDecodesOnTheCPUWhileTheNeuralEngineCompiles() async throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["BENTO_ANE_COMPILE_CHECK"] == "1",
-                          "set BENTO_ANE_COMPILE_CHECK=1 to time a first-ever Neural Engine compile")
-        let model = OnDeviceASRModel.senseVoiceSmall
-        try XCTSkipUnless(OnDeviceModelLayout(directory: model.defaultDirectory, files: model.files).isInstalled,
-                          "SenseVoice model not downloaded at \(model.defaultDirectory.path)")
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sv-fresh-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.copyItem(at: model.defaultDirectory, to: dir)
-        try? FileManager.default.removeItem(at: dir.appendingPathComponent(OnDeviceASREngine.neuralEngineMarker))
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        let url = try XCTUnwrap(Bundle.module.url(forResource: "zh-sample", withExtension: "wav", subdirectory: "Fixtures"))
-        let wav = try XCTUnwrap(ASRPCM.readWAV(try Data(contentsOf: url)))
-        let engine = OnDeviceASREngine()
-        let t0 = Date()
-        let first = try await engine.transcribe(samples: wav.samples, sampleRate: wav.sampleRate, model: model, directory: dir)
-        let firstSeconds = Date().timeIntervalSince(t0)
-        print("[sensevoice-ane] first sentence on a fresh copy in \(Int(firstSeconds * 1000)) ms → \(first)")
-        XCTAssertTrue(first.contains("公园散步"), first)
-        XCTAssertLessThan(firstSeconds, 15)
-
-        let marker = dir.appendingPathComponent(OnDeviceASREngine.neuralEngineMarker)
-        while !FileManager.default.fileExists(atPath: marker.path) {
-            XCTAssertLessThan(Date().timeIntervalSince(t0), 600, "Neural Engine compile never finished")
-            if Date().timeIntervalSince(t0) > 600 { return }
-            try await Task.sleep(for: .seconds(2))
-        }
-        print("[sensevoice-ane] Neural Engine ready \(Int(Date().timeIntervalSince(t0)))s after the first load")
-        try await Task.sleep(for: .milliseconds(200))   // the swap lands on the engine queue
-        var ms: [Int] = []
-        for _ in 0..<5 {
-            let t = Date()
-            _ = try await engine.transcribe(samples: wav.samples, sampleRate: wav.sampleRate, model: model, directory: dir)
-            ms.append(Int(Date().timeIntervalSince(t) * 1000))
-        }
-        print("[sensevoice-ane] warm decode after the swap: median \(ms.sorted()[2]) ms")
-    }
 }

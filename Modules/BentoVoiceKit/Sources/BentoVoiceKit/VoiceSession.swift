@@ -106,6 +106,8 @@ public final class VoiceSession {
     /// then segments are cut by loudness instead), and how much of the clip
     /// it has been fed.
     private var segmenter: OnDeviceSegmenter?
+    /// The segmenter is loading off the main thread; ticks wait for it.
+    private var segmenterLoading = false
     private var vadFedBytes = 0
 
     /// Test seam: a fixed model store for every on-device engine. nil = the
@@ -478,11 +480,12 @@ public final class VoiceSession {
         committedBytes = 0
         committedText = ""
         vadFedBytes = 0
-        do {
-            segmenter = try OnDeviceSegmenter(directory: store.directory)
-        } catch {
-            segmenter = nil
-            dlog("[voice] VAD unavailable (\(error.localizedDescription)) — cutting segments by loudness")
+        segmenter = nil
+        segmenterLoading = true
+        let directory = store.directory
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let loaded = Result { try OnDeviceSegmenter(directory: directory) }
+            await self?.segmenterLoaded(loaded, generation: generation)
         }
         OnDeviceASREngine.shared.preload(store.model, directory: store.directory)
         audioCapture.onPCM = { [weak self] pcm in
@@ -516,6 +519,16 @@ public final class VoiceSession {
         }
     }
 
+    private func segmenterLoaded(_ result: Result<OnDeviceSegmenter, Error>, generation: Int) {
+        guard generation == sessionGeneration, isActive else { return }
+        segmenterLoading = false
+        switch result {
+        case .success(let s): segmenter = s
+        case .failure(let error):
+            dlog("[voice] VAD unavailable (\(error.localizedDescription)) — cutting segments by loudness")
+        }
+    }
+
     /// One tick of the simulated stream. The offline model has no streaming
     /// mode, so each tick decodes audio again — but only the OPEN segment (the
     /// audio since the last pause), never the whole clip. When a pause closes
@@ -527,6 +540,9 @@ public final class VoiceSession {
     /// decodes run on the engine's serial queue.
     private func partialTick(store: OnDeviceModelStore, generation: Int,
                              onPartial: @escaping @MainActor (String) -> Void) {
+        // Nothing is decoded until it is known how segments get cut; the clip
+        // is being recorded meanwhile.
+        guard !segmenterLoading else { return }
         if let segmenter {
             partialTickByVAD(segmenter, store: store, generation: generation, onPartial: onPartial)
         } else {

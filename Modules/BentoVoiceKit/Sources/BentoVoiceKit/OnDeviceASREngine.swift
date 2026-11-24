@@ -6,13 +6,11 @@ import CoreML
 import UIKit
 #endif
 
-/// The on-device speech engine: SenseVoiceSmall as Core ML through FluidAudio
-/// (the preprocessor on the CPU, the int8 encoder on the Neural Engine). One
-/// lazily loaded model, kept warm between utterances. Only one model is
+/// The on-device speech engine: SenseVoiceSmall as Core ML through FluidAudio,
+/// on the CPU (see `computeUnits`). One lazily loaded model, kept warm between utterances. Only one model is
 /// resident at a time — asking for another replaces it.
 ///
-/// Loading (hundreds of ms the first time; Core ML caches the Neural Engine
-/// plan after that) and resampling run on a serial queue, the decode on
+/// Loading (~2 s the first time, ~10 ms after that) and resampling run on a serial queue, the decode on
 /// FluidAudio's `SenseVoiceManager` actor — never on the main thread. Callers
 /// `await` the result.
 public final class OnDeviceASREngine: @unchecked Sendable {
@@ -45,19 +43,6 @@ public final class OnDeviceASREngine: @unchecked Sendable {
     /// decode after release doesn't pay for it. No-op if already loaded.
     public func preload(_ model: OnDeviceASRModel, directory: URL) {
         queue.async { _ = try? self.loadedManager(model, directory) }
-    }
-
-    /// At launch: if the model is on disk but the Neural Engine copy isn't
-    /// compiled for this OS build (first run after an OS update, or the app
-    /// quit mid-compile), compile it now in the background so the next hold
-    /// doesn't start on the slow CPU path. Doesn't keep the model loaded.
-    public func compileForNeuralEngineIfNeeded(_ model: OnDeviceASRModel, directory: URL) {
-        queue.async {
-            let marker = directory.appendingPathComponent(Self.neuralEngineMarker)
-            guard (try? String(contentsOf: marker, encoding: .utf8)) != Self.osBuild else { return }
-            dlog("[on-device-asr] \(model.id) not compiled for the Neural Engine on this OS — compiling now")
-            self.compileForNeuralEngine(model, directory, key: model.id + "|" + directory.path, marker: marker)
-        }
     }
 
     /// Drop the loaded model (memory warning, model deleted).
@@ -102,25 +87,15 @@ public final class OnDeviceASREngine: @unchecked Sendable {
         return text
     }
 
-    // MARK: Loading — CPU first, Neural Engine once it's compiled
+    // MARK: Loading
 
-    /// The Neural Engine is the fast path (a 3 s clip in ~25 ms on an M-series
-    /// Mac, vs ~95 ms on the CPU), but Core ML compiles the int8 encoder for
-    /// it the first time it's loaded from a given path, and that compile took
-    /// ~2 minutes on an M-series Mac. Core ML caches the result, after which
-    /// the load is ~200 ms.
-    ///
-    /// So: until a marker in the model directory says that compile finished
-    /// (on this OS build — an OS update can drop the cache), the encoder loads
-    /// on the CPU (~2 s the first time, then tens of ms) and the Neural Engine
-    /// copy compiles in the background; when it's ready it replaces the CPU
-    /// copy. Nobody waits two minutes for their first sentence.
-    static let neuralEngineMarker = ".ane-compiled"
-    private let warmQueue = DispatchQueue(label: "com.bento.voice.on-device-asr.ane", qos: .utility)
-    // Queue-confined (`queue`).
-    private var warmingKey: String?
-
-    private static var osBuild: String { ProcessInfo.processInfo.operatingSystemVersionString }
+    /// CPU on purpose. Measured on an M-series Mac, one encoder pass over up
+    /// to ~7 s of audio: CPU 75 ms, Neural Engine 17 ms, GPU 400 ms. The Neural
+    /// Engine first needs a 2–4 minute compile (again after an OS update or a
+    /// cache purge), and until it ends Core ML blocks every other model load
+    /// in the process — a hold then froze the app. 75 ms fits the 350 ms
+    /// live-text tick, so it isn't worth it.
+    static let computeUnits: MLComputeUnits = .cpuOnly
 
     private func loadedManager(_ model: OnDeviceASRModel, _ dir: URL) throws -> SenseVoiceManager {
         let key = model.id + "|" + dir.path
@@ -129,57 +104,31 @@ public final class OnDeviceASREngine: @unchecked Sendable {
         // exactly the memory spike iOS kills apps for.
         manager = nil
         loadedKey = nil
-        let marker = dir.appendingPathComponent(Self.neuralEngineMarker)
-        let compiled = (try? String(contentsOf: marker, encoding: .utf8)) == Self.osBuild
         let t0 = Date()
         let m: SenseVoiceManager
         do {
-            m = try Self.makeManager(model, dir, encoderUnits: compiled ? .cpuAndNeuralEngine : .cpuOnly)
+            m = try Self.makeManager(model, dir)
         } catch {
             dlog("[on-device-asr] \(model.id) failed to load: \(error.localizedDescription)")
             throw OnDeviceASRError.modelLoadFailed
         }
-        dlog("[on-device-asr] \(model.id) loaded in \(Int(Date().timeIntervalSince(t0) * 1000))ms on \(compiled ? "the Neural Engine" : "the CPU")")
+        dlog("[on-device-asr] \(model.id) loaded in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
         manager = m
         loadedKey = key
-        if !compiled { compileForNeuralEngine(model, dir, key: key, marker: marker) }
         return m
-    }
-
-    /// Queue-confined. Load the Neural Engine copy in the background; swap it
-    /// in if the same model is still the loaded one.
-    private func compileForNeuralEngine(_ model: OnDeviceASRModel, _ dir: URL, key: String, marker: URL) {
-        guard warmingKey != key else { return }
-        warmingKey = key
-        warmQueue.async {
-            let t0 = Date()
-            let fast = try? Self.makeManager(model, dir, encoderUnits: .cpuAndNeuralEngine)
-            let seconds = Int(Date().timeIntervalSince(t0))
-            self.queue.async {
-                self.warmingKey = nil
-                guard let fast else {
-                    dlog("[on-device-asr] Neural Engine load failed after \(seconds)s — staying on the CPU")
-                    return
-                }
-                try? Self.osBuild.write(to: marker, atomically: true, encoding: .utf8)
-                dlog("[on-device-asr] compiled for the Neural Engine in \(seconds)s")
-                if self.loadedKey == key { self.manager = fast }
-            }
-        }
     }
 
     /// FluidAudio's `SenseVoiceModels.load` fixes the encoder's compute units
     /// by precision; this is the same load with them chosen here. The
     /// preprocessor always runs on the CPU (fp32 — its power spectrum
     /// overflows fp16).
-    private static func makeManager(_ model: OnDeviceASRModel, _ dir: URL,
-                                    encoderUnits: MLComputeUnits) throws -> SenseVoiceManager {
+    private static func makeManager(_ model: OnDeviceASRModel, _ dir: URL) throws -> SenseVoiceManager {
         switch model.family {
         case .senseVoice:
             let cpu = MLModelConfiguration()
             cpu.computeUnits = .cpuOnly
             let encoderConfig = MLModelConfiguration()
-            encoderConfig.computeUnits = encoderUnits
+            encoderConfig.computeUnits = computeUnits
             let pre = try MLModel(contentsOf: dir.appendingPathComponent(OnDeviceASRModel.SenseVoiceFiles.preprocessor),
                                   configuration: cpu)
             let enc = try MLModel(contentsOf: dir.appendingPathComponent(OnDeviceASRModel.SenseVoiceFiles.encoder),
