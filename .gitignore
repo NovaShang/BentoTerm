@@ -42,6 +42,6 @@ tests/maestro/*.png
 .dd-*/
 film/out/
 
-# sherpa-onnx xcframework built by scripts/fetch-sherpa-onnx.sh (~90 MB).
-/Modules/SherpaOnnxKit/SherpaOnnx.xcframework/
-/Modules/SherpaOnnxKit/.sherpa-onnx-version
+# `swift build` inside a kit writes its own Package.resolved. The app's pins
+# live in the xcodeproj's Package.resolved; kit dependencies are `exact:`.
+/Modules/*/Package.resolved

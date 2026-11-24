@@ -5,11 +5,10 @@ import BentoFoundationKit
 /// (`qwen3-asr-flash-realtime`) — best-in-class 中文 and 中英混说 (code-switching)
 /// accuracy. Pure Foundation, shared by iOS + macOS.
 ///
-/// Wire protocol is OpenAI-Realtime-compatible but a slightly different dialect
-/// than OpenAI's GA transcription API, so it lives in its own service:
+/// Wire protocol is OpenAI-Realtime-compatible with its own dialect:
 ///   • session config is `input_audio_format`/`sample_rate`/`input_audio_transcription`
 ///     at the session root (not the GA `type: transcription` envelope),
-///   • audio is 16 kHz PCM (OpenAI wants 24 kHz),
+///   • audio is 16 kHz PCM,
 ///   • interims arrive as `...text` with a rolling-window `stash` (NOT the full
 ///     running transcript — it resets mid-utterance), so only the post-commit
 ///     `...completed` `transcript` is authoritative. `VoiceSession` therefore
@@ -70,7 +69,7 @@ public final class QwenRealtimeASRService: NSObject, @unchecked Sendable, Realti
 
     public func start() async throws {
         // A couple of quick retries on a fresh connection smooth over a stale
-        // pooled socket (-1005) or a flaky handshake, same as the OpenAI path.
+        // pooled socket (-1005) or a flaky handshake.
         var lastError: Error?
         var attempt = 0
         while attempt < 3 {

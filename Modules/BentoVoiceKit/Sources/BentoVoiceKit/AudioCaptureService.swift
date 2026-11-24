@@ -2,7 +2,7 @@ import Foundation
 import AVFoundation
 
 /// Captures microphone audio and emits 16-bit mono PCM chunks at a target rate
-/// (OpenAI gpt-realtime-whisper wants 24 kHz). AVAudioEngine + AVAudioConverter
+/// (the engines want 16 kHz). AVAudioEngine + AVAudioConverter
 /// so output is independent of the hardware rate. Cross-platform — only the
 /// AVAudioSession setup is iOS-specific (macOS has no session model).
 public final class AudioCaptureService: @unchecked Sendable {

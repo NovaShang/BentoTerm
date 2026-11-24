@@ -18,7 +18,7 @@
 - **接管真实 tmux 会话**（控制模式）。tmux 内置打包，没装过也能用；本来就在用 tmux 的话，Bento 直接接上你现有的 server，其他 tmux 客户端全程同步——布局、pane、回滚都在 tmux 里，不在 app 里。
 - **显示每个 pane 的状态**：工作中、等你回复、干完了还没看，用颜色标在 pane 标题栏和侧栏上。状态由 pane 里跑的程序自己设，一条 tmux 命令就行：`tmux set -p @bento_state working`（详见[下面](#pane-状态)，附 Claude Code 和 Codex 的现成 hook）。不看屏幕，所以程序改了界面颜色也不会乱；没设的 pane 就不显示颜色。
 - **同一会话的两种布局：**Parallel 全部平铺；Focus 一格占满窗口、其余收进侧栏。切换重排的是真实 tmux pane，不维护独立的视图状态。
-- **按住说话。**在 pane 上按住右键说话，转写落进该 pane 的输入。识别词表按屏幕上下文加权，可见回滚里的标识符、文件名都能正确转写，中英混说可用。引擎：Apple 端上（默认），以及用你自己 key 的 Qwen、OpenAI 实时识别。也可以把自然语言翻译成 shell 命令。
+- **按住说话。**在 pane 上按住右键说话，转写落进该 pane 的输入。识别词表按屏幕上下文加权，可见回滚里的标识符、文件名都能正确转写，中英混说可用。引擎：千问实时（用你自己的 key，最准）、SenseVoice（离线）、Apple 识别（默认，不用配置）。也可以把自然语言翻译成 shell 命令。
 - **文件树与预览。**每个 pane 暴露其工作目录的文件树。打印出的路径可点——TUI 折行或截断的也能解析——以语法高亮打开并跳转到行（`path:42`）。PDF、图片等走 Quick Look。iOS 上经同一条 SSH 连接使用同一棵树。
 - **pane 管理即 tmux 操作。**分屏、跨位置/跨会话拖放、复制，每一步都执行真实的 tmux `split-window` / `move-pane`，从别处 `tmux attach` 看到的布局完全一致。
 - **iOS/iPadOS 客户端**经 SSH 随时接上跑到一半的会话，pane 状态也一样（状态存在 tmux 里，哪个客户端看都一样）。
@@ -32,7 +32,7 @@
 | 应用 | 端到端原生 Swift——macOS 用 AppKit/SwiftUI，iOS 用 UIKit/SwiftUI——都是共享 [`Modules/`](Modules/) 包上的薄壳 |
 | Pane 状态 | 一个 tmux pane 选项（`@bento_state`），任何程序都能在自己的 pane 上设，客户端在例行的 `list-panes` 轮询里读出来 |
 | SSH | macOS 直接用系统 OpenSSH，`~/.ssh/config`、ControlMaster、跳板机全部照常；远端只需要 `sshd` + `tmux` |
-| 语音 | `SpeechEngine` 抽象覆盖 Apple 端上、OpenAI、Qwen 实时 ASR，带屏幕上下文词表加权 |
+| 语音 | `SpeechEngine` 抽象覆盖千问实时、SenseVoice（经 FluidAudio 跑 Core ML）、Apple 识别，带屏幕上下文词表加权 |
 
 两条设计铁律贯穿一切：
 
@@ -146,7 +146,7 @@ tmux set -pu @bento_state           # 清掉
 - 没有账号。
 - 终端输出不离开你的机器；连接是纯 SSH。
 - 没有遥测。
-- 用 Apple 引擎时音频不出设备。用 Qwen 或 OpenAI 时，音频用你自己的 key 直接发给对方，中间没有 Bento 的服务器。
+- 用 SenseVoice 时音频不出设备。用千问时，音频用你自己的 key 直接发给 DashScope。Apple 引擎按苹果语音识别的规则走，部分语言可能会用到苹果的服务器。中间没有 Bento 的服务器。
 
 ## 仓库结构
 

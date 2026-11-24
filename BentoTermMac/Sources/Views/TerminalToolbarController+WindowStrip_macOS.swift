@@ -5,10 +5,7 @@ import AppKit
 
 extension TerminalToolbarController {
     /// The centre of the toolbar is shared: the window strip when the session
-    /// has more than one window, otherwise the focused pane's location title.
-    ///
-    /// A single-window session is the common case, and a one-item switcher is
-    /// chrome that says nothing.
+    /// mixes windows and splits, otherwise the focused pane's location title.
     func setCenterShowsTabs(_ showTabs: Bool) {
         guard showTabs != centerShowsTabs else { return }
         centerShowsTabs = showTabs

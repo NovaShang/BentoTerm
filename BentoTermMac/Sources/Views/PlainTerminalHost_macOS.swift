@@ -87,7 +87,8 @@ final class PlainTerminalHost: NSView {
     @objc func findPreviousMatch(_ sender: Any?) { surface.findPrevious() }
     @objc func useSelectionForFind(_ sender: Any?) { surface.useSelectionForFind() }
     /// ⌘W: a plain tab IS its one pane, so closing the pane closes the tab.
-    @objc func closeCurrentPane(_ sender: Any?) { window?.performClose(sender) }
+    @objc func closeCurrentPane(_ sender: Any?) { onClose?() }
+    var onClose: (() -> Void)?
 
     // MARK: - Voice
 

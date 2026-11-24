@@ -9,7 +9,6 @@ enum SettingsKey {
     static let fontFamily = "terminal_font_family"
     static let speechEngine = "speech_engine"
     static let speechLocale = "speech_locale"
-    static let openAIKey = "openai_api_key"
     static let dashScopeKey = "dashscope_api_key"
     static let asrAutoContext = "asr_auto_context"
     static let asrVocab = "asr_vocab"

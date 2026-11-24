@@ -19,12 +19,12 @@ public struct OnDeviceModelFile: Sendable, Equatable {
     }
 }
 
-/// A sherpa-onnx offline (non-streaming) model the app can download and run.
-/// Adding another one is a catalogue entry: its files, and which sherpa-onnx
-/// model family loads them (`Family` → the recognizer config, in
-/// SherpaOfflineRecognizer).
+/// An offline (non-streaming) speech model the app can download and run as
+/// Core ML through FluidAudio. Adding another one is a catalogue entry: its
+/// files, and which family loads them (`Family` → the loader, in
+/// OnDeviceASREngine).
 public struct OnDeviceASRModel: Sendable, Equatable, Identifiable {
-    public enum Family: String, Sendable { case senseVoice, qwen3ASR }
+    public enum Family: String, Sendable { case senseVoice }
 
     public let id: String
     public let family: Family
@@ -52,31 +52,84 @@ public struct OnDeviceASRModel: Sendable, Equatable, Identifiable {
     }
 
     /// Hugging Face first, then its public mirror for networks where
-    /// huggingface.co is unreachable.
-    static func hf(_ repo: String, _ file: String) -> [URL] {
-        [URL(string: "https://huggingface.co/\(repo)/resolve/main/\(file)")!,
-         URL(string: "https://hf-mirror.com/\(repo)/resolve/main/\(file)")!]
+    /// huggingface.co is unreachable. Pinned to a commit, so the hashes in
+    /// the catalogue stay true when the repo moves on.
+    static func hf(_ repo: String, _ revision: String, _ file: String) -> [URL] {
+        [URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(file)")!,
+         URL(string: "https://hf-mirror.com/\(repo)/resolve/\(revision)/\(file)")!]
     }
 
-    /// SenseVoiceSmall as sherpa-onnx publishes it for on-device use: the
-    /// original FunAudioLLM checkpoint (2024-07-17) quantized to int8, zh/en/
-    /// ja/ko/yue. (The 2025-09-09 export of the same family is a Cantonese
-    /// fine-tune, ASLP-lab/WSYue-ASR — deliberately not this one.)
+    /// Model directories older builds downloaded that nothing reads any more
+    /// (SenseVoice as a sherpa-onnx export, ~240 MB). The store removes them.
+    static let retiredDirectoryNames = ["sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8"]
+
+    /// SenseVoice's files inside its directory. Spelled out here, with the
+    /// manifest, rather than taken from FluidAudio's `ModelNames`, so a
+    /// FluidAudio bump can't point the loader at a file we never downloaded.
+    enum SenseVoiceFiles {
+        static let preprocessor = "SenseVoicePreprocessor.mlmodelc"
+        static let encoder = "SenseVoiceSmall_int8.mlmodelc"
+        static let vocabulary = "vocab.json"
+    }
+
+    /// SenseVoiceSmall (FunAudioLLM, 2024-07-17; zh/en/ja/ko/yue) as
+    /// FluidInference's Core ML export: a CPU preprocessor plus the int8
+    /// encoder, the same size as the int8 ONNX it replaced. Silero VAD (MIT) rides along in the same
+    /// download — it cuts a hold into segments for the live text.
+    ///
+    /// The files come from this fixed list through our own downloader, not
+    /// FluidAudio's: FluidAudio lists the repo through the huggingface.co API,
+    /// which hf-mirror.com redirects straight back to huggingface.co, so it
+    /// has no fallback where huggingface.co is blocked. A fixed list also gives
+    /// byte-exact progress, resume and a hash check. The layout is what
+    /// `SenseVoiceModels.load(from:precision:)` reads.
+    ///
     /// Weights: FunASR Model Open Source License 1.1 (attribution kept).
-    /// tokens.txt first: it is tiny, so a dead network fails fast instead of
+    /// vocab.json first: it is small, so a dead network fails fast instead of
     /// after the user has watched the big file crawl.
     public static let senseVoiceSmall: OnDeviceASRModel = {
-        let repo = "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+        let sv = "FluidInference/sensevoice-small-coreml"
+        let svRev = "74bdbe74b2258f25b5400db72f6cbfbef7c74ded"
+        let vad = "FluidInference/silero-vad-coreml"
+        let vadRev = "b419383c55c110e2c9271fa6ee0ea83d03c70d96"
+        func f(_ repo: String, _ rev: String, _ name: String, _ size: Int64, _ sha: String) -> OnDeviceModelFile {
+            OnDeviceModelFile(name: name, size: size, sha256: sha, urls: hf(repo, rev, name))
+        }
+        let pre = SenseVoiceFiles.preprocessor
+        let enc = SenseVoiceFiles.encoder
+        let v = OnDeviceVAD.modelBundleName
         return OnDeviceASRModel(
-            id: "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8",
+            id: "sensevoice-small-coreml-int8",
             family: .senseVoice,
             files: [
-                OnDeviceModelFile(name: "tokens.txt", size: 315_894,
-                                  sha256: "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
-                                  urls: hf(repo, "tokens.txt")),
-                OnDeviceModelFile(name: "model.int8.onnx", size: 239_233_841,
-                                  sha256: "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
-                                  urls: hf(repo, "model.int8.onnx")),
+                f(sv, svRev, SenseVoiceFiles.vocabulary, 352_064,
+                  "a2594fc1474e78973149cba8cd1f603ebed8c39c7decb470631f66e70ce58e97"),
+                f(sv, svRev, "\(pre)/coremldata.bin", 330,
+                  "e64cc73b2a9b01bad799a23874bc20dba3cf3342c23e3f60012c3e884f682944"),
+                f(sv, svRev, "\(pre)/analytics/coremldata.bin", 243,
+                  "5bdb0b132e48c7e852ec18eeba7e217b6cb7153e6a939ce76b5ed17242e956dd"),
+                f(sv, svRev, "\(pre)/model.mil", 15_008,
+                  "1b9b18be0a35b11165269b1ca071a30af736deb314d8bd82d9540c769137a70e"),
+                f(sv, svRev, "\(pre)/weights/weight.bin", 3_037_504,
+                  "69c630a115da5e4db36ec41662f0b776c0ef33ec6776d86f8cdaaba022518396"),
+                f(vad, vadRev, "\(v)/coremldata.bin", 625,
+                  "7db35a4fd995222a7fb0129713473b15d1462572ab4a2e5e4d56bcaad9e40f41"),
+                f(vad, vadRev, "\(v)/analytics/coremldata.bin", 243,
+                  "8067594eb3126ab8318af507f0c00cabfed40d5fedb8a0ee5075dd02e903d909"),
+                f(vad, vadRev, "\(v)/metadata.json", 3_335,
+                  "2740be542c611e1ba358e1849b4e265c65cdf0b17192767e1e5de86a31ac94d6"),
+                f(vad, vadRev, "\(v)/model.mil", 176_918,
+                  "c6a9d1bf22d413265da0a07a1d14151c3ea2fad296b3aa5859275b33ef1c3270"),
+                f(vad, vadRev, "\(v)/weights/weight.bin", 882_304,
+                  "53ecc8b5081146140ab654c89109cf001f2183abddd7a2411c5081feeffff063"),
+                f(sv, svRev, "\(enc)/coremldata.bin", 436,
+                  "55ef1c194e641418817d7d07f6bfbd8032571e800b81264caba37eb63a95335b"),
+                f(sv, svRev, "\(enc)/analytics/coremldata.bin", 243,
+                  "ab5e9ee0d49e1f88838f1c2178cbe58a20dac12b50c4da803a75a54c6229845a"),
+                f(sv, svRev, "\(enc)/model.mil", 1_134_696,
+                  "015fe7242a15eeb2fc0ca7f908ca3a09a5826b36e7d7f704803c8bbe60c1a148"),
+                f(sv, svRev, "\(enc)/weights/weight.bin", 235_373_118,
+                  "dab122c65d5043cba5b47561d5c1d3a049dd123c662e802d9dbce8fdd0505a38"),
             ])
     }()
 }
@@ -213,7 +266,25 @@ public final class OnDeviceModelStore: ObservableObject {
         self.model = model
         self.directory = directory ?? model.defaultDirectory
         self.layout = OnDeviceModelLayout(directory: self.directory, files: model.files)
+        if directory == nil { Self.removeRetiredModels() }
         refresh()
+    }
+
+    /// Free what older builds downloaded and nothing reads now, off the main
+    /// thread. Once per launch.
+    private static var retiredSwept = false
+    private static func removeRetiredModels() {
+        guard !retiredSwept else { return }
+        retiredSwept = true
+        let root = OnDeviceASRModel.modelsRoot
+        DispatchQueue.global(qos: .utility).async {
+            for name in OnDeviceASRModel.retiredDirectoryNames {
+                let url = root.appendingPathComponent(name, isDirectory: true)
+                if (try? FileManager.default.removeItem(at: url)) != nil {
+                    dlog("[on-device-asr] removed retired model \(name)")
+                }
+            }
+        }
     }
 
     public var totalBytes: Int64 { layout.files.reduce(0) { $0 + $1.size } }
@@ -261,6 +332,9 @@ public final class OnDeviceModelStore: ObservableObject {
                 dlog("[on-device-asr] model installed at \(layout.directory.path)")
                 self.state = .installed(bytes: layout.totalBytesInDirectory)
                 self.partialBytes = 0
+                // Core ML's first load of a new model takes ~2 s; pay it now,
+                // not on the first hold.
+                OnDeviceASREngine.shared.preload(self.model, directory: layout.directory)
             case .cancelled:
                 self.state = .notInstalled
                 self.partialBytes = layout.bytesOnDisk

@@ -205,7 +205,7 @@ open class VoiceController: ObservableObject {
         // up / none / left → resolve the reliable final in the background.
         Task { [weak self] in
             guard let self else { return }
-            let lang = openAILanguageHint(for: UserDefaults.standard.string(forKey: "speech_locale") ?? "auto")
+            let lang = speechLanguageHint(for: UserDefaults.standard.string(forKey: "speech_locale") ?? "auto")
             let text = await self.session.finish(language: lang)
             guard !text.isEmpty else { return }
             self.feedback.sent()

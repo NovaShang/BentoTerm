@@ -17,20 +17,29 @@ final class PaneStateTintView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+/// Holds the surface and clips it to the card's round corners. Never hit
+/// itself: what misses the surface is the container's.
+@MainActor
+final class PaneBodyView: NSView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return hit === self ? nil : hit
+    }
+}
+
 @MainActor
 final class PaneCellView: NSView {
     var onClick: (() -> Void)?
     /// Fired while the title bar is dragged beyond the click slop — the
     /// drag-to-dock gesture. Clicks under the threshold stay clicks.
     var onPaneDrag: ((PaneDrag.Phase) -> Void)?
-    var onZoom: (() -> Void)? {
-        didSet { titleBar.onZoom = onZoom }
-    }
     var onMenu: (() -> Void)? {
         didSet { titleBar.onMenu = onMenu }
     }
     private let titleBar = PaneTitleBar()
     private let stateTint = PaneStateTintView()
+    private let body = PaneBodyView()
     private weak var surface: NSView?
 
     /// Title-strip height (points). Set to one character cell so the strip fits
@@ -47,6 +56,49 @@ final class PaneCellView: NSView {
     /// inset by this much so its content keeps its true position.
     var surfaceInsetX: CGFloat = 0 {
         didSet { needsLayout = true }
+    }
+
+    /// The card look (several panes tiled): the container is a rounded card in
+    /// the terminal's background colour with its surface at an explicit frame
+    /// (its exact cols×rows), the status wash over the whole card and focus as
+    /// the card's border. nil = the plain strip + surface (single pane, zoom,
+    /// Focus). See `PaneCards`.
+    struct CardStyle: Equatable {
+        /// The surface's frame inside the card.
+        var surfaceFrame: NSRect
+        var cornerRadius: CGFloat
+        var background: NSColor
+    }
+
+    var card: CardStyle? {
+        didSet {
+            guard oldValue != card else { return }
+            titleBar.isCard = card != nil
+            applyCardShape()
+            applyBorder()
+            needsLayout = true
+        }
+    }
+
+    private func applyCardShape() {
+        guard let layer else { return }
+        let radius = card?.cornerRadius ?? 0
+        layer.backgroundColor = card?.background.cgColor
+        layer.cornerRadius = radius
+        layer.cornerCurve = .continuous
+        stateTint.layer?.cornerRadius = radius
+        stateTint.layer?.cornerCurve = .continuous
+        body.layer?.cornerRadius = radius
+        body.layer?.cornerCurve = .continuous
+        // `body` clips the surface to the corners; the card itself can't, or
+        // it would cut its own shadow.
+        layer.masksToBounds = card == nil
+        // A soft shadow in light; in the dark it doesn't show and the hairline
+        // edges the card instead.
+        layer.shadowColor = NSColor.black.cgColor
+        layer.shadowOpacity = card != nil && !PaneChromeColors.isDark ? 0.10 : 0
+        layer.shadowRadius = 4
+        layer.shadowOffset = CGSize(width: 0, height: 1)
     }
 
     /// The button the per-pane menu should anchor to.
@@ -114,8 +166,15 @@ final class PaneCellView: NSView {
         // focus ring never competes with green/amber/blue. (Drop targets are
         // previewed by the host's PaneDropZoneOverlay, not the border.)
         let showFocus = isActivePane && !focusSuppressed
-        layer?.borderWidth = showFocus ? 2.0 : 0.5
-        let color = GhosttyPaneColors.focusBorder(active: showFocus)
+        let color: NSColor
+        if card != nil {
+            layer?.borderWidth = showFocus ? 1.5 : 0.5
+            color = showFocus ? GhosttyPaneColors.focusAccent().withAlphaComponent(0.7)
+                              : PaneChromeColors.cardHairline()
+        } else {
+            layer?.borderWidth = showFocus ? 2.0 : 0.5
+            color = GhosttyPaneColors.focusBorder(active: showFocus)
+        }
         // Resolve the dynamic accent against this view's light/dark appearance.
         effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.borderColor = color.cgColor
@@ -125,6 +184,7 @@ final class PaneCellView: NSView {
     /// Re-derive every appearance-dependent CGColor (border + title-bar band/ink).
     /// CGColors are static snapshots, so this must run on a light/dark flip.
     func recolorChrome() {
+        applyCardShape()
         applyBorder()
         titleBar.recolorChrome()
     }
@@ -142,6 +202,9 @@ final class PaneCellView: NSView {
         // State wash sits above the terminal surface (added in `embed`) but below
         // the title bar, so the dot + label stay crisp while the terminal body
         // takes the tint. Hit-test transparent (see PaneStateTintView).
+        body.wantsLayer = true
+        body.layer?.masksToBounds = true
+        addSubview(body, positioned: .below, relativeTo: titleBar)
         stateTint.wantsLayer = true
         addSubview(stateTint, positioned: .below, relativeTo: titleBar)
         updateStateTint()
@@ -156,7 +219,7 @@ final class PaneCellView: NSView {
         surface = view
         // Keep the surface beneath the state wash so the tint overlays the
         // terminal content (not the other way around).
-        addSubview(view, positioned: .below, relativeTo: stateTint)
+        body.addSubview(view)
         needsLayout = true
     }
 
@@ -165,6 +228,15 @@ final class PaneCellView: NSView {
         let h = titleBarHeight
         titleBar.isHidden = (h <= 0)   // Focus mode: no pane chrome at all
         titleBar.frame = NSRect(x: 0, y: 0, width: bounds.width, height: h)
+        body.frame = bounds
+        if let card {
+            surface?.frame = card.surfaceFrame
+            stateTint.frame = bounds
+            layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: min(card.cornerRadius, bounds.width / 2),
+                                       cornerHeight: min(card.cornerRadius, bounds.height / 2), transform: nil)
+            layoutDevServerChip(in: card.surfaceFrame)
+            return
+        }
         // The surface keeps its exact cell size (= bounds minus the half-cell the
         // host added on each side, and minus the title bar), inset by surfaceInsetX
         // so its content stays put while the container reaches the divider midline.

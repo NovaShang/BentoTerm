@@ -24,8 +24,9 @@ extension TerminalWindowManager {
     /// window are read live from their view models; the rest of this Mac's come
     /// from the 5 s `tmux` poll; another host's from its window's session list.
     func rebuildSidebar() {
-        guard !tab.isPlain else { return }
-        let currentKey = tab.sessionKey
+        // A plain terminal is no session's window, though its key (a host alias,
+        // say) can read the same as one's.
+        let currentKey = tab.isPlain ? "" : tab.sessionKey
         var sections: [SidebarSection] = []
 
         // This Mac: the poll's sessions plus any open here the poll hasn't
@@ -42,21 +43,29 @@ extension TerminalWindowManager {
         for id in BentoTerminalWindow.openSessionIDs where !id.isLocal && !remoteServers.contains(id.server) {
             remoteServers.append(id.server)
         }
+        // By name: what is on show changes, and the groups mustn't move under
+        // the pointer.
+        remoteServers.sort { ($0.sshHost ?? "").localizedStandardCompare($1.sshHost ?? "") == .orderedAscending }
         for server in remoteServers {
             var names: [String] = []
             for id in BentoTerminalWindow.openSessionIDs where id.server == server {
                 if !names.contains(id.name) { names.append(id.name) }
-                if let m = BentoTerminalWindow.manager(for: id.key) {
-                    for n in m.tab.viewModel.availableTmuxSessions where !names.contains(n) { names.append(n) }
+                if let open = BentoTerminalWindow.tab(for: id.key) {
+                    for n in open.viewModel.availableTmuxSessions where !names.contains(n) { names.append(n) }
                 }
             }
             let ids = names.map { TmuxSessionID(server: server, name: $0) }
             let host = server.sshHost ?? "Remote"
             sections.append(section(id: "ssh:\(host)", title: host, ids: ids, currentKey: currentKey))
         }
-        // The window's own server first.
-        if !tab.id.isLocal, let i = sections.firstIndex(where: { $0.id == "ssh:\(tab.id.server.sshHost ?? "")" }) {
-            sections.insert(sections.remove(at: i), at: 0)
+        // The plain terminals open in this window.
+        let terminals = tabs.filter(\.isPlain).sorted { $0.windowTitle.localizedStandardCompare($1.windowTitle) == .orderedAscending }
+        if !terminals.isEmpty {
+            sections.append(SidebarSection(id: "terminals", title: "Terminals", sessions: terminals.map {
+                SidebarSessionRow(key: $0.plainRowKey, name: $0.windowTitle, subtitle: "A shell without tmux",
+                                  waiting: 0, panes: [], isCurrent: $0 === tab, isLocal: true,
+                                  isOpenElsewhere: false, isPlain: true)
+            }))
         }
 
         if sidebarModel.sections != sections { sidebarModel.sections = sections }
@@ -65,7 +74,7 @@ extension TerminalWindowManager {
         // While split the session row is what's on screen; with one pane shown
         // alone, that pane's row.
         let vm = tab.viewModel
-        let selected: SidebarItemID = vm.sessionMode == .list
+        let selected: SidebarItemID = tab.isPlain ? .session(tab.plainRowKey) : vm.sessionMode == .list
             ? vm.activePaneID.map { .pane(session: currentKey, pane: "\($0)") } ?? .session(currentKey)
             : .session(currentKey)
         if sidebarModel.selection != selected { sidebarModel.selection = selected }
@@ -89,8 +98,8 @@ extension TerminalWindowManager {
         let remote = id.server.sshHost
         // Live wherever a Bento window has it: names, status and "done, unseen"
         // follow the control channel instead of lagging a poll behind.
-        if let m = isCurrent ? self : BentoTerminalWindow.manager(for: id.key) {
-            let vm = m.tab.viewModel
+        if let open = isCurrent ? tab : BentoTerminalWindow.tab(for: id.key) {
+            let vm = open.viewModel
             let byWindow = vm.panesByWindow
             let polledPanes = info?.windows.flatMap(\.panes) ?? []
             let panes = vm.sessionPanes.map { pane -> SidebarPaneRow in
@@ -112,7 +121,8 @@ extension TerminalWindowManager {
                 key: id.key, name: vm.activeTmuxSessionName ?? id.name,
                 subtitle: SidebarText.paneCount(panes.count),
                 waiting: vm.panesAwaiting, panes: panes,
-                isCurrent: isCurrent, isLocal: id.isLocal, isOpenElsewhere: !isCurrent)
+                isCurrent: isCurrent, isLocal: id.isLocal, isOpenElsewhere: sessionTab(id.key) == nil,
+                isOpenHere: sessionTab(id.key) != nil)
         }
         guard let info else {
             // Another host's session we only know the name of.
@@ -148,21 +158,22 @@ extension TerminalWindowManager {
         }
         model.onRenameSession = { [weak self] row in self?.sidebarRename(row) }
         model.onKillSession = { [weak self] row in self?.sidebarKill(row) }
-        model.onDetachSession = { [weak self] in self?.requestClose() }
-        model.onReleaseSize = { [weak self] in self?.toolbar.releaseSize() }
-        model.onShowNewMenu = { [weak self] in
-            guard let toolbar = self?.toolbar else { return }
-            toolbar.popAtPointer(toolbar.newMenu())
+        model.onDetachSession = { [weak self] row in
+            guard let self, let open = self.sessionTab(row.key) else { return }
+            self.close(open)
         }
-        model.onShowAppMenu = { [weak self] in
-            guard let toolbar = self?.toolbar else { return }
-            toolbar.popAtPointer(toolbar.appMenu())
+        model.onCloseTerminal = { [weak self] row in
+            guard let self, let t = self.tabs.first(where: { $0.isPlain && $0.plainRowKey == row.key }) else { return }
+            self.close(t)
         }
+        model.onReleaseSize = { [weak self] in self?.releaseSize() }
     }
 
     /// A session row: its panes, split side by side.
     private func sidebarPickedSession(_ row: SidebarSessionRow) {
-        if row.isCurrent {
+        if row.isPlain {
+            if let t = tabs.first(where: { $0.isPlain && $0.plainRowKey == row.key }) { show(t) }
+        } else if row.isCurrent {
             showSplit()
         } else if let id = TmuxSessionID(key: row.key) {
             BentoTerminalWindow.focusOrOpen(id) { $0.showSplit() }
@@ -171,7 +182,7 @@ extension TerminalWindowManager {
 
     /// A pane row: that pane alone.
     private func sidebarPickedPane(_ row: SidebarPaneRow) {
-        if row.sessionKey == tab.sessionKey {
+        if !tab.isPlain, row.sessionKey == tab.sessionKey {
             showAlone(pane: row.paneID)
         } else if let id = TmuxSessionID(key: row.sessionKey) {
             BentoTerminalWindow.focusOrOpen(id) { $0.showAlone(pane: row.paneID) }
@@ -245,8 +256,10 @@ extension TerminalWindowManager {
         kill.hasDestructiveAction = true
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn, let self else { return }
-            if row.isCurrent {
-                self.killActiveSessionWithoutConfirmation()
+            // Over its own connection where there is one: killed from outside,
+            // that connection would see the session vanish under it.
+            if let m = BentoTerminalWindow.manager(for: row.key), let open = m.sessionTab(row.key) {
+                m.performKillSession(tab: open)
             } else if let local = TmuxSessionID(key: row.key).flatMap(LocalTmuxSessionName.init) {
                 Task {
                     try? await TmuxCLI.kill(session: local)

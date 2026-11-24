@@ -1,67 +1,31 @@
 import Foundation
 import BentoFoundationKit
 
-/// One-shot (non-realtime) transcription of a COMPLETE utterance via OpenAI's
-/// `/v1/audio/transcriptions` (`gpt-4o-transcribe`) — higher accuracy than the
-/// streaming realtime model because it sees the whole clip at once. Backs the
-/// right-swipe "transcribe → preview → edit → send" flow.
+/// One-shot (non-realtime) transcription of a COMPLETE utterance with Qwen
+/// `qwen3-asr-flash` — more accurate than the streaming model because it sees
+/// the whole clip at once. Backs the right-swipe "transcribe → preview → edit →
+/// send" flow and the fallback when streaming caught nothing.
 ///
-/// Uses the selected engine's own key, straight to that vendor. Only a cloud
-/// engine captures PCM, and `SpeechEngineKind.current()` only reports one when
-/// its key is set, so a call without a key is a no-op that returns nil.
+/// Straight to DashScope on the user's own key. Only Qwen uses it, and
+/// `SpeechEngineKind.current()` only reports Qwen when its key is set, so a call
+/// without one is a no-op that returns nil.
 public final class BatchTranscriptionService: @unchecked Sendable {
     public static let shared = BatchTranscriptionService()
     private let session = URLSession(configuration: .default)
 
-    private static let directURL = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
-    private static let model = "gpt-4o-transcribe"
-    // Qwen batch (DashScope multimodal) — used when the Qwen engine is selected so
-    // batch re-transcription matches the realtime engine instead of falling back
-    // to OpenAI.
     private static let qwenDirectURL = URL(string: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation")!
 
     public init() {}
 
     /// Transcribe 16-bit mono PCM at `sampleRate`. `language` is an optional
-    /// ISO-639-1 hint ("" = auto); `corpus` is Qwen context-biasing text (ignored
-    /// by the OpenAI path). Routes to the engine the user has selected so switching
-    /// to Qwen is end-to-end Qwen. Returns the text, or nil on empty/failure.
+    /// ISO-639-1 hint ("" = auto); `corpus` is context-biasing text. Returns the
+    /// text, or nil on empty/failure.
     public func transcribe(pcm: Data, sampleRate: Double, language: String = "", corpus: String = "") async -> String? {
         guard !pcm.isEmpty else { return nil }
-        let engine = SpeechEngineKind.current()
-        let key = engine.apiKey()
+        let key = SpeechEngineKind.current().apiKey()
         guard !key.isEmpty else { return nil }
-        let wav = Self.wav(pcm: pcm, sampleRate: sampleRate)
-        if engine == .qwen {
-            return await transcribeQwen(wav: wav, key: key, language: language, corpus: corpus)
-        }
-        return await transcribeOpenAI(wav: wav, key: key, language: language)
-    }
-
-    /// OpenAI `gpt-4o-transcribe` batch: multipart form straight to OpenAI.
-    private func transcribeOpenAI(wav: Data, key: String, language: String) async -> String? {
-        let boundary = "bento-\(UUID().uuidString)"
-        var request = URLRequest(url: Self.directURL)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = Self.multipart(wav: wav, language: language, boundary: boundary)
-        request.timeoutInterval = 30
-
-        do {
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                dlog("[batch-asr] HTTP \(code): \(String(data: data, encoding: .utf8)?.prefix(200) ?? "")")
-                return nil
-            }
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let text = json["text"] as? String else { return nil }
-            return Self.nonEmpty(text)
-        } catch {
-            dlog("[batch-asr] error: \(error)")
-            return nil
-        }
+        return await transcribeQwen(wav: Self.wav(pcm: pcm, sampleRate: sampleRate),
+                                    key: key, language: language, corpus: corpus)
     }
 
     /// Qwen `qwen3-asr-flash` batch via DashScope multimodal ASR.
@@ -141,24 +105,5 @@ public final class BatchTranscriptionService: @unchecked Sendable {
         h.append(u32(dataLen))
         h.append(pcm)
         return h
-    }
-
-    private static func multipart(wav: Data, language: String, boundary: String) -> Data {
-        var body = Data()
-        func field(_ name: String, _ value: String) {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(value)\r\n".data(using: .utf8)!)
-        }
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
-        body.append(wav)
-        body.append("\r\n".data(using: .utf8)!)
-        field("model", Self.model)
-        field("response_format", "json")
-        if !language.isEmpty { field("language", language) }
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-        return body
     }
 }

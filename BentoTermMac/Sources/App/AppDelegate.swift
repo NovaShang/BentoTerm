@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NotificationCenter.default.addObserver(
             forName: NSMenu.didBeginTrackingNotification, object: NSApp.mainMenu, queue: .main
         ) { _ in
-            MainActor.assumeIsolated { BentoTerminalWindow.refreshNewItemTitle() }
+            MainActor.assumeIsolated { BentoTerminalWindow.refreshMenuItems() }
         }
 
         // Apply the saved light/dark preference before any window appears, and
@@ -102,8 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // set up reliably. Comma-separated; it also keeps a test run from
             // touching whatever the user actually had open.
             if let list = ProcessInfo.processInfo.environment["BENTO_OPEN_SESSIONS"] {
-                // Each in a window of its own: a plain session pick would now
-                // SWITCH the first window instead (`focusOrOpen`), and the
+                // Each in a window of its own: a plain session pick would open
+                // them all in the first window (`focusOrOpen`), and the
                 // point of the hook is to have them side by side.
                 for key in list.split(separator: ",").map(String.init) where !key.isEmpty {
                     if let id = TmuxSessionID(key: key) { BentoTerminalWindow.openInNewWindow(id) }
@@ -138,9 +138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // DEBUG-only for the company it keeps, not for its blast
                 // radius: it can only reach a session named above.
                 // Test hook: "N|name" — N seconds later, pick session `name`
-                // the way Session ⌄ / the Dock menu do, which switches
-                // the frontmost window onto it (switch-client) rather than
-                // opening another. Like the split hook, it exists because the
+                // the way the sidebar / the Dock menu do, which opens it in
+                // the frontmost window. Like the split hook, it exists because the
                 // menus need synthesized clicks a headless run can't make.
                 if let spec = ProcessInfo.processInfo.environment["BENTO_TEST_SWITCH_AFTER"] {
                     let parts = spec.split(separator: "|", maxSplits: 1).map(String.init)

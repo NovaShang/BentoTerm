@@ -22,17 +22,21 @@ extension TerminalWindowManager {
                 self.rebuildTabBar()
             }
             .store(in: &activeCancellables)
-        // The sidebar's rows also say what each window's panes are doing and
-        // where (titles, `cd`, a status moving between windows) — changes the
-        // strip above never needed. Coalesced: a busy session republishes its
-        // panes several times a second.
-        tab.viewModel.$sessionPanes.map { _ in () }
-            .merge(with: tab.viewModel.$paneWorkingDirectories.map { _ in () },
-                   tab.viewModel.$stateVersion.map { _ in () })
-            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
-            .sink { [weak self, weak tab] in
+        // The centre is shared: the window strip only for a MIXED session
+        // (several windows, at least one split), the location title otherwise.
+        // Panes are the sidebar's to switch — with one pane per window the strip
+        // repeats its rows — but the sidebar doesn't say which panes share a
+        // window, so a mixed session needs the strip. Changes wait out a pause:
+        // going between split and alone moves panes one at a time, and the
+        // session is mixed for a moment on the way.
+        toolbar.setCenterShowsTabs(tab.viewModel.isMixedStructure)
+        tab.viewModel.$sessionPanes
+            .map(TerminalViewModel.isMixed)
+            .removeDuplicates()
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self, weak tab] mixed in
                 guard let self, let tab, tab === self.activeTab else { return }
-                self.rebuildSidebar()
+                self.toolbar.setCenterShowsTabs(mixed)
             }
             .store(in: &activeCancellables)
         // Mode drives the ＋ menu's first row and the sidebar's selection (split
@@ -53,7 +57,7 @@ extension TerminalWindowManager {
                 guard let self, let tab, tab === self.activeTab else { return }
                 self.toolbar.setSessionMode(mode)
                 self.updateSidebar()
-                BentoTerminalWindow.refreshNewItemTitle()
+                BentoTerminalWindow.refreshMenuItems()
             }
             .store(in: &activeCancellables)
         // The take-over banner. Its own subscription rather than a ride on the
@@ -132,7 +136,7 @@ extension TerminalWindowManager {
             command: key.command, directory: directory,
             sshHost: tab.id.server.sshHost,
             home: NSHomeDirectory())
-        toolbar.setLocation(text ?? displayTitle(for: tab))
+        toolbar.setLocation(text ?? "")
     }
 
     /// Each tab's pane status + live session name drive its tab in the strip.
@@ -159,7 +163,19 @@ extension TerminalWindowManager {
             .sink { [weak self, weak tab] generation in
                 guard let self, let tab else { return }
                 self.sessionListChanged(
-                    generation: generation, names: tab.viewModel.availableTmuxSessions)
+                    of: tab, generation: generation, names: tab.viewModel.availableTmuxSessions)
+            }
+            .store(in: &bag)
+        // The sidebar's rows also say what each window's panes are doing and
+        // where (titles, `cd`, a status moving between windows) — changes the
+        // strip above never needed. Coalesced: a busy session republishes its
+        // panes several times a second.
+        tab.viewModel.$sessionPanes.map { _ in () }
+            .merge(with: tab.viewModel.$paneWorkingDirectories.map { _ in () },
+                   tab.viewModel.$stateVersion.map { _ in () })
+            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .sink { [weak self] in
+                self?.rebuildSidebar()
             }
             .store(in: &bag)
         subscribeFailure(tab, into: &bag)
@@ -233,24 +249,29 @@ extension TerminalWindowManager {
         alert.beginSheetModal(for: window) { [weak self, weak tab] response in
             guard let self else { return }
             self.authPromptAlert = nil
+            // Another session may have asked while this sheet was up.
+            defer {
+                if let next = self.tabs.first(where: { $0 !== tab && $0.viewModel.authPrompt != nil }),
+                   let prompt = next.viewModel.authPrompt {
+                    self.presentAuthPrompt(tab: next, prompt: prompt)
+                }
+            }
             guard let tab else { return }
             if response == .alertFirstButtonReturn {
                 tab.viewModel.submitAuthPrompt(field.stringValue,
                                                remember: prompt.isStorable && remember.state == .on)
             } else {
-                // Cancelling an auth prompt cancels the connection: there is no
-                // session behind this window to fall back to.
+                // Cancelling an auth prompt cancels the connection.
                 tab.viewModel.cancelAuthPrompt()
-                self.window?.close()
+                self.close(tab)
             }
         }
     }
 
-    /// Show why a session never came up, and close the window with it — there
-    /// is nothing behind this window to go back to.
+    /// Show why a session never came up, and close it.
     private func presentSessionFailure(tab: SessionTab) {
-        guard let window, !failureAlertShown else { return }
-        failureAlertShown = true
+        guard let window, !tab.failureShown else { return }
+        tab.failureShown = true
         if tab.viewModel.tmuxIsMissing {
             presentMissingTmux(tab: tab, in: window)
             return
@@ -264,8 +285,8 @@ extension TerminalWindowManager {
             ?? "The session could not be started."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
-        alert.beginSheetModal(for: window) { [weak self] _ in
-            self?.window?.close()
+        alert.beginSheetModal(for: window) { [weak self, weak tab] _ in
+            if let tab { self?.close(tab) }
         }
     }
 
@@ -287,16 +308,17 @@ extension TerminalWindowManager {
         alert.addButton(withTitle: MissingTmuxCopy.connectPlain)
         alert.addButton(withTitle: "Cancel")
         let sshHost = tab.id.server.sshHost
-        alert.beginSheetModal(for: window) { [weak self] response in
-            // Close this window first: the plain shell opens as a window of
-            // its own, and a dead session window has nothing left to show.
-            self?.window?.close()
-            guard response == .alertFirstButtonReturn else { return }
-            if let sshHost {
-                BentoTerminalWindow.newSSHWindow(host: sshHost)
-            } else {
-                BentoTerminalWindow.newWindowNoTmux()
+        alert.beginSheetModal(for: window) { [weak self, weak tab] response in
+            guard let self, let tab else { return }
+            // The shell first: closing the window's last session closes it.
+            if response == .alertFirstButtonReturn {
+                if let sshHost {
+                    BentoTerminalWindow.openPlain(title: sshHost, command: ["ssh", sshHost], in: self)
+                } else {
+                    BentoTerminalWindow.openPlain(title: "Terminal", in: self)
+                }
             }
+            self.close(tab)
         }
     }
 
@@ -317,22 +339,22 @@ extension TerminalWindowManager {
         // Killing a session does NOT detach its clients — tmux parks them on
         // another session. So "my session is now called X" has two meanings: a
         // rename (X is mine), or my session died and I've been re-homed onto
-        // someone else's. If a window already shows X, this is the second case
-        // and there is nothing here to keep: two windows on one session is a
-        // duplicate, and the poll would never close it because X is alive.
-        if let other = BentoTerminalWindow.manager(for: new.key), other !== self {
-            window.close()
+        // someone else's. If X is already open, this is the second case and
+        // there is nothing here to keep: it is a duplicate, and the poll would
+        // never close it because X is alive.
+        if let other = BentoTerminalWindow.tab(for: new.key), other !== tab {
+            close(tab)
             return
         }
         tab.id = new
         // Drop the old name from a not-yet-refreshed poll snapshot so the next
         // one doesn't read this window's session as gone.
-        localServerSessions.removeAll { $0.rawValue == old.name }
-        absentPolls = 0
+        if old.isLocal { localServerSessions.removeAll { $0.rawValue == old.name } }
+        tab.absentPolls = 0
         // A switch (or rename) in the window you are using: that is now the
         // session in use. One in a background window changes nothing about
         // what you were looking at.
-        if window.isKeyWindow || window.isMainWindow {
+        if tab === self.tab, window.isKeyWindow || window.isMainWindow {
             BentoTerminalWindow.recordSessionInUse(tab.id)
         }
         // The pane host keys the sidebar by session; a switched session gets a

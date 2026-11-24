@@ -136,6 +136,8 @@ extension TerminalViewModel {
             }
             return
         }
+        // A listing is newer than any layout-change handled before it.
+        for w in parsed { if let layout = w.layout { liveLayouts[w.id] = layout } }
         if windows != parsed { windows = parsed }
         let newActiveWindowID = windows.first(where: { $0.isActive })?.id ?? activeWindowID
         if activeWindowID != newActiveWindowID { activeWindowID = newActiveWindowID }

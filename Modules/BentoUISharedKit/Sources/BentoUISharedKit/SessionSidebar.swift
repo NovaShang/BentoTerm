@@ -59,10 +59,14 @@ public struct SidebarSessionRow: Identifiable, Equatable, Sendable {
     public let isLocal: Bool
     /// Open in another app window (picking it brings that window forward).
     public let isOpenElsewhere: Bool
+    /// A plain terminal of this window, not a tmux session.
+    public let isPlain: Bool
+    /// Open in this window, shown or not.
+    public let isOpenHere: Bool
 
     public init(key: String, name: String, subtitle: String, waiting: Int,
                 panes: [SidebarPaneRow], isCurrent: Bool, isLocal: Bool,
-                isOpenElsewhere: Bool) {
+                isOpenElsewhere: Bool, isPlain: Bool = false, isOpenHere: Bool = false) {
         self.key = key
         self.name = name
         self.subtitle = subtitle
@@ -71,6 +75,8 @@ public struct SidebarSessionRow: Identifiable, Equatable, Sendable {
         self.isCurrent = isCurrent
         self.isLocal = isLocal
         self.isOpenElsewhere = isOpenElsewhere
+        self.isPlain = isPlain
+        self.isOpenHere = isOpenHere
     }
 
     public var id: String { key }
@@ -107,16 +113,13 @@ public final class SessionSidebarModel: ObservableObject {
     public var onOpenInNewWindow: ((SidebarSessionRow) -> Void)?
     public var onRenameSession: ((SidebarSessionRow) -> Void)?
     public var onKillSession: ((SidebarSessionRow) -> Void)?
-    /// The session this app window shows: close the window, keep it running.
-    public var onDetachSession: (() -> Void)?
+    /// A session open in this window: end the connection, keep it running.
+    public var onDetachSession: ((SidebarSessionRow) -> Void)?
+    public var onCloseTerminal: ((SidebarSessionRow) -> Void)?
     /// Hand the session's size back to tmux (only offered while something
     /// has fixed it — `canReleaseSize`).
     public var onReleaseSize: (() -> Void)?
     @Published public var canReleaseSize = false
-    /// The foot's ＋ (everything that makes something new) and ⚙ (settings,
-    /// updates, About). No foot when the host leaves them unset.
-    public var onShowNewMenu: (() -> Void)?
-    public var onShowAppMenu: (() -> Void)?
 
     private var lastCurrentKey: String?
 
@@ -183,27 +186,8 @@ public struct SessionSidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if model.onShowNewMenu != nil || model.onShowAppMenu != nil { foot }
-        }
         .windowActionDialogs(viewModel: viewModel, state: actions)
         .animation(.snappy, value: model.sections)
-    }
-
-    /// ＋ on the left, ⚙ on the right: the sidebar's own controls, so the
-    /// title bar over the terminal can stay empty while it is shown.
-    private var foot: some View {
-        HStack {
-            if let new = model.onShowNewMenu {
-                FootButton(symbol: "plus", label: "New", action: new)
-            }
-            Spacer()
-            if let app = model.onShowAppMenu {
-                FootButton(symbol: "gearshape", label: "Settings", action: app)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
     }
 
     @ViewBuilder
@@ -237,7 +221,7 @@ public struct SessionSidebar: View {
 
     private func sessionLabel(_ session: SidebarSessionRow) -> some View {
         SidebarRow {
-            Image(systemName: "square.grid.2x2")
+            Image(systemName: session.isPlain ? "terminal" : "square.grid.2x2")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         } title: {
@@ -246,7 +230,13 @@ public struct SessionSidebar: View {
             WaitingCount(count: session.waiting)
         }
         .help(session.subtitle)
-        .contextMenu { sessionMenu(session) }
+        .contextMenu {
+            if session.isPlain {
+                Button("Close Terminal") { model.onCloseTerminal?(session) }
+            } else {
+                sessionMenu(session)
+            }
+        }
     }
 
     private func paneRow(_ pane: SidebarPaneRow, in session: SidebarSessionRow) -> some View {
@@ -284,14 +274,17 @@ public struct SessionSidebar: View {
             }
             Divider()
         }
+        if !session.isCurrent, session.isOpenHere, !session.isLocal, let detach = model.onDetachSession {
+            Button("Detach (keep running)") { detach(session) }
+        }
         if session.isCurrent || session.isLocal {
             Button("Rename Session…") { model.onRenameSession?(session) }
             if session.isCurrent, model.canReleaseSize, let release = model.onReleaseSize {
                 Button("Release Size", action: release)
             }
             Divider()
-            if session.isCurrent, let detach = model.onDetachSession {
-                Button("Detach (keep running)", action: detach)
+            if session.isOpenHere, let detach = model.onDetachSession {
+                Button("Detach (keep running)") { detach(session) }
                 Divider()
             }
             Button("Kill Session…", role: .destructive) { model.onKillSession?(session) }
@@ -353,28 +346,6 @@ private struct SidebarRow<Icon: View, Title: View, Trailing: View>: View {
             trailing
         }
         .accessibilityElement(children: .combine)
-    }
-}
-
-/// A round button at the sidebar's foot: system glass where there is glass.
-private struct FootButton: View {
-    let symbol: String
-    let label: String
-    let action: () -> Void
-
-    var body: some View {
-        let button = Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .medium))
-                .frame(width: 20, height: 20)
-        }
-        .help(label)
-        .accessibilityLabel(label)
-        if #available(iOS 26.0, macOS 26.0, *) {
-            button.buttonStyle(.glass).buttonBorderShape(.circle)
-        } else {
-            button.buttonStyle(.bordered).buttonBorderShape(.circle)
-        }
     }
 }
 

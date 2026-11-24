@@ -25,40 +25,19 @@ final class SpeechEngineKindTests: XCTestCase {
         XCTAssertEqual(SpeechEngineKind.current(defaults: defaults), .qwen)
     }
 
-    func testAnotherEnginesKeyDoesNotCount() {
+    /// Engines that used to be selectable.
+    func testARemovedEngineRunsAsApple() {
         let defaults = freshDefaults()
-        defaults.set("openai", forKey: "speech_engine")
-        defaults.set("sk-test", forKey: "dashscope_api_key")
-        XCTAssertEqual(SpeechEngineKind.current(defaults: defaults), .apple)
-    }
-
-    // MARK: Apple (new model)
-
-    func testNewAppleModelIsSelectableOnASupportedOS() {
-        let defaults = freshDefaults()
-        defaults.set("speechanalyzer", forKey: "speech_engine")
-        XCTAssertEqual(SpeechEngineKind.current(defaults: defaults, analyzerSupported: true), .speechAnalyzer)
-    }
-
-    func testNewAppleModelBelowIOS26RunsAsTheOldAppleEngine() {
-        let defaults = freshDefaults()
-        defaults.set("speechanalyzer", forKey: "speech_engine")
-        XCTAssertEqual(SpeechEngineKind.current(defaults: defaults, analyzerSupported: false), .apple)
-    }
-
-    func testOldAppleEngineIsUnaffectedByAnalyzerSupport() {
-        let defaults = freshDefaults()
-        defaults.set("apple", forKey: "speech_engine")
-        XCTAssertEqual(SpeechEngineKind.current(defaults: defaults, analyzerSupported: true), .apple)
-        XCTAssertEqual(SpeechEngineKind.current(defaults: defaults, analyzerSupported: false), .apple)
+        defaults.set("sk-test", forKey: "openai_api_key")
+        for removed in ["openai", "speechanalyzer"] {
+            defaults.set(removed, forKey: "speech_engine")
+            XCTAssertEqual(SpeechEngineKind.current(defaults: defaults), .apple)
+            XCTAssertEqual(SpeechEngineKind(setting: removed), .apple)
+        }
     }
 
     func testEngineTraits() {
-        XCTAssertEqual(SpeechEngineKind.speechAnalyzer.rawValue, "speechanalyzer")
-        XCTAssertTrue(SpeechEngineKind.speechAnalyzer.isOnDevice)
-        XCTAssertNil(SpeechEngineKind.speechAnalyzer.keyDefaultsKey)
-        XCTAssertNil(SpeechEngineKind.speechAnalyzer.onDeviceModel, "Apple's assets aren't a sherpa download")
-        XCTAssertEqual(SpeechEngineKind.allCases.filter(\.isApple), [.apple, .speechAnalyzer])
+        XCTAssertEqual(SpeechEngineKind.allCases.map(\.rawValue), ["qwen", "sensevoice", "apple"])
     }
 
     func testUnsetOrUnknownIsApple() {

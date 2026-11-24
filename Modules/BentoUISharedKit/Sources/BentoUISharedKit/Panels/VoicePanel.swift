@@ -7,38 +7,30 @@ import AppKit
 import UIKit
 #endif
 
-/// Apple's engine is the default: it is the only one that works without a key.
-/// (A Chinese-language system used to get Qwen preselected, back when Bento's
-/// relay supplied the key.)
+/// Apple's engine is the default: it is the only one that works with neither a
+/// key nor a download.
 public enum SpeechDefaults {
-    public static var engine: String { "apple" }
+    public static var engine: String { SpeechEngineKind.apple.rawValue }
 }
 
 /// The three engines, laid out where none can be missed. File scope because a
 /// generic type can't hold a static stored property.
 ///
-/// Each line says what the engine is FOR, not what category it is in. The
-/// first version tagged them "On-device" / "Realtime" / "Realtime", which
-/// sorted them without telling anyone which to pick — and two of the three
-/// carried the same tag. Only one badge survives, and it is a recommendation.
+/// One sentence each, saying what the engine is FOR: most accurate, best
+/// offline, or nothing to set up.
 struct SpeechEngineOption: Identifiable {
-    let id: String
+    let kind: SpeechEngineKind
     let name: String
-    /// nil for everything that isn't the recommendation.
-    let badge: String?
-    let cost: String
+    let purpose: String
+    var id: String { kind.rawValue }
 
     static let all: [SpeechEngineOption] = [
-        SpeechEngineOption(id: SpeechEngineKind.apple.rawValue, name: "Apple (on-device)", badge: nil,
-                           cost: "Never leaves this device. A little less accurate."),
-        SpeechEngineOption(id: SpeechEngineKind.speechAnalyzer.rawValue, name: "Apple (new model)", badge: nil,
-                           cost: "Never leaves this device. Apple's newer speech model; downloads once per language if it isn't on the device yet."),
-        SpeechEngineOption(id: SpeechEngineKind.senseVoice.rawValue, name: "SenseVoice (on-device)", badge: nil,
-                           cost: "Never leaves this device, no key. Strong on Chinese, English, Japanese, Korean and Cantonese. One-time model download."),
-        SpeechEngineOption(id: "qwen", name: "Qwen", badge: "Recommended",
-                           cost: "Best on mixed and non-English speech, and it can read what's on screen to get names and jargon right. Needs your DashScope API key."),
-        SpeechEngineOption(id: "openai", name: "OpenAI", badge: nil,
-                           cost: "A solid middle ground. Needs your OpenAI API key."),
+        SpeechEngineOption(kind: .qwen, name: "Qwen (online)",
+                           purpose: "Most accurate: handles mixed languages and reads the screen to get names and jargon right, on your own DashScope key."),
+        SpeechEngineOption(kind: .senseVoice, name: "SenseVoice (offline)",
+                           purpose: "Best without a network: runs on this device with no key, after a one-time model download."),
+        SpeechEngineOption(kind: .apple, name: "Apple",
+                           purpose: "Nothing to set up: no key and no download, but the least accurate."),
     ]
 }
 
@@ -47,7 +39,6 @@ struct SpeechEngineOption: Identifiable {
 public struct VoicePanel: View {
     @AppStorage(SettingsKey.speechEngine) private var speechEngine = SpeechDefaults.engine
     @AppStorage(SettingsKey.speechLocale) private var speechLocale = "auto"
-    @AppStorage(SettingsKey.openAIKey) private var openaiKey = ""
     @AppStorage(SettingsKey.dashScopeKey) private var dashscopeKey = ""
     @AppStorage(SettingsKey.asrAutoContext) private var asrAutoContext = true
     @AppStorage(SettingsKey.asrVocab) private var asrVocab = ""
@@ -59,6 +50,8 @@ public struct VoicePanel: View {
     @State private var micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
 
     public init() {}
+
+    private var picked: SpeechEngineKind { SpeechEngineKind(setting: speechEngine) }
 
     public var body: some View {
         Form {
@@ -72,12 +65,12 @@ public struct VoicePanel: View {
                     // The key sits under the engine that needs it. Behind an
                     // "Advanced" fold, picking a cloud engine silently changed
                     // nothing until someone went looking for where the key went.
-                    if speechEngine == engine.id {
-                        engineSettings(engine.id)
+                    if engine.kind == picked {
+                        engineSettings(engine.kind)
                     }
                 }
             } header: { Text("Engine") } footer: {
-                PanelNote(engineNote)
+                if let engineNote { PanelNote(engineNote) }
             }
 
             Section {
@@ -139,15 +132,11 @@ public struct VoicePanel: View {
 
     /// The rows that belong to one engine, shown only while it is picked.
     @ViewBuilder
-    private func engineSettings(_ id: String) -> some View {
-        switch id {
-        case SpeechEngineKind.senseVoice.rawValue:
+    private func engineSettings(_ engine: SpeechEngineKind) -> some View {
+        switch engine {
+        case .senseVoice:
             OnDeviceModelRow(store: .shared(for: .senseVoiceSmall))
-        case SpeechEngineKind.speechAnalyzer.rawValue:
-            AppleSpeechModelRow(store: .shared, localeKey: speechLocale)
-        case "openai":
-            SecureField("OpenAI API key", text: $openaiKey)
-        case "qwen":
+        case .qwen:
             SecureField("DashScope API key", text: $dashscopeKey)
             Toggle("Bias from on-screen text", isOn: $asrAutoContext)
             VStack(alignment: .leading, spacing: 3) {
@@ -157,33 +146,23 @@ public struct VoicePanel: View {
                     .frame(height: 56).font(.caption.monospaced())
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
             }
-        default:
+        case .apple:
             EmptyView()
         }
     }
 
-    // Says where the audio goes for the engine actually picked, and owns up
-    // when a cloud engine is picked without its key: voice then quietly runs
-    // on Apple's engine, which would otherwise look like the choice was ignored.
-    private static var appleNewModelNote: LocalizedStringKey {
-        LocalizedStringKey(AppleSpeechModelCopy.engineNote(
-            osSupportsAnalyzer: AppleSpeechAnalyzerSupport.osSupportsAnalyzer))
-    }
-
-    private var engineNote: LocalizedStringKey {
-        switch speechEngine {
-        case "openai" where openaiKey.trimmingCharacters(in: .whitespaces).isEmpty,
-             "qwen" where dashscopeKey.trimmingCharacters(in: .whitespaces).isEmpty:
+    /// Owns up when Qwen is picked without its key: voice then quietly runs on
+    /// Apple's engine, which would otherwise look like the choice was ignored.
+    private var engineNote: LocalizedStringKey? {
+        switch picked {
+        case .qwen:
+            guard dashscopeKey.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
             return "Add your API key above. Until then, voice uses Apple's engine."
-        case "openai", "qwen":
-            return "Audio goes straight to the provider, on your own key."
-        case SpeechEngineKind.senseVoice.rawValue:
+        case .senseVoice:
             // The FunASR model licence asks for the source to be credited.
-            return "Runs on this device. Model: SenseVoiceSmall by Alibaba FunAudioLLM, via sherpa-onnx."
-        case SpeechEngineKind.speechAnalyzer.rawValue:
-            return Self.appleNewModelNote
-        default:
-            return "Apple's engine runs on this device."
+            return "Model: SenseVoiceSmall by Alibaba FunAudioLLM, via FluidAudio."
+        case .apple:
+            return nil
         }
     }
 
@@ -192,29 +171,20 @@ public struct VoicePanel: View {
             speechEngine = engine.id
         } label: {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: speechEngine == engine.id
+                Image(systemName: engine.kind == picked
                       ? "largecircle.fill.circle" : "circle")
                     // `.tint`, not `Color.accentColor`: the former follows the
                     // app's `.tint(...)`, the latter reads the accent asset and
                     // stayed blue while everything else went green.
-                    .foregroundStyle(speechEngine == engine.id ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(engine.kind == picked ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(engine.name).font(.system(size: 14, weight: .semibold))
-                        if let badge = engine.badge {
-                            Text(badge)
-                                .font(.caption2)
-                                .foregroundStyle(.tint)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(Capsule().fill(.tint.opacity(0.12)))
-                        }
-                        Spacer()
-                    }
-                    Text(engine.cost)
+                    Text(engine.name).font(.system(size: 14, weight: .semibold))
+                    Text(engine.purpose)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
         }
@@ -282,56 +252,6 @@ public struct VoicePanel: View {
             UIApplication.shared.open(url)
         }
         #endif
-    }
-}
-
-/// Status / download progress of Apple's new speech model for the chosen
-/// language. Apple's asset daemon owns the files, so there is nothing to
-/// delete or cancel here — only check, download, and watch.
-struct AppleSpeechModelRow: View {
-    @ObservedObject var store: AppleSpeechModelStore
-    let localeKey: String
-
-    var body: some View {
-        Group {
-            if !AppleSpeechAnalyzerSupport.osSupportsAnalyzer {
-                EmptyView()   // the engine note says it
-            } else {
-                switch store.state {
-                case .downloading(let fraction):
-                    VStack(alignment: .leading, spacing: 6) {
-                        ProgressView(value: fraction)
-                        statusText
-                    }
-                case .checking, .unknown:
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        statusText
-                    }
-                case .ready(.analyzer(.transcriber, _)):
-                    Label(AppleSpeechModelCopy.status(for: store.state) ?? "", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                case .ready:
-                    statusText
-                case .needsDownload, .failed:
-                    VStack(alignment: .leading, spacing: 6) {
-                        if case .failed(let message) = store.state {
-                            Label(message, systemImage: "exclamationmark.triangle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                        Button(AppleSpeechModelCopy.downloadButton) { store.download(localeKey: localeKey) }
-                    }
-                }
-            }
-        }
-        .onAppear { store.refresh(localeKey: localeKey) }
-        .onChange(of: localeKey) { _, key in store.refresh(localeKey: key) }
-    }
-
-    private var statusText: some View {
-        Text(AppleSpeechModelCopy.status(for: store.state) ?? "")
-            .font(.caption).foregroundStyle(.secondary)
     }
 }
 

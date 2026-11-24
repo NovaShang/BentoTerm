@@ -17,13 +17,8 @@ import BentoFoundationKit
 /// Flow: hold >180ms → start recording → move finger → direction detection →
 ///       release → inject text based on direction
 ///
-/// Two speech engines are supported and chosen per-recording from the
-/// `speech_engine` user setting:
-/// - "apple":  on-device `SFSpeechRecognizer` (no API key, may have lower
-///   accuracy / language coverage; requires speech-recognition permission).
-/// - "openai": cloud OpenAI Realtime API with `gpt-realtime-whisper`
-///   (requires either `openai_api_key` direct BYOK, or `openai_proxy_url`
-///   pointing at a token-mint server).
+/// The speech engine is chosen per recording from the `speech_engine` setting
+/// (see `SpeechEngineKind`).
 @MainActor
 final class VoiceInputController: VoiceController {
     /// Anchor of the compass overlay in screen points — the host clamps it

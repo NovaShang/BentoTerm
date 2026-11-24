@@ -9,7 +9,7 @@ import AppKit
 
 // MARK: - SessionTab (a live, self-managed session)
 
-/// One window's terminal: its view model, its content view, and lifecycle.
+/// One session a window holds: its view model, its content view, and lifecycle.
 ///
 /// Two shapes, decided by which initializer built it and never revisited:
 ///   - a tmux tab tiles panes (`paneHost`) and carries every session feature;
@@ -43,6 +43,21 @@ final class SessionTab {
     /// never persisted, restored or reconnected.
     var isPlain: Bool { plainHost != nil }
     var contentView: NSView { paneHost ?? plainHost! }
+    /// Consecutive self-polls in which this session was missing from its OWN
+    /// server's session list, and the last list acted on (a Combine republish
+    /// that isn't a fresh list can't be counted as a miss).
+    var absentPolls = 0
+    var lastSessionListGeneration = 0
+    /// Its failure has been put up; the view model can re-publish `showError`
+    /// and the sheet must not stack.
+    var failureShown = false
+    /// The background its terminal actually renders, once one has reported.
+    var reportedBackground: NSColor? {
+        plainHost?.surface.reportedBackgroundColor ?? paneHost?.reportedBackground
+    }
+    /// The sidebar row of a plain terminal. Not a `TmuxSessionID` key: those
+    /// name sessions.
+    var plainRowKey: String { "plain://\(sessionKey)" }
     /// What should hold the keyboard when the window comes up.
     var initialResponder: NSView { plainHost?.surface ?? paneHost! }
 
