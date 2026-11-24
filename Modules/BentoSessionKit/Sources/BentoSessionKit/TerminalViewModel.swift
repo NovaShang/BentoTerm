@@ -563,4 +563,8 @@ public final class TerminalViewModel: ObservableObject {
     /// this to re-tile its surfaces. See `applyLayoutGeometry`.
     public var onGeometryApplied: (() -> Void)?
 
+    /// Each window's latest layout string, from `%layout-change` (ahead of the
+    /// window listing, which only catches up on its next refresh).
+    public internal(set) var liveLayouts: [TmuxWindowID: String] = [:]
+
 }

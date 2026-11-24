@@ -80,6 +80,28 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
 
     var didInitialScreenClean = false
 
+    /// Whether the panes are laid out as cards (`layoutCards`): the desk shows
+    /// behind them, the plain terminal colour otherwise.
+    var usesCards = false {
+        didSet { if oldValue != usesCards { applyHostBackground() } }
+    }
+
+    /// The desk colour while there are cards. The window's chrome wears it too,
+    /// so the toolbar band and the gaps are one surface.
+    var deskColor: NSColor? {
+        usesCards ? PaneChromeColors.desk(behind: terminalBackground) : nil
+    }
+    var onDeskChanged: (() -> Void)?
+
+    /// The theme's background: a card's colour until its surface reports one.
+    var terminalBackground: NSColor { NSColor(hex: theme.background) }
+
+    private func applyHostBackground() {
+        layer?.backgroundColor = (deskColor ?? terminalBackground).cgColor
+        dividerOverlay.needsDisplay = true
+        onDeskChanged?()
+    }
+
     /// Tear down every pane's ghostty surface (display link + surface free) on
     /// the main thread before the window/view hierarchy is released — see
     /// GhosttyTerminalSurface.teardown(). Call from windowWillClose.
@@ -127,6 +149,13 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
         viewModel.$sessionPanes.map(\.count)
             .combineLatest(viewModel.$windows.map(\.count))
             .map { SessionChrome.isSinglePane(paneCount: $0, windowCount: $1) }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.needsLayout = true }
+            .store(in: &cancellables)
+        // The split tree arrives with the window listing; until then it is read
+        // back from the pane geometry.
+        viewModel.$windows.map { $0.map(\.layout) }
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.needsLayout = true }
@@ -179,6 +208,17 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
                 Task { @MainActor in self?.reapplyTheme() }
             })
         }
+        // A program can repaint its own background (OSC 11); the card round it
+        // follows.
+        themeObservers.append(NotificationCenter.default.addObserver(
+            forName: .ghosttySurfaceBackgroundChanged, object: nil, queue: .main) { [weak self] note in
+            let surface = note.object as? GhosttyTerminalSurface
+            MainActor.assumeIsolated {
+                guard let self, let cell = self.cells.values.first(where: { $0.surface === surface }),
+                      let color = cell.surface.reportedBackgroundColor else { return }
+                cell.container.card?.background = color
+            }
+        })
     }
 
     deinit {
@@ -192,7 +232,7 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     /// to every live surface.
     private func reapplyTheme() {
         theme = ThemeStore.shared.makeTerminalTheme()
-        layer?.backgroundColor = NSColor(hex: theme.background).cgColor
+        applyHostBackground()
         // A font change (size OR family) changes the pixel size of one cell, so
         // the cached cell metrics and last-pushed tmux client size are now stale.
         // Drop them: the next surface size report re-learns the cell size and

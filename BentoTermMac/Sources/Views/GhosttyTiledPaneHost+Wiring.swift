@@ -142,10 +142,6 @@ extension GhosttyTiledPaneHost {
     func wireContainerActions(_ container: PaneCellView,
                               paneID: TmuxPaneID) {
         container.onClick = { [weak self] in self?.viewModel.selectPane(paneID) }
-        container.onZoom = { [weak self] in
-            self?.viewModel.selectPane(paneID)
-            self?.viewModel.toggleZoom(paneID)
-        }
         container.onMenu = { [weak self, weak container] in
             guard let self, let container else { return }
             self.viewModel.selectPane(paneID)

@@ -15,7 +15,8 @@ extension TerminalViewModel {
             }
             recentOutput.recordOutput(pane: pane, data: data)
 
-        case .layoutChange(_, let layout):
+        case .layoutChange(let window, let layout):
+            liveLayouts[window] = layout
             // Apply the new pane geometry SYNCHRONOUSLY from the layout string.
             // tmux delivers %layout-change BEFORE the program's post-SIGWINCH
             // repaint %output in this same ordered stream, so resizing the

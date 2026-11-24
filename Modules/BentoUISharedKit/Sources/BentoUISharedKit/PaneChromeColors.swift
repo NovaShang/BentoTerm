@@ -80,6 +80,26 @@ public enum PaneChromeColors {
         status.wash.map { PaneChromeColor(hex: $0.hex, alpha: $0.alpha) }
     }
 
+    /// What shows between pane cards. Dark: deeper than the cards, unless the
+    /// terminal is already near black, where it can only go lighter. Light: a
+    /// touch greyer than a white card, and a shade off a tinted one.
+    public static func desk(behind bg: PaneChromeColor) -> PaneChromeColor {
+        let c = bg.paneChromeRGBA
+        let luminance = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+        if isDark {
+            return luminance < 0.075
+                ? bg.paneChromeMixed(with: .paneChromeWhite, fraction: 0.07)
+                : .paneChromeSRGB(0.045, 0.045, 0.05, 1)
+        }
+        return luminance > 0.99 ? .paneChromeSRGB(0.955, 0.955, 0.965, 1)
+                                : bg.paneChromeMixed(with: .paneChromeBlack, fraction: 0.055)
+    }
+
+    /// A card's hairline.
+    public static func cardHairline() -> PaneChromeColor {
+        isDark ? PaneChromeColor(white: 1, alpha: 0.10) : PaneChromeColor(white: 0, alpha: 0.07)
+    }
+
     /// `bg` with the status wash already blended in, opaque — what an empty
     /// washed terminal looks like, for chrome that sits beside the surface (the
     /// iOS pane surround and the backdrop behind it) and must read as the same

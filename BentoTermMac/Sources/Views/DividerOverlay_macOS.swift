@@ -34,11 +34,14 @@ final class DividerOverlay: NSView {
     // MARK: - Drawing (visual feedback)
 
     override func draw(_ dirtyRect: NSRect) {
-        let lineColor = PaneChromeColors.isDark
-            ? NSColor(white: 1, alpha: 0.18) : NSColor(white: 0, alpha: 0.18)
-        for d in dividers {
-            strokeLine(vertical: d.vertical, at: d.position, span: d.hotRect,
-                       color: lineColor, width: 1)
+        // The gap tells cards apart; the plain tiling still needs a line.
+        if host?.usesCards != true {
+            let lineColor = PaneChromeColors.isDark
+                ? NSColor(white: 1, alpha: 0.18) : NSColor(white: 0, alpha: 0.18)
+            for d in dividers {
+                strokeLine(vertical: d.vertical, at: d.position, span: d.hotRect,
+                           color: lineColor, width: 1)
+            }
         }
         // The line being dragged tracks the cursor live (tmux relayout lags
         // behind), drawn in the accent colour so the drag is clearly visible.
@@ -108,9 +111,13 @@ final class DividerOverlay: NSView {
         needsDisplay = true
     }
 
-    /// Points per tmux cell along each axis (proportional tiling = bounds / grid).
+    /// Points per tmux cell along each axis (proportional tiling = bounds /
+    /// grid; cards spend points on chrome, so theirs is the cell itself).
     private func pointsPerCell() -> CGPoint? {
         guard let host, bounds.width > 0, bounds.height > 0 else { return nil }
+        if host.usesCards, let cell = host.pointsPerCell {
+            return CGPoint(x: cell.width, y: cell.height)
+        }
         let grid = host.paneGridSize
         guard grid.cols > 0, grid.rows > 0 else { return nil }
         return CGPoint(x: bounds.width / grid.cols, y: bounds.height / grid.rows)

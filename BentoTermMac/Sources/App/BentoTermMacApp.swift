@@ -41,7 +41,7 @@ struct TerminalCommands: Commands {
         // opening another window: a pane split along the active pane's longer
         // side in Parallel, a tmux window in Focus. Its title follows the
         // front session's mode ("New Pane" / "New tmux Window"); that is done
-        // on the AppKit item (`BentoTerminalWindow.refreshNewItemTitle`), not
+        // on the AppKit item (`BentoTerminalWindow.refreshMenuItems`), not
         // with observed state here — see there for why. With no session
         // window, ⌘N opens one the way launch does.
         //
@@ -58,6 +58,16 @@ struct TerminalCommands: Commands {
         // Where every Mac app keeps it: straight under "About BentoTerm".
         CommandGroup(after: .appInfo) {
             CheckForUpdatesMenuItem()
+        }
+
+        // The front window's session. Static rows, like everything here:
+        // `BentoTerminalWindow.refreshMenuItems` hides what doesn't apply.
+        CommandMenu(BentoTerminalWindow.sessionMenuTitle) {
+            Button("Rename Session…") { BentoTerminalWindow.renameFrontSession() }
+            Button(TerminalSizingMode.releaseTitle) { BentoTerminalWindow.releaseFrontSessionSize() }
+            Button("Detach (keep running)") { BentoTerminalWindow.detachFrontSession() }
+            Divider()
+            Button("Kill Session…") { BentoTerminalWindow.killFrontSession() }
         }
 
         CommandMenu("Shell") {

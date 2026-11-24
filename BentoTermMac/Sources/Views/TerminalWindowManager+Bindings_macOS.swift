@@ -53,7 +53,7 @@ extension TerminalWindowManager {
                 guard let self, let tab, tab === self.activeTab else { return }
                 self.toolbar.setSessionMode(mode)
                 self.updateSidebar()
-                BentoTerminalWindow.refreshNewItemTitle()
+                BentoTerminalWindow.refreshMenuItems()
             }
             .store(in: &activeCancellables)
         // The take-over banner. Its own subscription rather than a ride on the
@@ -132,7 +132,7 @@ extension TerminalWindowManager {
             command: key.command, directory: directory,
             sshHost: tab.id.server.sshHost,
             home: NSHomeDirectory())
-        toolbar.setLocation(text ?? displayTitle(for: tab))
+        toolbar.setLocation(text ?? "")
     }
 
     /// Each tab's pane status + live session name drive its tab in the strip.

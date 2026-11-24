@@ -83,7 +83,6 @@
 		8F01FB3963E94CA8B2F2BB2B /* BentoGhosttyKit in Frameworks */ = {isa = PBXBuildFile; productRef = 325387AA6F0D6B50348A3F4D /* BentoGhosttyKit */; };
 		91EC3C6F5EA075B79A01D329 /* SSHControlSockets_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85FAF16324391D21EC402C17 /* SSHControlSockets_macOS.swift */; };
 		931467E6D3C6192C5D0649F6 /* BentoSessionKit in Frameworks */ = {isa = PBXBuildFile; productRef = F74675C2740074CBC8EC842D /* BentoSessionKit */; };
-		93CDD1F21AB0D362454751FE /* SessionsMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = B75E58A2AE8BB259D1E2A63A /* SessionsMenu.swift */; };
 		94815DBFF71E8BF1E3FC403D /* HapticService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C7096EA4BFE9BD6C81ACB83 /* HapticService.swift */; };
 		957AFB467BE5128F7BF42782 /* TerminalWindowManager+Bindings_macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F8B832DDB58A11F917F4D49 /* TerminalWindowManager+Bindings_macOS.swift */; };
 		96DE6781B70322DBE7D06697 /* IOSPortForwarder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766EF2138AFDF04717EE3132 /* IOSPortForwarder.swift */; };
@@ -237,7 +236,6 @@
 		B0839BFC41A3B24AEC605F20 /* TerminalWindowManager+Sidebar_macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TerminalWindowManager+Sidebar_macOS.swift"; sourceTree = "<group>"; };
 		B3BDABB268588893433DC067 /* TileDividerOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TileDividerOverlay.swift; sourceTree = "<group>"; };
 		B73561C6F88999D2ABEF2F0B /* GhosttyKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GhosttyKit; path = Modules/GhosttyKit; sourceTree = SOURCE_ROOT; };
-		B75E58A2AE8BB259D1E2A63A /* SessionsMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsMenu.swift; sourceTree = "<group>"; };
 		B7C4A837B9CCF54EBAD7A6C2 /* BentoMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BentoMark.swift; sourceTree = "<group>"; };
 		BD4901C69ED106A98CD7DB60 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		BEDB6939B5F75DD39412CBAF /* SessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionManager.swift; sourceTree = "<group>"; };
@@ -449,7 +447,6 @@
 				55FD2D98EB8A73C0DFA07921 /* PaneTitleBar_macOS.swift */,
 				EDCBBB54C75264E8F859A87B /* PlainTerminalHost_macOS.swift */,
 				7665217835A4054C96BF0849 /* PreviewDock_macOS.swift */,
-				B75E58A2AE8BB259D1E2A63A /* SessionsMenu.swift */,
 				D8AC2796BCA6E74D2BA8A34A /* SessionTab_macOS.swift */,
 				3645AA617BF76F6076FAD817 /* SettingsView.swift */,
 				A81310C1D2D1A7B7BCB38483 /* SoftwareUpdateSection.swift */,
@@ -965,7 +962,6 @@
 				91EC3C6F5EA075B79A01D329 /* SSHControlSockets_macOS.swift in Sources */,
 				FF06BB7239EE7CCB2158C0C3 /* SSHHostMenu_macOS.swift in Sources */,
 				2A1817CD4DA06E4FCD45AED6 /* SessionTab_macOS.swift in Sources */,
-				93CDD1F21AB0D362454751FE /* SessionsMenu.swift in Sources */,
 				3950D8BD2F972C35BDB2A658 /* SettingsView.swift in Sources */,
 				F7D1E2AD7475A3DBBAF683F1 /* SoftwareUpdateSection.swift in Sources */,
 				99E17452300741B8434F99A5 /* TerminalSessionWindow_macOS.swift in Sources */,

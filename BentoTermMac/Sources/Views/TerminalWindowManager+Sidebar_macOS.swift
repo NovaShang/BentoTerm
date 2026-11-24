@@ -24,8 +24,9 @@ extension TerminalWindowManager {
     /// window are read live from their view models; the rest of this Mac's come
     /// from the 5 s `tmux` poll; another host's from its window's session list.
     func rebuildSidebar() {
-        guard !tab.isPlain else { return }
-        let currentKey = tab.sessionKey
+        // A plain terminal is no session's window, though its key (a host alias,
+        // say) can read the same as one's.
+        let currentKey = tab.isPlain ? "" : tab.sessionKey
         var sections: [SidebarSection] = []
 
         // This Mac: the poll's sessions plus any open here the poll hasn't
@@ -65,7 +66,7 @@ extension TerminalWindowManager {
         // While split the session row is what's on screen; with one pane shown
         // alone, that pane's row.
         let vm = tab.viewModel
-        let selected: SidebarItemID = vm.sessionMode == .list
+        let selected: SidebarItemID? = tab.isPlain ? nil : vm.sessionMode == .list
             ? vm.activePaneID.map { .pane(session: currentKey, pane: "\($0)") } ?? .session(currentKey)
             : .session(currentKey)
         if sidebarModel.selection != selected { sidebarModel.selection = selected }
@@ -149,15 +150,7 @@ extension TerminalWindowManager {
         model.onRenameSession = { [weak self] row in self?.sidebarRename(row) }
         model.onKillSession = { [weak self] row in self?.sidebarKill(row) }
         model.onDetachSession = { [weak self] in self?.requestClose() }
-        model.onReleaseSize = { [weak self] in self?.toolbar.releaseSize() }
-        model.onShowNewMenu = { [weak self] in
-            guard let toolbar = self?.toolbar else { return }
-            toolbar.popAtPointer(toolbar.newMenu())
-        }
-        model.onShowAppMenu = { [weak self] in
-            guard let toolbar = self?.toolbar else { return }
-            toolbar.popAtPointer(toolbar.appMenu())
-        }
+        model.onReleaseSize = { [weak self] in self?.releaseSize() }
     }
 
     /// A session row: its panes, split side by side.
@@ -171,7 +164,7 @@ extension TerminalWindowManager {
 
     /// A pane row: that pane alone.
     private func sidebarPickedPane(_ row: SidebarPaneRow) {
-        if row.sessionKey == tab.sessionKey {
+        if !tab.isPlain, row.sessionKey == tab.sessionKey {
             showAlone(pane: row.paneID)
         } else if let id = TmuxSessionID(key: row.sessionKey) {
             BentoTerminalWindow.focusOrOpen(id) { $0.showAlone(pane: row.paneID) }

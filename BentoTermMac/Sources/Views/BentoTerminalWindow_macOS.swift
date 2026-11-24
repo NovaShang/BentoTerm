@@ -65,7 +65,7 @@ public enum BentoTerminalWindow {
 
     /// Go to session `id` — in THIS window.
     ///
-    /// The app is single-window by default, so picking a session (Session ⌄,
+    /// The app is single-window by default, so picking a session (the sidebar,
     /// the Dock menu) moves the window you are
     /// in onto it with `switch-client`, the way `prefix s` does in a terminal,
     /// instead of piling up a window per session. Exceptions, all of which
@@ -115,7 +115,7 @@ public enum BentoTerminalWindow {
         }
     }
 
-    /// Session ⌄ → Open in New Window (or ⌥-click): the one explicit way to
+    /// The sidebar's Open in New Window: the one explicit way to
     /// get a second window for a session, instead of switching this one.
     public static func openInNewWindow(_ id: TmuxSessionID) {
         if let m = manager(for: id.key) {
@@ -134,35 +134,6 @@ public enum BentoTerminalWindow {
         return m
     }
 
-    /// Open/focus `id` and land on the window with tmux INDEX `windowIndex`.
-    ///
-    /// The whole point of listing another session's windows in a menu is to
-    /// arrive in the one you picked. The old menu-bar version of this attached
-    /// with a window argument that was ignored, so it quietly landed on
-    /// whatever window the session was last on.
-    ///
-    /// The select cannot be issued with the open: the window's tmux ID isn't
-    /// known until the control channel has attached and listed them, and the
-    /// index is all a poll can give. So wait for the list, then select. Bounded,
-    /// because an attach that never completes must not leave a task waiting on
-    /// it forever — and landing on the session's own current window is a fine
-    /// failure mode.
-    public static func focusOrOpen(_ id: TmuxSessionID, windowIndex: Int?) {
-        focusOrOpen(id)
-        guard let windowIndex else { return }
-        Task { @MainActor in
-            let deadline = Date().addingTimeInterval(10)
-            while Date() < deadline {
-                if let m = manager(for: id.key),
-                   let window = m.tab.viewModel.windows.first(where: { $0.index == windowIndex }) {
-                    m.tab.viewModel.selectWindow(window.id)
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-        }
-    }
-
     /// Pushed from the app's `tmux ls` poll: every session on the LOCAL server.
     ///
     /// This is now only the *dormant sessions* list — the names a window can
@@ -178,7 +149,7 @@ public enum BentoTerminalWindow {
 
     /// The last `tmux ls` the app pushed in. Kept here (not only fanned out to
     /// the managers) because the reopen path runs when there are none.
-    private static var knownServerSessions: [LocalTmuxSessionName] = []
+    private(set) static var knownServerSessions: [LocalTmuxSessionName] = []
     /// Whether `knownServerSessions` is an answer at all. Empty after a poll
     /// means "no sessions"; empty before one means "don't know yet".
     private static var hasHeardFromServer = false
@@ -302,7 +273,7 @@ public enum BentoTerminalWindow {
     ///
     /// Only the most recent session is reopened, not every one that was open:
     /// the app is single-window by default, and one window brought back is
-    /// the expectation; the rest are a Session ⌄ away.
+    /// the expectation; the rest are in the sidebar.
     public static func openMainWindow() {
         if let m = frontmostManager() {
             m.bringToFront()
@@ -415,20 +386,44 @@ public enum BentoTerminalWindow {
     nonisolated static let newTmuxWindowTitle = "New tmux Window"
     nonisolated static let newPlainTerminalTitle = "New Plain Terminal"
 
-    /// Retitle File → ⌘N for the front session's mode.
+    /// The Session menu's title, and its Release row's, as `TerminalCommands`
+    /// declares them and `refreshMenuItems` finds them.
+    nonisolated static let sessionMenuTitle = "Session"
+
+    static func renameFrontSession() { frontSessionManager()?.presentRenameSheet() }
+    static func releaseFrontSessionSize() { frontSessionManager()?.releaseSize() }
+    static func detachFrontSession() { frontSessionManager()?.detachActiveSession() }
+    static func killFrontSession() { frontSessionManager()?.killActiveSession() }
+
+    /// The front window, when it shows a tmux session.
+    private static func frontSessionManager() -> TerminalWindowManager? {
+        frontmostManager().flatMap { $0.tab.isPlain ? nil : $0 }
+    }
+
+    /// Bring the menu bar up to date with the front window: File → ⌘N's title
+    /// for its session's mode, the Session menu only while it shows a tmux
+    /// session, and Release Size only while something has fixed the size.
     ///
     /// Done on the AppKit item rather than by making `TerminalCommands`
     /// observe state: a re-evaluated `.commands` body lets SwiftUI rebuild the
     /// menu, and its rebuild re-synthesizes File → Close with ⌘W — silently
     /// taking ⌘W back from Close Pane (see `reclaimClosePaneShortcut`). The
     /// item is found by its key equivalent so the title can't hide it.
-    static func refreshNewItemTitle() {
+    static func refreshMenuItems() {
         guard let main = NSApp.mainMenu else { return }
         let title = newItemTitle
         for top in main.items {
             for item in top.submenu?.items ?? []
             where item.keyEquivalent == "n" && item.keyEquivalentModifierMask == .command {
                 if item.title != title { item.title = title }
+            }
+            if top.submenu?.title == sessionMenuTitle {
+                let m = frontSessionManager()
+                top.isHidden = m == nil
+                let release = m?.tab.viewModel.sizingMode.offersRelease ?? false
+                for item in top.submenu?.items ?? [] where item.title == TerminalSizingMode.releaseTitle {
+                    item.isHidden = !release
+                }
             }
         }
     }
@@ -484,7 +479,7 @@ public enum BentoTerminalWindow {
             // `.accessory` (what the menu-bar build did) would now leave a
             // process with no Dock icon, no menu-bar item and no window: alive,
             // invisible and unquittable.
-            refreshNewItemTitle()
+            refreshMenuItems()
         }
         // Join the frontmost window's group only when tabs are what the user
         // wants; otherwise this stands alone. Either way `tabbingIdentifier` is
@@ -518,7 +513,7 @@ public enum BentoTerminalWindow {
         }
         m.bringToFront()
         recordSessionInUse(m.tab.id)
-        refreshNewItemTitle()
+        refreshMenuItems()
     }
 
     /// A plain (no-tmux) tab: never deduped — each is a new terminal — and never

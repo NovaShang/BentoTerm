@@ -113,10 +113,6 @@ public final class SessionSidebarModel: ObservableObject {
     /// has fixed it — `canReleaseSize`).
     public var onReleaseSize: (() -> Void)?
     @Published public var canReleaseSize = false
-    /// The foot's ＋ (everything that makes something new) and ⚙ (settings,
-    /// updates, About). No foot when the host leaves them unset.
-    public var onShowNewMenu: (() -> Void)?
-    public var onShowAppMenu: (() -> Void)?
 
     private var lastCurrentKey: String?
 
@@ -183,27 +179,8 @@ public struct SessionSidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if model.onShowNewMenu != nil || model.onShowAppMenu != nil { foot }
-        }
         .windowActionDialogs(viewModel: viewModel, state: actions)
         .animation(.snappy, value: model.sections)
-    }
-
-    /// ＋ on the left, ⚙ on the right: the sidebar's own controls, so the
-    /// title bar over the terminal can stay empty while it is shown.
-    private var foot: some View {
-        HStack {
-            if let new = model.onShowNewMenu {
-                FootButton(symbol: "plus", label: "New", action: new)
-            }
-            Spacer()
-            if let app = model.onShowAppMenu {
-                FootButton(symbol: "gearshape", label: "Settings", action: app)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
     }
 
     @ViewBuilder
@@ -353,28 +330,6 @@ private struct SidebarRow<Icon: View, Title: View, Trailing: View>: View {
             trailing
         }
         .accessibilityElement(children: .combine)
-    }
-}
-
-/// A round button at the sidebar's foot: system glass where there is glass.
-private struct FootButton: View {
-    let symbol: String
-    let label: String
-    let action: () -> Void
-
-    var body: some View {
-        let button = Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .medium))
-                .frame(width: 20, height: 20)
-        }
-        .help(label)
-        .accessibilityLabel(label)
-        if #available(iOS 26.0, macOS 26.0, *) {
-            button.buttonStyle(.glass).buttonBorderShape(.circle)
-        } else {
-            button.buttonStyle(.bordered).buttonBorderShape(.circle)
-        }
     }
 }
 

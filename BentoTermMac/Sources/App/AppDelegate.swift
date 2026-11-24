@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NotificationCenter.default.addObserver(
             forName: NSMenu.didBeginTrackingNotification, object: NSApp.mainMenu, queue: .main
         ) { _ in
-            MainActor.assumeIsolated { BentoTerminalWindow.refreshNewItemTitle() }
+            MainActor.assumeIsolated { BentoTerminalWindow.refreshMenuItems() }
         }
 
         // Apply the saved light/dark preference before any window appears, and
@@ -138,7 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // DEBUG-only for the company it keeps, not for its blast
                 // radius: it can only reach a session named above.
                 // Test hook: "N|name" — N seconds later, pick session `name`
-                // the way Session ⌄ / the Dock menu do, which switches
+                // the way the sidebar / the Dock menu do, which switches
                 // the frontmost window onto it (switch-client) rather than
                 // opening another. Like the split hook, it exists because the
                 // menus need synthesized clicks a headless run can't make.
