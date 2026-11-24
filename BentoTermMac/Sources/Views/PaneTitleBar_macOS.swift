@@ -5,19 +5,17 @@ import AppKit
 import BentoSessionKit
 import BentoUISharedKit
 
-/// The thin label strip atop each pane, with zoom + menu buttons on the right.
+/// The thin label strip atop each pane, with a menu button on the right.
 @MainActor
 final class PaneTitleBar: NSView {
     private let label = NSTextField(labelWithString: "")
     /// Leading semantic state glyph (the same play/question/check language as the
     /// List sidebar), replacing the old status dot. Empty for idle.
     private let stateIcon = NSImageView()
-    let zoomButton = NSButton()
     let menuButton = NSButton()
     /// Trailing mode glyph (copy-mode / mouse reporting off). Hidden by default —
     /// "nothing unusual" must not carry a marker, same rule as idle state.
     private let modeButton = NSButton()
-    var onZoom: (() -> Void)?
     var onMenu: (() -> Void)?
 
     var text: String = "" {
@@ -52,6 +50,17 @@ final class PaneTitleBar: NSView {
     }
 
     @objc private func modeTapped() { onModeBadge?() }
+
+    /// The card look (see `PaneCellView.card`): no band, the title sits on the
+    /// card itself, larger and inset from the round corners.
+    var isCard = false {
+        didSet {
+            guard oldValue != isCard else { return }
+            label.font = .systemFont(ofSize: isCard ? 12 : 10, weight: .medium)
+            updateChrome()
+            needsLayout = true
+        }
+    }
 
     /// Pane working/idle/awaiting — drives the leading state glyph (play/question)
     /// and the title-bar band color (blue / amber / green).
@@ -102,11 +111,12 @@ final class PaneTitleBar: NSView {
         // Pane status wins the band color; otherwise a focused-but-idle pane takes
         // the window highlight color, so focus reads from the title bar too — not
         // just the border (the border alone is too quiet for an idle gray pane).
-        let accent = chromeAccent() ?? (isActive ? GhosttyPaneColors.focusAccent() : nil)
-        layer?.backgroundColor = PaneChromeColors.titleBand(accent: accent, active: isActive).cgColor
+        // A card has no band: the wash carries status and the border focus.
+        let accent = chromeAccent() ?? (isActive && !isCard ? GhosttyPaneColors.focusAccent() : nil)
+        layer?.backgroundColor = isCard
+            ? nil : PaneChromeColors.titleBand(accent: accent, active: isActive).cgColor
         let ink = PaneChromeColors.ink(accent: accent, active: isActive)
         label.textColor = ink
-        zoomButton.contentTintColor = ink
         menuButton.contentTintColor = ink
         // Same ink as the rest of the bar: a mode is information, not an alarm,
         // and it must never read as one of the state colors.
@@ -132,8 +142,6 @@ final class PaneTitleBar: NSView {
         updateStateIcon()
         addSubview(stateIcon)
 
-        configure(zoomButton, symbol: "arrow.up.left.and.arrow.down.right",
-                  fallback: "⤢", action: #selector(zoomTapped))
         configure(menuButton, symbol: "ellipsis", fallback: "⋯", action: #selector(menuTapped))
         configure(modeButton, symbol: "cursorarrow.slash", fallback: "⊘", action: #selector(modeTapped))
         modeButton.isHidden = true
@@ -154,24 +162,22 @@ final class PaneTitleBar: NSView {
     /// sit at a fixed small size flush-right and never depend on intrinsic sizes.
     override func layout() {
         super.layout()
-        let s = Self.buttonSize
+        let s = isCard ? 18 : Self.buttonSize
         let y = ((bounds.height - s) / 2).rounded()
-        let menuX = bounds.width - 6 - s
-        let zoomX = menuX - 4 - s
+        let menuX = bounds.width - (isCard ? 12 : 6) - s
         menuButton.frame = NSRect(x: menuX, y: y, width: s, height: s)
-        zoomButton.frame = NSRect(x: zoomX, y: y, width: s, height: s)
         // Mode glyph sits leftmost in the trailing cluster, and like the other
         // buttons yields its slot to the label when there is no mode.
-        var modeX = zoomX
+        var modeX = menuX
         if modeBadge != .none {
             modeX -= 4 + s
             modeButton.frame = NSRect(x: modeX, y: y, width: s, height: s)
         }
-        let chromeLeftX = modeBadge != .none ? modeX : zoomX
+        let chromeLeftX = modeBadge != .none ? modeX : menuX
         // Fixed-width leading slot for the state glyph, so the title never shifts
         // as state changes (idle = empty slot, same x for the label).
         let icon: CGFloat = 13
-        stateIcon.frame = NSRect(x: 8, y: ((bounds.height - icon) / 2).rounded(), width: icon, height: icon)
+        stateIcon.frame = NSRect(x: isCard ? 13 : 8, y: ((bounds.height - icon) / 2).rounded(), width: icon, height: icon)
         let labelX = stateIcon.frame.maxX + 5
         let labelRight = chromeLeftX - 6
         // Center the label on its line height (a full-height NSTextField frame
@@ -204,7 +210,6 @@ final class PaneTitleBar: NSView {
         addSubview(button)
     }
 
-    @objc private func zoomTapped() { onZoom?() }
     @objc private func menuTapped() { onMenu?() }
 
     @available(*, unavailable)
@@ -216,7 +221,7 @@ final class PaneTitleBar: NSView {
     // pane container (so clicking the title to focus the pane still works).
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
-        let buttons: [NSView] = [zoomButton, menuButton]
+        let buttons: [NSView] = [menuButton]
         return buttons.contains(where: { $0 === hit }) ? hit : nil
     }
 }

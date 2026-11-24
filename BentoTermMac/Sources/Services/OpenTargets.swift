@@ -107,7 +107,7 @@ public final class OpenTargetProvider {
         }
     }
 
-    /// Do the thing, in a window of its own (Dock menu, Shortcuts).
+    /// Do the thing, in the front window (Dock menu, Shortcuts).
     public func open(_ target: OpenTarget) {
         switch route(for: target) {
         case .localSession(let name): BentoTerminalWindow.focusOrOpen(.local(name))
@@ -115,7 +115,7 @@ public final class OpenTargetProvider {
         }
     }
 
-    /// Perform a creation verb in a window of its own (Dock menu, Shortcuts).
+    /// Perform a creation verb in the front window (Dock menu, Shortcuts).
     ///
     /// Here rather than in each surface for the same reason `open` is here.
     public func perform(_ action: LaunchAction) {
@@ -123,7 +123,7 @@ public final class OpenTargetProvider {
         case .plainTerminal:
             BentoTerminalWindow.newWindowNoTmux()
         case .emptySession:
-            BentoTerminalWindow.newWindow(session: BentoTerminalWindow.nextSessionName())
+            BentoTerminalWindow.newSession()
         }
     }
 

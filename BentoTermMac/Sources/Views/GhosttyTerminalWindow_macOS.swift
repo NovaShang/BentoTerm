@@ -9,25 +9,23 @@ import SwiftUI
 import BentoSessionKit
 import BentoUISharedKit
 
-// MARK: - TerminalWindowManager (one window, many session tabs)
+// MARK: - TerminalWindowManager (one window, the sessions open in it)
 
 @MainActor
 final class TerminalWindowManager: NSObject, NSWindowDelegate {
     private(set) var window: NSWindow!
-    /// The ONE session this window shows. Several sessions means several
-    /// windows, joined into a native tab group — see `BentoTerminalWindow`.
-    let tab: SessionTab
+    /// The session this window is showing, one of `tabs`.
+    private(set) var tab: SessionTab
+    /// Every session and plain terminal open in this window, the one last shown
+    /// at the end. Each keeps its own connection while another is on show, so
+    /// the sidebar's states stay live and going back is instant; it ends when
+    /// it is closed, detached or killed.
+    private(set) var tabs: [SessionTab] = []
     /// Every tmux session on the LOCAL machine (pushed from the app's `tmux ls`
     /// poll). Only the dormant-session list for the strip — it says nothing
     /// about whether THIS window's session is alive when this window is remote.
     var localServerSessions: [LocalTmuxSessionName] = []
-    /// Consecutive self-polls in which this window's session was missing from
-    /// its OWN server's session list.
-    var absentPolls = 0
     private static let absentPollsToClose = 4
-    /// The last `sessionListGeneration` acted on, so a Combine republish that
-    /// isn't a fresh list can't be counted as a miss.
-    private var lastSessionListGeneration = 0
     /// The tmux windows currently shown as segments (a subset when they
     /// overflow the strip). Sessions moved to the named button on the left.
     var visibleWindows: [TmuxWindowID] = []
@@ -39,12 +37,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// width persistence are all AppKit's. It hosts the shared SwiftUI
     /// `SessionSidebar`, and whether it shows is the user's (see
     /// `TerminalWindowManager+Sidebar`).
-    ///
-    /// A plain terminal's window has neither the sidebar nor the dock: both
-    /// items are nil there, and everything that would open them belongs to
-    /// the session toolbar, which a plain window doesn't build.
     private let splitVC = NSSplitViewController()
-    private var sidebarItem: NSSplitViewItem?
     private var sidebarHosting: NSHostingController<AnyView>?
     /// Trailing "pin previews here" dock — a collapsed split item that expands
     /// on the first pin. One model per window, persists across tab switches.
@@ -53,7 +46,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// Content column root. With `.fullSizeContentView` the column extends
     /// under the toolbar, so the terminal container is pinned below the chrome
     /// (see `installContentConstraints`).
-    private let contentRoot = NSView()
+    let contentRoot = NSView()
     private let container = NSView()
     /// Opaque theme-colored filler under the toolbar band. The unified
     /// toolbar's material samples the content BENEATH it — with the terminal
@@ -62,10 +55,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// Frosting the theme color itself is the system-correct unified look
     /// (what Safari's toolbar does over page content).
     private let topFill = NSView()
-    /// The terminal's top: under the toolbar, or the window's top edge while
-    /// the sidebar is shown (`applyTerminalTop`).
-    private var terminalBelowChrome: NSLayoutConstraint?
-    private var terminalFullHeight: NSLayoutConstraint?
     /// What the sidebar lists (filled by `rebuildSidebar`).
     let sidebarModel = SessionSidebarModel()
     /// Follows the sidebar being shown or put away, from any of its controls.
@@ -80,14 +69,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     // it had become: right-click anywhere up there, get the ACTIVE session's
     // actions — including Kill Session — while the user was pointing at a
     // different tab. Destructive action, wrong target, no way to tell. Removed;
-    // the session's actions live in the named button on the left.
+    // the session's actions live on its sidebar row and in the Session menu.
 
     /// Toolbar bindings to the *active* tab's VM (re-subscribed on switch).
     var activeCancellables = Set<AnyCancellable>()
-    /// One failure alert per window — the view model can re-publish `showError`
-    /// and the sheet must not stack.
-    var failureAlertShown = false
-
     /// The auth sheet currently up, if any. One at a time: ssh asks its next
     /// question only after this one is answered.
     var authPromptAlert: NSAlert?
@@ -105,9 +90,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
     var onEmpty: (() -> Void)?
 
-    init(tab: SessionTab) {
+    /// `connect: false` for a session already up, moved here from another window.
+    init(tab: SessionTab, connect: Bool = true) {
         self.tab = tab
-        self.toolbar = TerminalToolbarController(isPlain: tab.isPlain)
+        self.toolbar = TerminalToolbarController()
         super.init()
         let win = TerminalSessionWindow.makeShell()
         win.delegate = self
@@ -119,13 +105,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
 
         let contentVC = NSViewController()
         contentVC.view = contentRoot
-        if tab.isPlain {
-            // One surface, nothing beside it: no sidebar, no dock.
-            win.contentViewController = contentVC
-            win.setContentSize(Self.defaultContentSize)
-        } else {
-            installSessionColumns(around: contentVC, in: win)
-        }
+        installColumns(around: contentVC, in: win)
         applyWindowBackground(to: win)
         NotificationCenter.default.addObserver(
             self, selector: #selector(themeChanged),
@@ -134,10 +114,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             self, selector: #selector(surfaceBackgroundChanged(_:)),
             name: .ghosttySurfaceBackgroundChanged, object: nil)
 
-        // A plain tab vanishes with its window — there's nothing to reconnect.
-        toolbar.onCloseTab = { [weak self] in self?.window.close() }
         toolbar.hostWindow = win
-        if !tab.isPlain { wireSessionToolbar(in: win) }
+        wireSessionToolbar(in: win)
         win.toolbar = toolbar.makeToolbar()
         win.toolbarStyle = .unified
         // Restore size + position, but only for the window that opens into an
@@ -149,27 +127,14 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         self.window = win
         installContentConstraints(in: win)
 
-        // Bring the session up. This used to live in `loadTab`, which ran when a
-        // tab was added to the old multi-tab window; with one session per window
-        // it belongs to construction — a window without these is a titled box
-        // with nothing connected behind it.
-        if tab.isPlain {
-            var bag = Set<AnyCancellable>()
-            subscribeFailure(tab, into: &bag)
-            tabCancellables[ObjectIdentifier(tab)] = bag
-        } else {
-            subscribe(tab)
-        }
-        tab.connect()
-        show(tab)
-        if !tab.isPlain { BentoTerminalWindow.recordSessionInUse(tab.id) }
+        add(tab, connect: connect)
     }
 
-    /// The session window's columns: the system sidebar arrangement — an
+    /// The window's columns: the system sidebar arrangement — an
     /// `NSSplitViewController` whose first item is a real sidebar split item
     /// (native material, full-height layout, animated collapse, divider drag,
     /// width autosave) — plus the trailing preview dock.
-    private func installSessionColumns(around contentVC: NSViewController, in win: NSWindow) {
+    private func installColumns(around contentVC: NSViewController, in win: NSWindow) {
         let hosting = NSHostingController(rootView: AnyView(EmptyView()))
         sidebarHosting = hosting
         let sidebar = NSSplitViewItem(sidebarWithViewController: hosting)
@@ -182,16 +147,57 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // it to the new 50%-wider default (1.5× the 180 minimum) BEFORE the
         // split view ever lays out, or the window opens with the stale width.
         hosting.view.frame = NSRect(x: 0, y: 0, width: 270, height: 640)
-        sidebarItem = sidebar
 
         let contentItem = NSSplitViewItem(viewController: contentVC)
         // The terminal's floor. The dock has no ceiling (see below), so this is
         // what stops a dock drag from squeezing the terminal to nothing and
         // resizing tmux to a pathological column count.
         contentItem.minimumThickness = 400
+        // The title bar and what's under it are one surface. Per item: the
+        // window's own setting doesn't reach a split view's columns.
+        sidebar.titlebarSeparatorStyle = .none
+        contentItem.titlebarSeparatorStyle = .none
         splitVC.addSplitViewItem(sidebar)
         splitVC.addSplitViewItem(contentItem)
+        addPreviewDock()
 
+        // Key bumped from "BentoSidebarSplit" so the wider default (270)
+        // applies even where the old key remembers a narrower width; drags
+        // from here on save into the new key.
+        splitVC.splitView.autosaveName = "BentoSidebarSplitWide"
+        // Assigning a `contentViewController` RESIZES the window to that
+        // controller's fitting size (500 × 500 for this split view), so the
+        // real size is set right after.
+        win.contentViewController = splitVC
+        win.setContentSize(Self.defaultContentSize)
+        // The splitView autosave (kept for the sidebar width) also remembers
+        // the dock's expanded state across window incarnations — a fresh
+        // window would restore yesterday's EXPANDED dock with a brand-new,
+        // empty, uncloseable model behind it. Dock visibility is model-driven
+        // only: re-assert emptiness after the restoration that the
+        // contentViewController assignment just applied (and once more next
+        // runloop turn, in case restoration lands on first display).
+        dockItem?.isCollapsed = true
+        // The same restoration would bring back the sidebar as that split view
+        // last had it; the user's last choice is the app-wide preference.
+        sidebar.isCollapsed = !Self.sidebarPreferred
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.dockItem?.isCollapsed = self.previewDock.tabs.isEmpty
+        }
+        wireSidebar()
+        sidebarCollapseObservation = sidebar.observe(\.isCollapsed, options: [.new]) { [weak self] item, _ in
+            let shown = !item.isCollapsed
+            MainActor.assumeIsolated {
+                UserDefaults.standard.set(shown, forKey: Self.sidebarShownKey)
+                // The window strip's room changes with the column's width.
+                DispatchQueue.main.async { self?.rebuildTabBar() }
+            }
+        }
+    }
+
+    /// The trailing column.
+    private func addPreviewDock() {
         // Trailing preview dock: collapsed until something is pinned. The
         // dock's content starts BELOW the title bar (safe-area top) — unlike
         // the full-height sidebar, it reads as a panel UNDER the window
@@ -215,6 +221,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // reading a long markdown file there wants half the window. How wide
         // the dock should be is the user's call; the terminal's floor
         // (contentItem.minimumThickness) is the only thing we insist on.
+        dock.titlebarSeparatorStyle = .none
         dock.isCollapsed = true
         dock.holdingPriority = NSLayoutConstraint.Priority(251)  // terminal flexes, dock holds
         dockItem = dock
@@ -224,73 +231,17 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // CURRENT pane at load time, so the tree follows the user.
         toolbar.onTogglePreview = { [weak self] in self?.togglePreviewDock() }
         previewDock.treeContextProvider = { [weak self] in self?.activeTab?.previewContext }
-
-        // Key bumped from "BentoSidebarSplit" so the wider default (270)
-        // applies even where the old key remembers a narrower width; drags
-        // from here on save into the new key.
-        splitVC.splitView.autosaveName = "BentoSidebarSplitWide"
-        // Assigning a `contentViewController` RESIZES the window to that
-        // controller's fitting size (500 × 500 for this split view), so the
-        // real size is set right after.
-        win.contentViewController = splitVC
-        win.setContentSize(Self.defaultContentSize)
-        // The splitView autosave (kept for the sidebar width) also remembers
-        // the dock's expanded state across window incarnations — a fresh
-        // window would restore yesterday's EXPANDED dock with a brand-new,
-        // empty, uncloseable model behind it. Dock visibility is model-driven
-        // only: re-assert emptiness after the restoration that the
-        // contentViewController assignment just applied (and once more next
-        // runloop turn, in case restoration lands on first display).
-        dock.isCollapsed = true
-        // The same restoration would bring back the sidebar as that split view
-        // last had it; the user's last choice is the app-wide preference.
-        sidebar.isCollapsed = !Self.sidebarPreferred
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.dockItem?.isCollapsed = self.previewDock.tabs.isEmpty
-        }
-        hosting.rootView = AnyView(SessionSidebar(model: sidebarModel, viewModel: tab.viewModel))
-        wireSidebar()
-        sidebarCollapseObservation = sidebar.observe(\.isCollapsed, options: [.new]) { [weak self] item, _ in
-            let shown = !item.isCollapsed
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                UserDefaults.standard.set(shown, forKey: Self.sidebarShownKey)
-                self.applyTerminalTop()
-                self.rebuildTabBar()
-            }
-        }
     }
 
-    /// Whether the sidebar is on screen (false in a plain terminal's window,
-    /// which has none).
-    var sidebarShown: Bool { sidebarItem.map { !$0.isCollapsed } ?? false }
-
-    /// Toolbar: <session> ⌄ | [window tabs] | New ⌄ | ⋯ — the centre hosts the
-    /// current session's tmux WINDOWS as a Finder-style segmented
-    /// `NSToolbarItemGroup`; sessions live in the named button's menu on the
-    /// left. That gives tmux's three levels three fixed places (session /
-    /// window / pane) instead of leaving the middle one homeless.
+    /// Toolbar: [window tabs or location] | ＋ ▤ — the centre hosts the current
+    /// session's tmux WINDOWS as a Finder-style segmented `NSToolbarItemGroup`.
+    /// Sessions are the sidebar's, and their actions the Session menu's.
     private func wireSessionToolbar(in win: TerminalSessionWindow) {
         toolbar.onSelectSegment = { [weak self] idx in self?.segmentPicked(idx) }
-        // Picking a session moves THIS window onto it (switch-client); one
-        // already up in another window comes forward instead. ⌥ / the row's
-        // "Open in New Window" keeps this window and opens that one beside it.
-        toolbar.onSelectSession = { key in BentoTerminalWindow.focusOrOpen(sessionKey: key) }
-        toolbar.onOpenSessionInNewWindow = { key in
-            if let id = TmuxSessionID(key: key) { BentoTerminalWindow.openInNewWindow(id) }
-        }
-        toolbar.onReleaseSize = { [weak self] in
-            self?.activeTab?.viewModel.releaseSessionSize()
-            self?.rebuildTabBar()
-        }
         toolbar.onClaimSessionSize = { [weak self] in
             self?.activeTab?.viewModel.claimSessionSize()
             self?.rebuildTabBar()
         }
-        toolbar.onKillSession = { [weak self] in self?.killActiveSession() }
-        toolbar.onDetach = { [weak self] in self?.detachActiveSession() }
-        toolbar.onRenameSession = { [weak self] in self?.presentRenameSheet() }
         toolbar.onWindowMenu = { [weak self] index in self?.windowMenuItems(forSegment: index) }
         win.onRightClick = { [weak toolbar] point in
             toolbar?.handleRightClick(atWindowPoint: point) ?? false
@@ -318,8 +269,9 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         window?.orderFront(nil)
     }
 
-    /// Show/hide the dock without touching its tabs.
+    /// Show/hide the dock without touching its tabs. A plain terminal has none.
     func togglePreviewDock() {
+        guard !tab.isPlain else { return }
         dockItem?.animator().isCollapsed.toggle()
     }
 
@@ -332,7 +284,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// — it reflects the user's own ghostty config and runtime OSC 11); the
     /// configured theme is only the pre-first-report fallback.
     private func applyWindowBackground(to win: NSWindow) {
-        let color = reportedChromeColor ?? themeBackgroundColor()
+        // With panes as cards the chrome is the desk they lie on.
+        let color = tab.paneHost?.deskColor ?? reportedChromeColor ?? themeBackgroundColor()
         win.backgroundColor = color
         topFill.layer?.backgroundColor = color.cgColor
     }
@@ -365,7 +318,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// a background outside exotic per-pane OSC use.)
     @objc private func surfaceBackgroundChanged(_ note: Notification) {
         guard let view = note.object as? GhosttyTerminalSurface,
-              view.window === window,
+              view.window === window, view.isDescendant(of: tab.contentView),
               let color = view.reportedBackgroundColor else { return }
         reportedChromeColor = color
         applyWindowBackground(to: window)
@@ -398,10 +351,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         guard let guide = win.contentLayoutGuide as? NSLayoutGuide else { return }
         container.translatesAutoresizingMaskIntoConstraints = false
         topFill.translatesAutoresizingMaskIntoConstraints = false
-        terminalBelowChrome = container.topAnchor.constraint(equalTo: guide.topAnchor)
-        terminalFullHeight = container.topAnchor.constraint(equalTo: contentRoot.topAnchor)
-        applyTerminalTop()
         NSLayoutConstraint.activate([
+            container.topAnchor.constraint(equalTo: guide.topAnchor),
             container.leadingAnchor.constraint(equalTo: contentRoot.leadingAnchor),
             container.trailingAnchor.constraint(equalTo: contentRoot.trailingAnchor),
             container.bottomAnchor.constraint(equalTo: contentRoot.bottomAnchor),
@@ -411,17 +362,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             topFill.leadingAnchor.constraint(equalTo: contentRoot.leadingAnchor),
             topFill.trailingAnchor.constraint(equalTo: contentRoot.trailingAnchor),
         ])
-    }
-
-    /// With the sidebar shown the title bar over the terminal holds only the
-    /// file panel's button, so the terminal runs up to the window's top edge
-    /// and that button floats over it. With the sidebar away the toolbar is
-    /// full again and the terminal starts below it.
-    func applyTerminalTop() {
-        guard let below = terminalBelowChrome, let full = terminalFullHeight else { return }
-        let fullHeight = sidebarShown
-        below.isActive = !fullHeight
-        full.isActive = fullHeight
     }
 
     // MARK: Split ⇄ alone (Tiled ⇄ List)
@@ -450,31 +390,6 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
                     // Snap the segmented control back to the real mode.
                     if let self { self.toolbar.setSessionMode(self.toolbarMode(for: self.tab)) }
                 }
-            }
-        }
-    }
-
-    /// Move this window onto session `id` (same server — see
-    /// `BentoTerminalWindow.focusOrOpen`). The view model follows tmux's
-    /// `%session-changed`: name, windows, panes, mode and sizing are re-read,
-    /// and `migrateSessionKey` carries this window's identity across. If the
-    /// switch is refused (the session vanished between the menu and the
-    /// click), the session opens in a window of its own rather than nowhere.
-    /// `then` runs once the window shows the new session — its panes listed,
-    /// so it can act on them.
-    func switchSession(to id: TmuxSessionID,
-                       then: ((TerminalWindowManager) -> Void)? = nil) {
-        let vm = tab.viewModel
-        Task { [weak self] in
-            let ok = await vm.switchOrCreateSession(id.name)
-            guard let self else { return }
-            if ok {
-                self.bringToFront()
-                BentoTerminalWindow.recordSessionInUse(id)
-                if id.isLocal { BentoTerminalWindow.onLocalServerChanged?() }
-                then?(self)
-            } else {
-                BentoTerminalWindow.openInNewWindow(id)
             }
         }
     }
@@ -527,52 +442,133 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         rebuildTabBar()
     }
 
-    /// This window's OWN tmux server answered `list-sessions`. When our session
-    /// isn't in it, it was killed from somewhere else (another client, a
-    /// `tmux kill-session`) and the window closes rather than sit on a dead
-    /// client — the same rule as before, now asked of the right machine.
-    func sessionListChanged(generation: Int, names: [String]) {
-        guard generation != lastSessionListGeneration else { return }
-        lastSessionListGeneration = generation
+    /// `tab`'s OWN tmux server answered `list-sessions`. When its session isn't
+    /// in it, it was killed from somewhere else (another client, a
+    /// `tmux kill-session`) and it closes here rather than sit on a dead client — the same rule as before, now asked of the right machine.
+    func sessionListChanged(of tab: SessionTab, generation: Int, names: [String]) {
+        guard generation != tab.lastSessionListGeneration else { return }
+        tab.lastSessionListGeneration = generation
         guard !names.isEmpty else { return }
         if !names.contains(tab.id.name) {
-            absentPolls += 1
+            tab.absentPolls += 1
             // One transient miss must not close a live tab — a busy server can
             // drop a session from one listing.
-            if absentPolls >= Self.absentPollsToClose { window.close() }
+            if tab.absentPolls >= Self.absentPollsToClose { close(tab) }
         } else {
-            absentPolls = 0
+            tab.absentPolls = 0
         }
         rebuildTabBar()
     }
 
-    /// Install this window's one session. Called once, at construction — there
-    /// is no tab switching inside a window any more, so nothing reparents.
-    private func show(_ tab: SessionTab) {
-        container.subviews.forEach { $0.removeFromSuperview() }
+    /// Open `tab` in this window and show it.
+    func add(_ tab: SessionTab, connect: Bool = true) {
+        tabs.append(tab)
         let content = tab.contentView
+        content.isHidden = true
         content.frame = container.bounds
         content.autoresizingMask = [.width, .height]
         container.addSubview(content)
-        window.makeFirstResponder(tab.initialResponder)
-        if tab.isPlain {
-            window.title = tab.windowTitle
-            toolbar.setSessionTitle(tab.windowTitle)
-            return
+        tab.plainHost?.onClose = { [weak self, weak tab] in
+            if let tab { self?.close(tab) }
         }
-        window.title = displayTitle(for: tab)
-        rebindActiveToolbar(tab)
-        toolbar.setSessionMode(toolbarMode(for: tab))
-        updateSidebar()
+        tab.paneHost?.onDeskChanged = { [weak self, weak tab] in
+            guard let self, let window = self.window, tab === self.tab else { return }
+            self.applyWindowBackground(to: window)
+        }
+        if tab.isPlain {
+            var bag = Set<AnyCancellable>()
+            subscribeFailure(tab, into: &bag)
+            tabCancellables[ObjectIdentifier(tab)] = bag
+        } else {
+            subscribe(tab)
+        }
+        if connect { tab.connect() }
+        show(tab)
+    }
+
+    /// Show one of `tabs`; the others stay connected, out of sight.
+    func show(_ tab: SessionTab) {
+        guard let i = tabs.firstIndex(where: { $0 === tab }) else { return }
+        tabs.append(tabs.remove(at: i))
+        self.tab = tab
+        for other in tabs {
+            let onShow = other === tab
+            other.contentView.isHidden = !onShow
+            if onShow { other.viewModel.noteShown() } else { other.viewModel.isOnScreen = false }
+        }
+        tab.contentView.frame = container.bounds
+        queriedDirectory = nil
+        reportedChromeColor = tab.reportedBackground
+        sidebarHosting?.rootView = AnyView(SessionSidebar(model: sidebarModel, viewModel: tab.viewModel))
+        toolbar.isPlain = tab.isPlain
+        if tab.isPlain {
+            activeCancellables.removeAll()
+            toolbar.setLocation("")
+            toolbar.setSessionMode(nil)
+            if let dockItem, !dockItem.isCollapsed {
+                dockWasOpen = true
+                dockItem.isCollapsed = true
+            }
+            localServerSessions = BentoTerminalWindow.knownServerSessions
+        } else {
+            rebindActiveToolbar(tab)
+            toolbar.setSessionMode(toolbarMode(for: tab))
+            if dockWasOpen { dockItem?.isCollapsed = false; dockWasOpen = false }
+            previewDock.refreshTree()
+            if window.isKeyWindow || window.isMainWindow || !window.isVisible {
+                BentoTerminalWindow.recordSessionInUse(tab.id)
+            }
+        }
+        applyWindowBackground(to: window)
+        rebuildTabBar()
+        window.makeFirstResponder(tab.initialResponder)
+        tab.paneHost?.updateActiveBorders()
+        BentoTerminalWindow.tabsChanged(from: self)
+    }
+
+    /// The file panel was open when a plain terminal, which has none, came on
+    /// show.
+    private var dockWasOpen = false
+
+    /// Close one of `tabs`: its connection ends (a tmux session keeps running
+    /// on its server) and the one shown before it comes back. The last one
+    /// takes the window with it.
+    func close(_ tab: SessionTab) {
+        guard tabs.contains(where: { $0 === tab }) else { return }
+        guard tabs.count > 1 else { window.close(); return }
+        remove(tab)
+        tab.teardown()
+    }
+
+    /// Take `tab` out of this window without ending it. Never the last one.
+    func remove(_ tab: SessionTab) {
+        tabCancellables[ObjectIdentifier(tab)] = nil
+        tabs.removeAll { $0 === tab }
+        if tab === self.tab, let previous = tabs.last { show(previous) }
+        tab.contentView.removeFromSuperview()
+        tab.plainHost?.onClose = nil
+        tab.paneHost?.onDeskChanged = nil
+        rebuildTabBar()
+        BentoTerminalWindow.tabsChanged(from: self)
+    }
+
+    /// The session `key` names, when it is open in this window.
+    func sessionTab(_ key: String) -> SessionTab? {
+        tabs.first { !$0.isPlain && $0.sessionKey == key }
+    }
+
+    /// Detach: end this window's connection to the session, which keeps
+    /// running on the server.
+    func detachActiveSession() { close(tab) }
+
+    /// Hand the session's size back to tmux's default policy.
+    func releaseSize() {
+        tab.viewModel.releaseSessionSize()
         rebuildTabBar()
     }
 
-    /// Detach: close this window but leave the tmux session running on the
-    /// server, so the next open reconnects it.
-    private func detachActiveSession() { window.close() }
-
     /// Kill the active tmux session (destroys it) and drop its tab.
-    private func killActiveSession() {
+    func killActiveSession() {
         guard let tab = activeTab, let window else { return }
         let name = tab.id.displayName
         // Kill Session is destructive AND irreversible — every window/pane and
@@ -599,8 +595,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         performKillSession(tab: tab)
     }
 
-    private func performKillSession(tab: SessionTab) {
-        // Kill over THIS window's own control channel.
+    func performKillSession(tab: SessionTab) {
+        // Kill over the session's own control channel.
         //
         // This used to shell out to the local `tmux` binary, which was fine
         // while every window was local and a destroy-your-work bug the moment
@@ -617,11 +613,8 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
             await tab.viewModel.killSession()
             guard let self else { return }
             if id.isLocal { BentoTerminalWindow.onLocalServerChanged?() }
-            self.localServerSessions.removeAll { $0.rawValue == id.name }
-            // Stop the self-poll from closing us on a stale miss — the window
-            // is going away right now either way.
-            self.absentPolls = 0
-            self.window.close()
+            if id.isLocal { self.localServerSessions.removeAll { $0.rawValue == id.name } }
+            self.close(tab)
         }
     }
 
@@ -637,7 +630,7 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
     /// Dock icon bring back — and its mode decides what ⌘N is called.
     func windowDidBecomeKey(_ notification: Notification) {
         if !tab.isPlain { BentoTerminalWindow.recordSessionInUse(tab.id) }
-        BentoTerminalWindow.refreshNewItemTitle()
+        BentoTerminalWindow.refreshMenuItems()
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -648,8 +641,10 @@ final class TerminalWindowManager: NSObject, NSWindowDelegate {
         // Drop the sidebar's SwiftUI observation before the VMs are torn down.
         sidebarCollapseObservation = nil
         sidebarHosting?.rootView = AnyView(EmptyView())
-        tab.contentView.removeFromSuperview()
-        tab.teardown()
+        for tab in tabs {
+            tab.contentView.removeFromSuperview()
+            tab.teardown()
+        }
         window.toolbar = nil
         window.delegate = nil
         onEmpty?()

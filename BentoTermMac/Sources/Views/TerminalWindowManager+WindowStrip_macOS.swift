@@ -22,37 +22,16 @@ extension TerminalWindowManager {
     /// One app window therefore shows one session; several projects means
     /// several app windows, which is what ⌘` already switches between.
     func rebuildTabBar() {
-        updateTabTitle()
-        // The tab bar only knows about sessions that are OPEN, so the left
-        // button still lists every session on the machine — a dormant one is
-        // otherwise unreachable.
-        //
-        // Everything below is in KEY space, not name space. A local `foo` and a
-        // remote `foo` are two rows here, each labelled for the machine it is
-        // on — folding them into one entry by name would show one and silently
-        // switch to the other.
-        let openIDs = BentoTerminalWindow.openSessionIDs
-        let openKeys = Set(openIDs.map(\.key))
-        var ids = openIDs
-        for local in localServerSessions where !openKeys.contains(local.id.key) {
-            ids.append(local.id)
+        // A plain terminal has no strip and keeps its own title.
+        guard !tab.isPlain else {
+            window.title = tab.windowTitle
+            window.tab.attributedTitle = nil
+            toolbar.setSessionTitle(tab.windowTitle)
+            rebuildSidebar()
+            BentoTerminalWindow.refreshMenuItems()
+            return
         }
-        toolbar.sessions = ids
-            .sorted { ($0.isLocal ? 0 : 1, $0.displayName) < ($1.isLocal ? 0 : 1, $1.displayName) }
-            .map { id in
-                // The poll only describes the LOCAL server, so a remote session
-                // gets a name and nothing else — deliberately, see `SessionRow`.
-                let local = LocalTmuxSessionName(id)
-                return TerminalToolbarController.SessionRow(
-                    key: id.key,
-                    label: id.displayName,
-                    dot: dotImage(for: dot(forSession: id)),
-                    isOpen: openKeys.contains(id.key),
-                    local: local,
-                    info: local.flatMap { BentoTerminalWindow.serverSessionInfo[$0.rawValue] })
-            }
-        toolbar.activeSessionKey = tab.sessionKey
-
+        updateTabTitle()
         let tmuxWindows = tab.viewModel.windows
         let maxVisible = computeMaxVisible()
         var visible = Array(tmuxWindows.prefix(maxVisible))
@@ -78,16 +57,8 @@ extension TerminalWindowManager {
         if hasOverflow {
             items.append(("", "more", NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More windows")))
         }
-        // The centre is shared with the location title. A switcher for ONE
-        // window says nothing, and while the sidebar is shown it is already the
-        // window list — so in both cases that space says where the focused
-        // pane is instead. With the sidebar away the strip is the switcher, in
-        // either mode.
-        let sidebarShown = self.sidebarShown
-        toolbar.setCenterShowsTabs(!sidebarShown && tmuxWindows.count > 1)
-        toolbar.listsSessionsInMenu = !sidebarShown
-        toolbar.sidebarShown = sidebarShown
-
+        // Whether the strip shows at all is `rebindActiveToolbar`'s: it follows
+        // the session's structure, not this list.
         let activeIdx = activeWindowID.flatMap { id in visible.firstIndex { $0.id == id } } ?? -1
         toolbar.updateTabs(items, selected: activeIdx)
 
@@ -95,12 +66,10 @@ extension TerminalWindowManager {
             let name = displayTitle(for: active)
             window.title = name
             toolbar.setSessionTitle(name)
-            toolbar.sizingMode = active.viewModel.sizingMode
-            toolbar.sizingOwner = active.viewModel.sizingOwner
-            toolbar.sizingOwnerIsMe = active.viewModel.sizingOwnerIsMe
             toolbar.sizeMismatch = active.viewModel.sessionSizeMismatch
         }
         rebuildSidebar()
+        BentoTerminalWindow.refreshMenuItems()
     }
 
 
@@ -117,43 +86,26 @@ extension TerminalWindowManager {
         }
     }
 
-    private enum DotStyle { case filled, ring }
-
-    /// A small status glyph for a segment: a filled disc (live) or a hollow ring
-    /// (dormant). Drawn in the window's effective appearance so semantic
-    /// label-color (neutral) glyphs resolve to the right light/dark shade.
-    private func dotImage(_ color: NSColor, style: DotStyle, diameter d: CGFloat = 7) -> NSImage {
+    /// A small status disc for a segment. Drawn in the window's effective
+    /// appearance so semantic label-color (neutral) glyphs resolve to the right
+    /// light/dark shade.
+    private func dotImage(_ color: NSColor, diameter d: CGFloat = 7) -> NSImage {
         let img = NSImage(size: NSSize(width: d, height: d))
         img.lockFocus()
         window.effectiveAppearance.performAsCurrentDrawingAppearance {
-            switch style {
-            case .filled:
-                color.setFill()
-                NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: d, height: d)).fill()
-            case .ring:
-                let lw: CGFloat = 1.2
-                color.setStroke()
-                let ring = NSBezierPath(ovalIn: NSRect(x: lw / 2, y: lw / 2,
-                                                       width: d - lw, height: d - lw))
-                ring.lineWidth = lw
-                ring.stroke()
-            }
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: d, height: d)).fill()
         }
         img.unlockFocus()
         img.isTemplate = false
         return img
     }
 
-    /// The status of a session segment. Two independent dimensions:
-    ///   • shape — filled = open as a tab in Bento, hollow ring = exists on the
-    ///     machine but not opened here (dormant). This is OUR own connection
-    ///     state, not tmux's `session_attached` (which also counts Terminal.app /
-    ///     iPhone clients and lags behind the poll).
-    ///   • color (filled only) — pane status, highest priority first:
-    ///     awaiting (amber) → done-unseen (green) → working (blue) → idle (gray).
-    fileprivate enum SessionDot: String { case awaiting, doneUnseen, working, idle, dormant }
+    /// A session's pane status, highest priority first: awaiting (amber) →
+    /// done-unseen (green) → working (blue) → idle (gray).
+    fileprivate enum SessionDot: String { case awaiting, doneUnseen, working, idle }
 
-    /// What the window, its native tab, and the toolbar's session button call
+    /// What the window, its native tab, and the toolbar's centre title call
     /// this session. A remote one reads `name — host`, so two tabs on
     /// same-named sessions on different machines are tellable apart at a
     /// glance, rather than only after clicking one.
@@ -190,15 +142,8 @@ extension TerminalWindowManager {
         case .awaiting:   return PaneState.awaitingInput.nsColor
         case .doneUnseen: return PaneTitleBar.doneColor
         case .working:    return PaneState.working.nsColor
-        case .idle, .dormant: return nil
+        case .idle: return nil
         }
-    }
-
-    /// The dot for ANY session name: its own manager's live state when it's
-    /// open here, a hollow ring when it only exists on the server.
-    private func dot(forSession id: TmuxSessionID) -> SessionDot {
-        guard let m = BentoTerminalWindow.manager(for: id.key) else { return .dormant }
-        return m.sessionDot()
     }
 
     fileprivate func sessionDot() -> SessionDot {
@@ -218,11 +163,10 @@ extension TerminalWindowManager {
         if let cached = dotImageCache[key] { return cached }
         let img: NSImage
         switch dot {
-        case .awaiting:   img = dotImage(PaneState.awaitingInput.nsColor, style: .filled) // yellow
-        case .doneUnseen: img = dotImage(PaneTitleBar.doneColor, style: .filled)                       // green
-        case .working:    img = dotImage(PaneState.working.nsColor, style: .filled)                    // blue
-        case .idle:       img = dotImage(.secondaryLabelColor, style: .filled)                         // attached, idle
-        case .dormant:    img = dotImage(.tertiaryLabelColor, style: .ring)                            // not attached
+        case .awaiting:   img = dotImage(PaneState.awaitingInput.nsColor) // yellow
+        case .doneUnseen: img = dotImage(PaneTitleBar.doneColor)                       // green
+        case .working:    img = dotImage(PaneState.working.nsColor)                    // blue
+        case .idle:       img = dotImage(.secondaryLabelColor)                         // attached, idle
         }
         dotImageCache[key] = img
         return img
@@ -230,7 +174,9 @@ extension TerminalWindowManager {
 
     /// How many segments fit before overflowing, from the window width.
     private func computeMaxVisible() -> Int {
-        let budget = max(220, window.frame.width - 540)
+        // The content column, not the window: the sidebar's share isn't ours.
+        let width = contentRoot.bounds.width > 0 ? contentRoot.bounds.width : window.frame.width
+        let budget = max(220, width - 540)
         return max(1, Int(budget / 110))
     }
 

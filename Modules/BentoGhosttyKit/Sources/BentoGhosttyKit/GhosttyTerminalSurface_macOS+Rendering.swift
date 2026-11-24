@@ -40,6 +40,18 @@ extension GhosttyTerminalSurface {
         updateRenderActive()
     }
 
+    /// A session kept open but not on show is hidden, not removed: stop drawing
+    /// it, and start again when it comes back.
+    public override func viewDidHide() {
+        super.viewDidHide()
+        updateRenderActive()
+    }
+
+    public override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updateRenderActive()
+    }
+
     /// Tell ghostty which CoreGraphics display this surface is rendering on.
     private func syncDisplayID() {
         guard let surface, let screen = window?.screen else { return }

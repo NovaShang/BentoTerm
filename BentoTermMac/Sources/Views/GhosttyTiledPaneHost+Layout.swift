@@ -66,7 +66,10 @@ extension GhosttyTiledPaneHost {
     /// layout — the shared `PaneTiling.clientGrid` (the iOS container asks the
     /// same question of its viewport).
     private func windowGrid(cellPx: CGSize) -> (cols: Int, rows: Int) {
-        PaneTiling.clientGrid(viewport: bounds.size, cellPixels: cellPx, scale: currentScale)
+        if wantsCards, let tree = cardTree, let cell = pointsPerCell {
+            return PaneCards.clientGrid(tree: tree, viewport: bounds.size, cell: cell, metrics: .mac(cell: cell))
+        }
+        return PaneTiling.clientGrid(viewport: bounds.size, cellPixels: cellPx, scale: currentScale)
     }
 
     /// Convert the window size → tmux client cols×rows and push it (debounced).
@@ -97,7 +100,54 @@ extension GhosttyTiledPaneHost {
 
     /// Points per tmux cell (font cell size ÷ backing scale), or nil until the
     /// cell size has been learned from a surface.
-    private var pointsPerCell: CGSize? { sizer.pointsPerCell(scale: currentScale) }
+    var pointsPerCell: CGSize? { sizer.pointsPerCell(scale: currentScale) }
+
+    /// Pane titles show: not Focus, and not a session of one pane in total.
+    private var showsTitles: Bool {
+        viewModel.sessionMode != .list && !viewModel.isSinglePaneSession
+    }
+
+    /// Several panes on screen with their titles: laid out as cards.
+    private var wantsCards: Bool { showsTitles && !isSingleOrZoom }
+
+    /// tmux's split tree for the panes on screen.
+    private var cardTree: TmuxLayoutTree.Node? {
+        let layouts = viewModel.activeWindowID.flatMap { viewModel.liveLayouts[$0] }.map { [$0] } ?? []
+        return PaneCards.tree(layouts: layouts, panes: viewModel.paneViewModels.map(\.pane))
+    }
+
+    /// The card layout: surfaces exactly their tmux cells, cards round them
+    /// with native gaps and titles (`PaneCards`).
+    private func layoutCards(tree: TmuxLayoutTree.Node, cell ppc: CGSize,
+                             vmByID: [TmuxPaneID: PaneViewModel]) {
+        usesCards = true
+        // Zooming changes the client size now; the attach-time Ctrl-L must not
+        // be what that first resize sends to a running program.
+        didInitialScreenClean = true
+        let metrics = PaneCardMetrics.mac(cell: ppc)
+        let cards = PaneCards.cards(tree: tree, viewport: bounds.size, cell: ppc,
+                                    scale: currentScale, metrics: metrics)
+        for (id, cell) in cells {
+            // A pane tmux no longer lists in the window is about to go.
+            guard let paneVM = vmByID[id], let card = cards[id] else {
+                cell.container.isHidden = true
+                continue
+            }
+            cell.container.isHidden = false
+            cell.container.title = PaneChrome.title(for: paneVM.pane)
+            cell.container.titleBarHeight = metrics.titleHeight
+            cell.container.surfaceInsetX = 0
+            cell.container.card = .init(
+                surfaceFrame: card.surfaceFrameInCard,
+                cornerRadius: metrics.cornerRadius,
+                background: cell.surface.reportedBackgroundColor ?? terminalBackground)
+            cell.container.frame = card.frame
+        }
+        dividerOverlay.refresh()
+        // A split or close changes how much chrome there is. Deduped, and the
+        // answer depends on structure alone, so this can't loop.
+        recomputeClientSize()
+    }
 
     /// Tile panes proportionally to fill the host, using the bounding box of all
     /// panes as the cell grid. When a pane is zoomed, it alone fills the host and
@@ -127,7 +177,6 @@ extension GhosttyTiledPaneHost {
         // like a plain terminal; its status stays on the pane's wash.
         // Either way the one visible pane drives tmux from its own surface grid
         // (`isSingleOrZoom`), so dropping the row reaches tmux as a resize.
-        let showsTitles = viewModel.sessionMode != .list && !viewModel.isSinglePaneSession
         let titleBar = showsTitles ? (ppc?.height ?? Self.fallbackTitleBarHeight) : 0
 
         // Push each pane's tmux mouse-reporting mode + the title-bar height onto its
@@ -149,13 +198,21 @@ extension GhosttyTiledPaneHost {
                 let isZoom = (id == zoomed)
                 cell.container.isHidden = !isZoom
                 if isZoom {
+                    cell.container.card = nil
                     cell.container.surfaceInsetX = 0
                     cell.container.frame = bounds
                 }
             }
+            usesCards = false
             dividerOverlay.refresh()
             return
         }
+
+        if wantsCards, let ppc, let tree = cardTree {
+            layoutCards(tree: tree, cell: ppc, vmByID: vmByID)
+            return
+        }
+        usesCards = false
 
         // Cell-exact tiling (shared with the iOS host — see PaneTiling). A lone
         // pane, or one laid out before any surface has reported its cell size,
@@ -171,6 +228,7 @@ extension GhosttyTiledPaneHost {
             guard let paneVM = vmByID[id] else { continue }
             cell.container.isHidden = false
             cell.container.title = PaneChrome.title(for: paneVM.pane)
+            cell.container.card = nil
 
             if let tile = tiles[id] {
                 cell.container.surfaceInsetX = tile.surfaceInsetX
@@ -205,7 +263,10 @@ extension GhosttyTiledPaneHost {
             // `searchFieldHasFocus` is the other exception: while the find bar
             // holds the keyboard, this method still runs (layout, pane polls) and
             // would otherwise yank the caret out of the field mid-word.
-            if id == active, window?.firstResponder !== cell.surface,
+            //
+            // Nor while this session is kept open behind another.
+            if id == active, !isHiddenOrHasHiddenAncestor,
+               window?.firstResponder !== cell.surface,
                !cell.surface.searchFieldHasFocus {
                 window?.makeFirstResponder(cell.surface)
             }

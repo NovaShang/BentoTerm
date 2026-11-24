@@ -12,35 +12,22 @@ import AppKit
 /// (bordered "glass").
 ///
 /// Layout (left → right):
-///   [◧] [▢ <session> ⌄]  ⸺flex⸺  [ window tabs ]  ⸺flex⸺  [＋ ▤]
+///   [◧]  ⸺flex⸺  [ window tabs, or session · program · path ]  ⸺flex⸺  [＋ ▤]
 ///
 /// There is no Parallel / Focus switch: the sidebar's session row shows the
 /// panes split, a pane row shows one alone.
 ///
-/// A plain (no-tmux) terminal gets the minimal version, decided at
-/// construction (`isPlain`): its name button (Close + the app's rows) and ＋.
-/// No window strip, no file panel, no size banner.
+/// While the window shows a plain (no-tmux) terminal (`isPlain`): the sidebar
+/// button, its name and ＋.
 ///
-/// The named left button carries the session (its switcher today, its actions
-/// once sessions become native window tabs); the centre strip is the current
-/// session's tmux WINDOWS, labelled `index:name` the way `list-windows` labels
+/// Sessions are the sidebar's, and their actions its rows' and the Session
+/// menu's. The centre strip is the current session's tmux WINDOWS, labelled `index:name` the way `list-windows` labels
 /// them; New creates at every level (session / window / pane); ▤ toggles the
 /// preview dock. Settings has no button here: it is opened once in a while,
 /// and ⌘, plus the app menu are where every Mac app keeps it — a permanent
 /// gear spent a toolbar slot on it.
 @MainActor
-final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemValidation {
-    var onRenameSession: (() -> Void)?
-    var onDetach: (() -> Void)?
-    var onKillSession: (() -> Void)?
-    /// Session ⌄ → Release Size: back to tmux's default policy.
-    var onReleaseSize: (() -> Void)?
-    /// The active session's current sizing policy (whether Release shows).
-    var sizingMode: TerminalSizingMode = .tracking
-    /// Who owns the size under `.thisDevice`, and whether that's us — Release
-    /// names the device it would take the size away from.
-    var sizingOwner: TmuxSizingOwner?
-    var sizingOwnerIsMe = false
+final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// The take-over banner's state, or nil when this window's grid IS the
     /// session's. Settled by the view model (it only changes after the same
     /// answer has held for a couple of seconds), so this can be applied
@@ -54,45 +41,35 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// The banner was clicked and (where a named device is being dispossessed)
     /// confirmed: make this window the one that sets the session size.
     var onClaimSessionSize: (() -> Void)?
-    var onCloseTab: (() -> Void)?
     var onTogglePreview: (() -> Void)?
 
-    /// This toolbar belongs to a plain (no-tmux) terminal: the minimal set of
-    /// items, and its name button's menu is just Close plus the app's rows.
-    let isPlain: Bool
-
-    /// Whether the window's sidebar is shown. While it is, the title bar over
-    /// the terminal is empty but for the file panel's button: the sidebar
-    /// lists the sessions and panes, its foot holds ＋ and the app's menu,
-    /// and a session's own actions are on its row.
-    var sidebarShown = false {
-        didSet { if sidebarShown != oldValue { syncToolbarItems() } }
+    /// The window is showing a plain (no-tmux) terminal: no window strip, no
+    /// file panel, no size banner.
+    var isPlain = false {
+        didSet {
+            guard oldValue != isPlain else { return }
+            if isPlain { sizeMismatch = nil; setCenterShowsTabs(false) }
+            syncToolbarItems()
+        }
     }
 
-    /// Which items belong in the toolbar right now, in order.
+    /// Which items belong in the toolbar right now, in order — the same
+    /// whether the sidebar is shown or not.
     ///
     /// - The system sidebar button and its tracking separator always lead,
     ///   so the button sits over the sidebar (by the traffic lights when it
     ///   is away).
-    /// - Sidebar away: **Sessions** (the session's menu), the centre (window
-    ///   strip or location), ＋ and ▤.
-    /// - Sidebar shown: ▤ only.
-    /// - The take-over banner appears in either, and only while the canvas is
-    ///   someone else's. It rides in the toolbar rather than in a strip above
+    /// - The centre (window strip or location), ＋ and ▤.
+    /// - The take-over banner, only while the canvas is someone else's. It rides in the toolbar rather than in a strip above
     ///   the panes deliberately: a strip would shrink the terminal, which is
     ///   the very grid the banner is comparing — it would keep clearing its
     ///   own condition and blink.
     private var desiredItems: [NSToolbarItem.Identifier] {
         var ids: [NSToolbarItem.Identifier] = [.toggleSidebar, .sidebarTrackingSeparator]
-        if sidebarShown {
-            if sizeMismatch != nil { ids.append(Self.sizeID) }
-            ids += [.flexibleSpace, Self.previewID]
-        } else {
-            ids.append(Self.sessionsID)
-            if sizeMismatch != nil { ids.append(Self.sizeID) }
-            ids += [.flexibleSpace, centerShowsTabs ? Self.centerID : Self.locationID,
-                    .flexibleSpace, Self.newID, Self.previewID]
-        }
+        if sizeMismatch != nil { ids.append(Self.sizeID) }
+        ids += [.flexibleSpace, centerShowsTabs ? Self.centerID : Self.locationID,
+                .flexibleSpace, Self.newID]
+        if !isPlain { ids.append(Self.previewID) }
         return ids
     }
 
@@ -101,7 +78,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// replaced. Items are removed, not hidden — a hidden view leaves its
     /// item's capsule behind.
     func syncToolbarItems() {
-        guard !isPlain, let tb = toolbarRef else { return }
+        guard let tb = toolbarRef else { return }
         let want = desiredItems
         let have = tb.items.map(\.itemIdentifier)
         guard have != want else { return }
@@ -113,50 +90,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         tb.centeredItemIdentifiers = center.map { [$0] } ?? []
     }
 
-    /// EVERY tmux session on the machine, open here or not, with its dot.
-    /// Native tabs can only switch between sessions that are already open, so
-    /// without this list a session running on the machine but not loaded in
-    /// Bento is unreachable — the tab bar has no row for it to appear in.
-    /// `key` is the session's identity (`TmuxSessionID.key`) and `label` is what
-    /// the row says. They differ for a session on an ssh host, whose row has to
-    /// name the machine — showing the bare name would present it as a local
-    /// session, and clicking it would then be a different session than it read.
-    var sessions: [SessionRow] = []
-
-    /// One row of the Sessions list.
-    ///
-    /// `key` is the session's identity (`TmuxSessionID.key`) and `label` is what
-    /// the row says. They differ for a session on an ssh host, whose row has to
-    /// name the machine.
-    ///
-    /// `info` is what the LOCAL `tmux ls` poll knows — and it is nil for a
-    /// remote session on purpose, not by omission. Every per-session action
-    /// below the row (rename, kill) is a `TmuxCLI` call against the local
-    /// server; pointing one at a session on another machine is the exact bug
-    /// `LocalTmuxSessionName` exists to prevent. A remote session's rename and
-    /// kill live in its own window's toolbar, where they go over its own
-    /// control channel.
-    struct SessionRow {
-        let key: String
-        let label: String
-        let dot: NSImage?
-        /// Already loaded as a Bento tab — clicking focuses it rather than
-        /// opening a second.
-        let isOpen: Bool
-        let local: LocalTmuxSessionName?
-        let info: LocalSessionInfo?
-    }
-    var activeSessionKey: String?
-    /// Whether the session menu carries the session list — not while the
-    /// sidebar is shown (it IS that list).
-    var listsSessionsInMenu = true
-    /// Go to that session in THIS window (or front the window it is open in).
-    var onSelectSession: ((String) -> Void)?
-    /// Keep this window, open that session in a new one — the row's "Open in
-    /// New Window", or ⌥ held while picking.
-    var onOpenSessionInNewWindow: ((String) -> Void)?
-
-    let sessionsButton = NSButton()
     /// New ⌄ and the preview toggle: two plain toolbar buttons in adjacent
     /// items with no space between, which macOS 26+ draws as one glass capsule.
     /// Not a segmented control — that always draws a divider between segments.
@@ -166,9 +99,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// The take-over banner: present only while this window's grid differs from
     /// the session's (see `sizeMismatch`).
     private let sizeButton = NSButton()
-    /// The sessions button's current label text — kept so its rasterized chevron
-    /// can be rebuilt (with the same text) when the appearance changes.
-    private var sessionsText = "Session"
     /// The session tabs, as a first-class segmented `NSToolbarItemGroup` (the way
     /// Finder builds its view-mode switcher) — NOT a control hosted in a view
     /// item, which macOS double-wraps in a group container. Rebuilt via the
@@ -199,7 +129,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// changes keep the same signature and just move `selectedIndex` in place.
     var currentSig: [String] = []
 
-    fileprivate static let sessionsID = NSToolbarItem.Identifier("bento.sessions")
     fileprivate static let newID = NSToolbarItem.Identifier("bento.new")
     fileprivate static let previewID = NSToolbarItem.Identifier("bento.preview")
     static let centerID = NSToolbarItem.Identifier("bento.center")
@@ -218,16 +147,12 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
     /// ~40% of the window: the location is the one variable-length item, and a
     /// deep path must truncate rather than shove the side items around.
     private var locationWidthCap: NSLayoutConstraint?
+    private var sessionName = ""
+    private var locationText = ""
     var centerShowsTabs = true
 
-    init(isPlain: Bool) {
-        self.isPlain = isPlain
+    override init() {
         super.init()
-        // The left button is the CURRENT session's menu (named with the session,
-        // like a document-title menu) — the discoverable home for per-session
-        // actions. Its text is updated by the manager via `setSessionTitle`.
-        configureMenu(sessionsButton, symbol: isPlain ? "terminal" : "macwindow", text: "Session",
-                      action: #selector(sessionMenuTapped))
         // [＋ ▤]: New (a menu) and the inspector-style preview dock toggle.
         configure(newButton, symbol: "plus", title: "", action: #selector(newTapped))
         newButton.setAccessibilityLabel("New")
@@ -240,32 +165,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
                   action: #selector(sizeBannerTapped))
         configureLocationLabel()
         configureGroup(tabsGroup)   // placeholder until the first updateTabs
-        // The menu chevrons are rasterized (non-template) images — unlike the
-        // dynamic `.labelColor` text they sit beside, they can't re-resolve on
-        // an appearance change and would keep their baked color (white from a
-        // dark launch, wrong on a light title bar). Rebuild them when the theme
-        // / system light-dark flips. Fires on appearanceMode change AND system flip.
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(chromeAppearanceChanged),
-            name: .terminalThemeChanged, object: nil)
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
-
-    @objc private func chromeAppearanceChanged() {
-        // Defer one runloop tick so the buttons' effectiveAppearance has settled
-        // (a system light/dark flip updates it just after the notification).
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.setMenuText(self.sessionsButton, self.sessionsText)
-        }
-    }
-
-    /// Update the left button to name the active session (keeps its icon/chevron).
-    func setSessionTitle(_ name: String) {
-        sessionsText = name.isEmpty ? "Session" : name
-        setMenuText(sessionsButton, sessionsText)
-    }
 
     /// The active tab's mode (nil = a single pane) — the ＋ menu's first row
     /// says "New Pane" (split) or "New tmux Window" (one pane shown alone).
@@ -296,21 +198,37 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         setLocation("")
     }
 
-    /// What the centre title says — `<program> · <path>`, already composed by
-    /// the window (it knows the pane, the host and the shell rule).
+    /// The session's name (a plain terminal's own), leading the centre title.
+    func setSessionTitle(_ name: String) {
+        guard name != sessionName else { return }
+        sessionName = name
+        applyCentreTitle()
+    }
+
+    /// What follows it — `<program> · <path>`, already composed by the window
+    /// (it knows the pane, the host and the shell rule).
     func setLocation(_ text: String) {
+        locationText = text
+        applyCentreTitle()
+    }
+
+    private func applyCentreTitle() {
+        let text = [sessionName, locationText].filter { !$0.isEmpty }.joined(separator: " · ")
         // A point under the toolbar's own text: status, not a title to read first.
         let size = NSFont.systemFontSize - 1
         let para = NSMutableParagraphStyle()
         para.lineBreakMode = .byTruncatingMiddle
         para.alignment = .center
-        locationLabel.attributedTitle = NSAttributedString(
+        let title = NSMutableAttributedString(
             string: text,
             attributes: [
                 .font: NSFont.systemFont(ofSize: size),
                 .foregroundColor: NSColor.secondaryLabelColor,
                 .paragraphStyle: para,
             ])
+        title.addAttribute(.foregroundColor, value: NSColor.labelColor,
+                           range: NSRange(location: 0, length: (sessionName as NSString).length))
+        locationLabel.attributedTitle = title
         locationLabel.setAccessibilityValue(text)
         locationLabel.invalidateIntrinsicContentSize()
     }
@@ -333,9 +251,9 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         // One identifier per toolbar, never shared. AppKit treats toolbars
         // with the same identifier as one family and mirrors every
         // insert/remove into all of them, but each window wants its own items
-        // (sidebar shown or not, size banner or not): a new window's sync
+        // (window strip or location, size banner or not): a new window's sync
         // removed items from the others by index and AppKit threw, killing
-        // the app (opening a new ssh session from the sidebar's ＋).
+        // the app (opening a new ssh session from ＋).
         let tb = NSToolbar(identifier: "BentoTerminalToolbar-\(UUID().uuidString)")
         tb.delegate = self
         tb.displayMode = .iconOnly
@@ -346,9 +264,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         // They are meaningless here — every item is deliberately icon-only, and a
         // toolbar this small has no display mode worth choosing.
         tb.allowsDisplayModeCustomization = false
-        // Pin the session strip to the WINDOW's center, independent of the side
-        // items' widths — so the session-name button can size to its text without
-        // ever nudging the tabs (the native alternative to hardcoding widths).
+        // The centre is pinned to the WINDOW's center, independent of the side
+        // items' widths (`syncToolbarItems`).
         toolbarRef = tb
         // State decided before the toolbar existed still has to land.
         syncToolbarItems()
@@ -367,70 +284,15 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         b.sizeToFit()
     }
 
-    /// A menu button: leading icon (native image slot) + text + a vertically
-    /// centered trailing `chevron.down` (a sized SF Symbol image embedded in the
-    /// title, so it sits at the trailing edge instead of a misplaced "⌄" glyph).
-    private func configureMenu(_ b: NSButton, symbol: String, text: String, action: Selector) {
-        b.bezelStyle = .texturedRounded
-        b.controlSize = .large   // match the .large segmented tab strip's height
-        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: text)
-        b.imagePosition = .imageLeading
-        b.target = self
-        b.action = action
-        setMenuText(b, text)
-    }
-
-    private func setMenuText(_ b: NSButton, _ text: String) {
-        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        let color: NSColor = b.isEnabled ? .labelColor : .disabledControlTextColor
-        let title = NSMutableAttributedString(
-            string: text + "  ",
-            attributes: [.font: font, .foregroundColor: color])
-        if let chevron = Self.chevronImage(pointSize: font.pointSize * 0.8,
-                                           color: color,
-                                           appearance: b.effectiveAppearance) {
-            let att = NSTextAttachment()
-            att.image = chevron
-            att.bounds = CGRect(x: 0, y: (font.capHeight - chevron.size.height) / 2,
-                                width: chevron.size.width, height: chevron.size.height)
-            title.append(NSAttributedString(attachment: att))
-        }
-        b.attributedTitle = title
-        b.sizeToFit()
-    }
-
-    /// `chevron.down` rendered in the label color (non-template so it keeps that
-    /// color inside an attributed title). Because it's baked, the dynamic
-    /// `.labelColor` must be resolved to a CONCRETE color for the CURRENT
-    /// appearance — otherwise it keeps whatever it resolved to at build time
-    /// (e.g. dark-mode white) and looks wrong on a light title bar. The menu
-    /// buttons rebuild it via `chromeAppearanceChanged` when the theme flips.
-    private static func chevronImage(pointSize: CGFloat, color: NSColor,
-                                     appearance: NSAppearance) -> NSImage? {
-        var label = color
-        appearance.performAsCurrentDrawingAppearance {
-            label = color.usingColorSpace(.sRGB) ?? color
-        }
-        let cfg = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [label]))
-        let img = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
-            .withSymbolConfiguration(cfg)
-        img?.isTemplate = false
-        return img
-    }
-
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // Plain: <name> ⌄ | ⸺flex⸺ | ＋
-        if isPlain { return [Self.sessionsID, .flexibleSpace, Self.newID] }
-        return desiredItems
+        desiredItems
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // Everything `desiredItems` can ask for, in any state — an item can't
         // be inserted unless it is allowed.
-        if isPlain { return toolbarDefaultItemIdentifiers(toolbar) }
-        return [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.sessionsID,
+        return [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace,
                 Self.centerID, Self.locationID, Self.sizeID, Self.newID, Self.previewID]
     }
 
@@ -444,7 +306,6 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate, NSMenuItemVa
         if id == Self.centerID { return tabsGroup }
         let item = NSToolbarItem(itemIdentifier: id)
         switch id {
-        case Self.sessionsID: item.view = sessionsButton; item.label = "Session"
         case Self.newID:      item.view = newButton;      item.label = "New"
         case Self.previewID:  item.view = previewButton;  item.label = "Preview"
         case Self.sizeID:     item.view = sizeButton;     item.label = "Session Size"
