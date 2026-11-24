@@ -189,8 +189,8 @@ targets:
         MACOSX_DEPLOYMENT_TARGET: "27.0"
         # App version surfaced in Finder/About and reported by Telemetry
         # (CFBundleShortVersionString). Bump alongside release tags.
-        MARKETING_VERSION: "0.7.0"
-        CURRENT_PROJECT_VERSION: 8
+        MARKETING_VERSION: "0.8.0"
+        CURRENT_PROJECT_VERSION: 9
         # ---- Sparkle auto-update ----------------------------------------
         # The feed URL, the public signing key and the two behaviour switches
         # live in BentoTermMac/Info.plist, NOT here: INFOPLIST_KEY_* only
