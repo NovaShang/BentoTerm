@@ -93,6 +93,11 @@ public final class GhosttyTiledPaneHost: NSView, NSMenuDelegate {
     }
     var onDeskChanged: (() -> Void)?
 
+    /// What the panes actually render, once one has reported.
+    var reportedBackground: NSColor? {
+        (viewModel.activePaneID.flatMap { cells[$0] } ?? cells.values.first)?.surface.reportedBackgroundColor
+    }
+
     /// The theme's background: a card's colour until its surface reports one.
     var terminalBackground: NSColor { NSColor(hex: theme.background) }
 

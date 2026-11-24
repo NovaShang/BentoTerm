@@ -23,7 +23,14 @@ extension TerminalWindowManager {
     /// several app windows, which is what ⌘` already switches between.
     func rebuildTabBar() {
         // A plain terminal has no strip and keeps its own title.
-        guard !tab.isPlain else { rebuildSidebar(); return }
+        guard !tab.isPlain else {
+            window.title = tab.windowTitle
+            window.tab.attributedTitle = nil
+            toolbar.setSessionTitle(tab.windowTitle)
+            rebuildSidebar()
+            BentoTerminalWindow.refreshMenuItems()
+            return
+        }
         updateTabTitle()
         let tmuxWindows = tab.viewModel.windows
         let maxVisible = computeMaxVisible()

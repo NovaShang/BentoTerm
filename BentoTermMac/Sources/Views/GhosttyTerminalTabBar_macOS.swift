@@ -17,9 +17,8 @@ import AppKit
 /// There is no Parallel / Focus switch: the sidebar's session row shows the
 /// panes split, a pane row shows one alone.
 ///
-/// A plain (no-tmux) terminal gets the minimal version, decided at
-/// construction (`isPlain`): the sidebar button, its name and ＋.
-/// No window strip, no file panel, no size banner.
+/// While the window shows a plain (no-tmux) terminal (`isPlain`): the sidebar
+/// button, its name and ＋.
 ///
 /// Sessions are the sidebar's, and their actions its rows' and the Session
 /// menu's. The centre strip is the current session's tmux WINDOWS, labelled `index:name` the way `list-windows` labels
@@ -44,9 +43,15 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     var onClaimSessionSize: (() -> Void)?
     var onTogglePreview: (() -> Void)?
 
-    /// This toolbar belongs to a plain (no-tmux) terminal: the minimal set of
-    /// items, and its name button's menu is just Close plus the app's rows.
-    let isPlain: Bool
+    /// The window is showing a plain (no-tmux) terminal: no window strip, no
+    /// file panel, no size banner.
+    var isPlain = false {
+        didSet {
+            guard oldValue != isPlain else { return }
+            if isPlain { sizeMismatch = nil; setCenterShowsTabs(false) }
+            syncToolbarItems()
+        }
+    }
 
     /// Which items belong in the toolbar right now, in order — the same
     /// whether the sidebar is shown or not.
@@ -63,7 +68,8 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         var ids: [NSToolbarItem.Identifier] = [.toggleSidebar, .sidebarTrackingSeparator]
         if sizeMismatch != nil { ids.append(Self.sizeID) }
         ids += [.flexibleSpace, centerShowsTabs ? Self.centerID : Self.locationID,
-                .flexibleSpace, Self.newID, Self.previewID]
+                .flexibleSpace, Self.newID]
+        if !isPlain { ids.append(Self.previewID) }
         return ids
     }
 
@@ -72,7 +78,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     /// replaced. Items are removed, not hidden — a hidden view leaves its
     /// item's capsule behind.
     func syncToolbarItems() {
-        guard !isPlain, let tb = toolbarRef else { return }
+        guard let tb = toolbarRef else { return }
         let want = desiredItems
         let have = tb.items.map(\.itemIdentifier)
         guard have != want else { return }
@@ -145,8 +151,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     private var locationText = ""
     var centerShowsTabs = true
 
-    init(isPlain: Bool) {
-        self.isPlain = isPlain
+    override init() {
         super.init()
         // [＋ ▤]: New (a menu) and the inspector-style preview dock toggle.
         configure(newButton, symbol: "plus", title: "", action: #selector(newTapped))
@@ -260,8 +265,7 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
         // toolbar this small has no display mode worth choosing.
         tb.allowsDisplayModeCustomization = false
         // The centre is pinned to the WINDOW's center, independent of the side
-        // items' widths (`syncToolbarItems`; a plain toolbar's never changes).
-        if isPlain { tb.centeredItemIdentifiers = [Self.locationID] }
+        // items' widths (`syncToolbarItems`).
         toolbarRef = tb
         // State decided before the toolbar existed still has to land.
         syncToolbarItems()
@@ -283,14 +287,11 @@ final class TerminalToolbarController: NSObject, NSToolbarDelegate {
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // Plain: ◧ | ⸺flex⸺ | <name> | ⸺flex⸺ | ＋
-        if isPlain { return [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.locationID, .flexibleSpace, Self.newID] }
-        return desiredItems
+        desiredItems
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         // Everything `desiredItems` can ask for, in any state — an item can't
         // be inserted unless it is allowed.
-        if isPlain { return toolbarDefaultItemIdentifiers(toolbar) }
         return [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace,
                 Self.centerID, Self.locationID, Self.sizeID, Self.newID, Self.previewID]
     }

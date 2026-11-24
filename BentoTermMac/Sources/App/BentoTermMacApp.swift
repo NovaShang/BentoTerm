@@ -98,7 +98,7 @@ struct TerminalCommands: Commands {
             // menu use (`LaunchAction`). "New Window (no tmux)" was the old
             // name for a thing that is a terminal, not a window: closing it
             // discards it.
-            Button(LaunchAction.emptySession.title) { BentoTerminalWindow.newWindow() }
+            Button(LaunchAction.emptySession.title) { BentoTerminalWindow.newSession() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             Button(LaunchAction.plainTerminal.title) { BentoTerminalWindow.newWindowNoTmux() }
                 .keyboardShortcut("t", modifiers: [.command, .option, .shift])

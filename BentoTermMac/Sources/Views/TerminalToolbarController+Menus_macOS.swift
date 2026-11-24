@@ -41,9 +41,9 @@ extension TerminalToolbarController {
         // on a separator.
         if !rows.isEmpty { menu.addItem(.separator()) }
         let session = plainItem(symbol: LaunchAction.emptySession.systemImage, title: "New Session",
-                                tip: "A new tmux session in a window of its own.",
+                                tip: "A new tmux session on this Mac.",
                                 action: #selector(newSessionAction))
-        session.keyEquivalent = "n"
+        session.keyEquivalent = "t"
         session.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(session.keepingImageVisible())
         menu.addItem(plainItem(symbol: LaunchAction.plainTerminal.systemImage,
@@ -84,7 +84,7 @@ extension TerminalToolbarController {
     // MARK: - Actions
 
     @objc private func newPaneOrWindowAction() { BentoTerminalWindow.newPaneOrWindow() }
-    @objc private func newSessionAction() { BentoTerminalWindow.newSessionWindow() }
+    @objc private func newSessionAction() { BentoTerminalWindow.newSession() }
     @objc private func newPlainTerminalAction() { BentoTerminalWindow.newWindowNoTmux() }
     @objc private func sshShellAction(_ sender: NSMenuItem) {
         if let host = sender.representedObject as? String { BentoTerminalWindow.newSSHWindow(host: host) }

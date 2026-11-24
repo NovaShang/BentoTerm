@@ -11,24 +11,21 @@ public typealias TmuxSessionID = BentoFoundationKit.TmuxSessionID
 /// Opens native libghostty terminals backed by a local pty + `tmux -CC`. macOS
 /// uses the *same* runtime stack as iOS; only the transport differs.
 ///
-/// Sessions are NATIVE macOS window tabs: one `TerminalWindowManager` and one
-/// NSWindow per session, joined into a tab group by `tabbingIdentifier`. AppKit
-/// then owns the tab bar (including hiding it at a single tab), ⌘⇧[ / ⌘⇧],
-/// drag to reorder, drag out to a new window, and Merge All Windows — all of
-/// which the previous self-managed strip either lacked or reimplemented.
-///
-/// A window's toolbar therefore carries the session's ACTIONS, not a switcher,
-/// and its centre belongs to that session's tmux windows.
+/// The app is a single-window terminal. A window holds every session and plain
+/// terminal opened in it and shows one at a time; its sidebar is how you move
+/// between them. A second window is made only when asked for (⇧⌘N, a sidebar
+/// row's Open in New Window, the native tab bar's ＋) or when there is none.
+/// Windows still join a native tab group (`tabbingIdentifier`), so Merge All
+/// Windows and dragging a tab out keep working.
 @MainActor
 public enum BentoTerminalWindow {
-    /// Every terminal window, all joined into a native tab group — tmux
-    /// sessions and plain terminals alike.
+    /// Every terminal window.
     private static var managers: [TerminalWindowManager] = []
-    /// The windows that hold a tmux SESSION. Everything that lists, finds,
-    /// switches or names sessions reads this, so a plain terminal — which has
-    /// no session — never has to be filtered back out one feature at a time.
-    private static var sessionManagers: [TerminalWindowManager] {
-        managers.filter { !$0.tab.isPlain }
+    /// Every tmux SESSION open in any window, shown or not. Everything that
+    /// lists, finds or names sessions reads this, so a plain terminal — which
+    /// has no session — never has to be filtered back out one feature at a time.
+    private static var sessionTabs: [SessionTab] {
+        managers.flatMap(\.tabs).filter { !$0.isPlain }
     }
 
     /// The session the app opens when there is nothing to go back to.
@@ -45,11 +42,11 @@ public enum BentoTerminalWindow {
     /// Session KEYS currently open as tabs (drives the ✓ in the Sessions menu).
     /// Keys, not names: a remote `bento` and a local `bento` are two sessions
     /// and must not tick each other's box. See `TmuxSessionID.key`.
-    public static var openSessionKeys: Set<String> { Set(sessionManagers.map(\.tab.sessionKey)) }
+    public static var openSessionKeys: Set<String> { Set(sessionTabs.map(\.sessionKey)) }
 
     /// The identities of every open session, for callers that need to tell
     /// local from remote rather than just "is it open".
-    public static var openSessionIDs: [TmuxSessionID] { sessionManagers.map(\.tab.id) }
+    public static var openSessionIDs: [TmuxSessionID] { sessionTabs.map(\.id) }
 
     /// Whether any session window is up. A window being built isn't in
     /// `managers` yet, so this answers "am I opening into an empty screen?".
@@ -63,75 +60,48 @@ public enum BentoTerminalWindow {
         focusOrOpen(id)
     }
 
-    /// Go to session `id` — in THIS window.
-    ///
-    /// The app is single-window by default, so picking a session (the sidebar,
-    /// the Dock menu) moves the window you are
-    /// in onto it with `switch-client`, the way `prefix s` does in a terminal,
-    /// instead of piling up a window per session. Exceptions, all of which
-    /// open a window because there is nothing to switch:
-    ///   - the session is already up in another window → that window comes
-    ///     forward (two windows on one session would be a duplicate);
-    ///   - there is no session window in front (a plain terminal has no
-    ///     session to switch);
-    ///   - the session is on a different machine than the front window — a
-    ///     control client can only switch between sessions on its own server.
-    /// `openInNewWindow` is the explicit "keep this one, open that beside it".
+    /// Go to session `id` — in THIS window: shown if it is open here, else
+    /// opened here beside the others. One open in another window comes forward
+    /// there (two connections on one session would be a duplicate).
     public static func focusOrOpen(_ id: TmuxSessionID) {
-        if let m = manager(for: id.key) {
-            m.bringToFront()
-        } else if let m = switchableManager(for: id) {
-            m.switchSession(to: id)
-        } else {
-            open(choice: .createOrAttach(name: id.name), server: id.server,
-                 title: titleFor(id))
-        }
+        focusOrOpen(id, then: nil)
     }
 
     /// Go to session `id` as `focusOrOpen` does, then `act` on the window that
-    /// shows it — once its panes are known, which for a window still opening
+    /// shows it — once its panes are known, which for a session still opening
     /// means waiting for the attach (bounded: an attach that never completes
     /// just lands on the session as it is).
-    static func focusOrOpen(_ id: TmuxSessionID, then act: @escaping (TerminalWindowManager) -> Void) {
-        if let m = manager(for: id.key) {
-            m.bringToFront()
-            act(m)
-        } else if let m = switchableManager(for: id) {
-            m.switchSession(to: id, then: act)
-        } else {
-            open(choice: .createOrAttach(name: id.name), server: id.server, title: titleFor(id))
-            Task { @MainActor in
-                let deadline = Date().addingTimeInterval(10)
-                while Date() < deadline {
-                    if let m = manager(for: id.key), m.tab.viewModel.isTmuxReady,
-                       m.tab.viewModel.activeTmuxSessionName == id.name,
-                       !m.tab.viewModel.sessionPanes.isEmpty {
-                        act(m)
-                        return
-                    }
-                    try? await Task.sleep(for: .milliseconds(100))
+    static func focusOrOpen(_ id: TmuxSessionID, then act: ((TerminalWindowManager) -> Void)?) {
+        open(choice: .createOrAttach(name: id.name), server: id.server, title: titleFor(id))
+        guard let act else { return }
+        Task { @MainActor in
+            let deadline = Date().addingTimeInterval(10)
+            while Date() < deadline {
+                guard let m = manager(for: id.key), m.tab.sessionKey == id.key else { return }
+                let vm = m.tab.viewModel
+                if vm.isTmuxReady, vm.activeTmuxSessionName == id.name, !vm.sessionPanes.isEmpty {
+                    act(m)
+                    return
                 }
+                try? await Task.sleep(for: .milliseconds(100))
             }
         }
     }
 
-    /// The sidebar's Open in New Window: the one explicit way to
-    /// get a second window for a session, instead of switching this one.
+    /// The sidebar's Open in New Window. One already open behind another in its
+    /// window moves out, connection and all.
     public static func openInNewWindow(_ id: TmuxSessionID) {
-        if let m = manager(for: id.key) {
-            m.bringToFront()
-        } else {
+        guard let m = manager(for: id.key), let open = m.sessionTab(id.key) else {
             open(choice: .createOrAttach(name: id.name), server: id.server,
-                 title: titleFor(id))
+                 title: titleFor(id), inNewWindow: true)
+            return
         }
-    }
-
-    /// The window a session pick should switch: the front session window, when
-    /// it is a live tmux session on the same server as `id`.
-    private static func switchableManager(for id: TmuxSessionID) -> TerminalWindowManager? {
-        guard let m = frontmostManager(), m.tab.viewModel.isTmuxReady,
-              m.tab.id.server == id.server else { return nil }
-        return m
+        if m.tabs.count > 1 {
+            m.remove(open)
+            addWindow(for: open, connect: false).bringToFront()
+        } else {
+            m.bringToFront()
+        }
     }
 
     /// Pushed from the app's `tmux ls` poll: every session on the LOCAL server.
@@ -174,7 +144,7 @@ public enum BentoTerminalWindow {
         // Sessions on an ssh host stay out: these rows attach on the LOCAL
         // server, and a remote name offered here would create an empty local
         // session under it.
-        let open = sessionManagers.map(\.tab)
+        let open = sessionTabs
             .filter { $0.id.isLocal }
             .map(\.id.name)
         return (knownServerSessions.map(\.rawValue) + open)
@@ -310,28 +280,22 @@ public enum BentoTerminalWindow {
     /// a window closing during it is the app leaving, not the user tidying.
     public static var isTerminating = false
 
-    /// Open a plain shell as a TAB with NO tmux (raw local pty, single surface).
-    /// Closing the tab destroys it — there's no session to reconnect.
+    /// Open a plain shell with NO tmux (raw local pty, single surface) in the
+    /// front window. Closing it destroys it — there's no session to reconnect.
     public static func newWindowNoTmux() {
         openPlain(title: "Terminal")
     }
 
-    public static func newWindow(session: String = defaultSessionName) {
+    private static func newWindow(session: String) {
         let id = TmuxSessionID.local(session)
-        open(choice: .createOrAttach(name: session), server: .local, title: titleFor(id))
+        open(choice: .createOrAttach(name: session), server: .local, title: titleFor(id),
+             inNewWindow: true)
     }
 
-    /// Open a tmux session on a REMOTE host over ssh, tiled exactly like a
-    /// local one. `host` is an alias from the user's `~/.ssh/config`; how to
-    /// actually reach it is ssh's problem, not ours.
-    ///
-    /// The whole remote capability is this one line plus an honest identity:
-    /// `tmux -CC` is parsed entirely client-side off the byte stream, so once
-    /// the bytes come from `ssh` instead of a login shell, every pane, split,
-    /// window and status detection above it works unchanged.
-    public static func newTmuxWindow(host: String, session: String = defaultSessionName) {
-        let id = TmuxSessionID.ssh(host: host, name: session)
-        open(choice: .createOrAttach(name: session), server: id.server, title: titleFor(id))
+    /// A new tmux session on this Mac, `<default>-2`, `-3`, …, in the front
+    /// window (＋, ⇧⌘T, the Dock menu).
+    public static func newSession() {
+        focusOrOpen(.local(nextSessionName()))
     }
 
     /// Open a brand-new uniquely-named tmux session as a tab (the tab-bar `+`).
@@ -434,11 +398,11 @@ public enum BentoTerminalWindow {
     /// terminal made.
     static func nextSessionName() -> String {
         var taken = Set(serverSessions)
-        for m in sessionManagers { taken.formUnion(m.tab.viewModel.availableTmuxSessions) }
+        for t in sessionTabs where t.id.isLocal { taken.formUnion(t.viewModel.availableTmuxSessions) }
         return TmuxSessionNaming.numbered(defaultSessionName, existing: taken)
     }
 
-    /// Open a plain (no-tmux) tab running `ssh <host>`, where `host` is an
+    /// Open a plain (no-tmux) terminal running `ssh <host>`, where `host` is an
     /// alias from ~/.ssh/config. Like any plain tab, it's gone when ssh exits
     /// or the tab closes — persistence lives on the remote side, if anywhere.
     public static func newSSHWindow(host: String) {
@@ -454,16 +418,11 @@ public enum BentoTerminalWindow {
         NSWindow.userTabbingPreference == .always
     }
 
-    /// Create a window for `tab` and join it to the existing tab group.
-    ///
-    /// Sessions are macOS window tabs now, one NSWindow each, rather than a
-    /// hand-rolled strip inside a single window. That hands ⌘⇧[ / ⌘⇧], drag to
-    /// reorder, drag out to a new window, Merge All Windows, and the tab bar
-    /// itself (which hides itself at one tab) to AppKit — all of which the
-    /// self-managed version either lacked or had to reimplement.
+    /// Create a window for `tab`, joined to the front one's tab group when the
+    /// system's preference says so.
     @discardableResult
-    private static func addWindow(for tab: SessionTab) -> TerminalWindowManager {
-        let m = TerminalWindowManager(tab: tab)
+    private static func addWindow(for tab: SessionTab, connect: Bool = true) -> TerminalWindowManager {
+        let m = TerminalWindowManager(tab: tab, connect: connect)
         m.onEmpty = { [weak m] in
             managers.removeAll { $0 === m }
             // Nothing is written here. The reopen record is the session last
@@ -498,34 +457,64 @@ public enum BentoTerminalWindow {
             ?? managers.last
     }
 
-    /// The window holding SESSION `key`.
+    /// The window holding SESSION `key`, shown or not.
     static func manager(for key: String) -> TerminalWindowManager? {
-        sessionManagers.first { $0.tab.sessionKey == key }
+        managers.first { $0.sessionTab(key) != nil }
     }
 
-    private static func open(choice: TmuxStartChoice, server: TmuxServer, title: String) {
+    /// SESSION `key`, wherever it is open.
+    static func tab(for key: String) -> SessionTab? {
+        sessionTabs.first { $0.sessionKey == key }
+    }
+
+    /// What is open in `manager` changed: every window's sidebar lists it.
+    static func tabsChanged(from manager: TerminalWindowManager) {
+        for m in managers where m !== manager { m.rebuildSidebar() }
+        refreshMenuItems()
+    }
+
+    private static func open(choice: TmuxStartChoice, server: TmuxServer, title: String,
+                             inNewWindow: Bool = false) {
         let id = SessionTab.id(for: choice, on: server)
         let m: TerminalWindowManager
-        if let existing = manager(for: id.key) {
-            m = existing
+        if let holder = manager(for: id.key), let existing = holder.sessionTab(id.key) {
+            m = holder
+            if m.tab !== existing { m.show(existing) }
         } else {
-            m = addWindow(for: SessionTab(choice: choice, server: server, title: title))
+            let tab = SessionTab(choice: choice, server: server, title: title)
+            m = place(tab, inNewWindow: inNewWindow)
         }
         m.bringToFront()
         recordSessionInUse(m.tab.id)
         refreshMenuItems()
+        if server == .local { onLocalServerChanged?() }
     }
 
-    /// A plain (no-tmux) tab: never deduped — each is a new terminal — and never
+    /// Put a new `tab` in the front window, or in one of its own.
+    private static func place(_ tab: SessionTab, inNewWindow: Bool = false) -> TerminalWindowManager {
+        if !inNewWindow, let m = frontmostManager() {
+            m.add(tab)
+            return m
+        }
+        return addWindow(for: tab)
+    }
+
+    /// A plain (no-tmux) terminal: never deduped — each is a new one — and never
     /// persisted, so closing it is final. Its key only has to be unique among
-    /// plain windows; sessions live in their own registry (`sessionManagers`).
-    static func openPlain(title: String, command: [String]? = nil) {
-        let taken = Set(managers.filter(\.tab.isPlain).map(\.tab.sessionKey))
+    /// plain terminals.
+    static func openPlain(title: String, command: [String]? = nil,
+                          in manager: TerminalWindowManager? = nil) {
+        let taken = Set(managers.flatMap(\.tabs).filter(\.isPlain).map(\.sessionKey))
         var n = 1
         var key = title
         while taken.contains(key) { n += 1; key = "\(title) \(n)" }
-        addWindow(for: SessionTab(plainTitle: key, key: key, command: command))
-            .bringToFront()
+        let tab = SessionTab(plainTitle: key, key: key, command: command)
+        if let manager {
+            manager.add(tab)
+            manager.bringToFront()
+        } else {
+            place(tab).bringToFront()
+        }
     }
 
     static func titleFor(_ id: TmuxSessionID) -> String {

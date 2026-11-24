@@ -136,12 +136,18 @@ extension TerminalViewModel {
     @discardableResult
     func updateSeen(_ paneVM: PaneViewModel, from current: PaneState,
                             to newState: PaneState, hasStatus: Bool) -> Bool {
-        let want = Self.doneUnseen(hasStatus: hasStatus, isFocused: paneVM.isActive,
+        let want = Self.doneUnseen(hasStatus: hasStatus, isFocused: paneVM.isActive && isOnScreen,
                                    current: current, newState: newState,
                                    prev: paneVM.doneUnseen)
         guard paneVM.doneUnseen != want else { return false }
         paneVM.doneUnseen = want
         return true
+    }
+
+    /// The session came on show: its active pane has been seen.
+    public func noteShown() {
+        isOnScreen = true
+        for vm in paneViewModels where vm.isActive && vm.doneUnseen { vm.doneUnseen = false }
     }
 
     /// Pure "done, unseen" transition, shared by live and background panes: a

@@ -563,6 +563,11 @@ public final class TerminalViewModel: ObservableObject {
     /// this to re-tile its surfaces. See `applyLayoutGeometry`.
     public var onGeometryApplied: (() -> Void)?
 
+    /// Whether a window is showing this session. One kept open behind another
+    /// isn't being looked at: what finishes there is unseen, its active pane's
+    /// too.
+    public var isOnScreen = true
+
     /// Each window's latest layout string, from `%layout-change` (ahead of the
     /// window listing, which only catches up on its next refresh).
     public internal(set) var liveLayouts: [TmuxWindowID: String] = [:]

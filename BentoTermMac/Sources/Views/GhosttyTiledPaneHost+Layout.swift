@@ -263,7 +263,10 @@ extension GhosttyTiledPaneHost {
             // `searchFieldHasFocus` is the other exception: while the find bar
             // holds the keyboard, this method still runs (layout, pane polls) and
             // would otherwise yank the caret out of the field mid-word.
-            if id == active, window?.firstResponder !== cell.surface,
+            //
+            // Nor while this session is kept open behind another.
+            if id == active, !isHiddenOrHasHiddenAncestor,
+               window?.firstResponder !== cell.surface,
                !cell.surface.searchFieldHasFocus {
                 window?.makeFirstResponder(cell.surface)
             }
