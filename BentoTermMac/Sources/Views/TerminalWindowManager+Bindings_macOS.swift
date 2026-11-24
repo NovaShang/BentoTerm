@@ -22,6 +22,23 @@ extension TerminalWindowManager {
                 self.rebuildTabBar()
             }
             .store(in: &activeCancellables)
+        // The centre is shared: the window strip only for a MIXED session
+        // (several windows, at least one split), the location title otherwise.
+        // Panes are the sidebar's to switch — with one pane per window the strip
+        // repeats its rows — but the sidebar doesn't say which panes share a
+        // window, so a mixed session needs the strip. Changes wait out a pause:
+        // going between split and alone moves panes one at a time, and the
+        // session is mixed for a moment on the way.
+        toolbar.setCenterShowsTabs(tab.viewModel.isMixedStructure)
+        tab.viewModel.$sessionPanes
+            .map(TerminalViewModel.isMixed)
+            .removeDuplicates()
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self, weak tab] mixed in
+                guard let self, let tab, tab === self.activeTab else { return }
+                self.toolbar.setCenterShowsTabs(mixed)
+            }
+            .store(in: &activeCancellables)
         // Mode drives the ＋ menu's first row and the sidebar's selection (split
         // → the session row, alone → the pane row). A single-pane session
         // has no switch (`SessionChrome`), so it also follows

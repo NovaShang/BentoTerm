@@ -109,8 +109,17 @@ public extension TerminalViewModel {
 
     /// True when the structure came from outside Bento (windows AND splits) —
     /// the UI warns before flattening it into List.
-    var isMixedStructure: Bool {
-        panesByWindow.count > 1 && panesByWindow.values.contains { $0.count > 1 }
+    var isMixedStructure: Bool { Self.isMixed(sessionPanes) }
+
+    /// `isMixedStructure` of a pane list. For `$sessionPanes` subscribers:
+    /// `@Published` emits BEFORE the property is assigned.
+    static func isMixed(_ panes: [Pane]) -> Bool {
+        var counts: [TmuxWindowID: Int] = [:]
+        for pane in panes {
+            guard let window = pane.windowID else { continue }
+            counts[window, default: 0] += 1
+        }
+        return counts.count > 1 && counts.values.contains { $0 > 1 }
     }
 
     /// Recompute `sessionMode` from structure (+ the remembered preference

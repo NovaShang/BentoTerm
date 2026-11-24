@@ -57,11 +57,8 @@ extension TerminalWindowManager {
         if hasOverflow {
             items.append(("", "more", NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "More windows")))
         }
-        // The centre is shared with the location title. A switcher for ONE
-        // window says nothing, so then that space says where the focused pane
-        // is instead.
-        toolbar.setCenterShowsTabs(tmuxWindows.count > 1)
-
+        // Whether the strip shows at all is `rebindActiveToolbar`'s: it follows
+        // the session's structure, not this list.
         let activeIdx = activeWindowID.flatMap { id in visible.firstIndex { $0.id == id } } ?? -1
         toolbar.updateTabs(items, selected: activeIdx)
 
